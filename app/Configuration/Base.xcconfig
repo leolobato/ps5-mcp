@@ -1,0 +1,12 @@
+// Signing and identity for the PS5 app. The default signs ad hoc ("Sign to Run Locally"), which needs no Apple
+// account but gives every build a new signature, so macOS asks for camera, microphone, local network and Documents
+// access again after each rebuild. Sign with your team in LocalSigning.xcconfig (gitignored; copy the .example) or on
+// the make command line to keep those permissions:
+//   make app DEVELOPMENT_TEAM=ABCDE12345 APP_BUNDLE_ID=com.example.ps5mcp
+DEVELOPMENT_TEAM =
+CODE_SIGN_STYLE = Manual
+CODE_SIGN_IDENTITY = -
+
+APP_BUNDLE_ID = org.lobato.ps5mcp
+
+#include? "LocalSigning.xcconfig"

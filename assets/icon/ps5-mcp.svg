@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">PS5 MCP</title>
+  <desc id="desc">A white DualSense-style controller with slimmer grips, wider black grip panels, smooth continuous side contours, blue lighting and a blue gear on a dark rounded square.</desc>
+  <defs>
+    <linearGradient id="tile" x1="120" y1="80" x2="904" y2="944" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#26374f"/><stop offset="0.55" stop-color="#121e32"/><stop offset="1" stop-color="#080f1e"/>
+    </linearGradient>
+    <linearGradient id="shell" x1="350" y1="320" x2="580" y2="790" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffffff"/><stop offset="0.55" stop-color="#e8eef7"/><stop offset="1" stop-color="#a9b9ce"/>
+    </linearGradient>
+    <linearGradient id="touchpad" x1="512" y1="330" x2="512" y2="477" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffffff"/><stop offset="1" stop-color="#c8d4e5"/>
+    </linearGradient>
+    <linearGradient id="core" x1="512" y1="450" x2="512" y2="697" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#28384f"/><stop offset="1" stop-color="#070e1a"/>
+    </linearGradient>
+    <linearGradient id="stick" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#3b4a60"/><stop offset="1" stop-color="#182438"/>
+    </linearGradient>
+    <linearGradient id="blue" x1="679" y1="620" x2="889" y2="856" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7de4ff"/><stop offset="0.5" stop-color="#359dff"/><stop offset="1" stop-color="#3564ee"/>
+    </linearGradient>
+    <clipPath id="controller-clip"><use href="#controller-shell"/></clipPath>
+  </defs>
+  <rect x="32" y="32" width="960" height="960" rx="216" fill="url(#tile)"/>
+  <rect x="33" y="33" width="958" height="958" rx="215" fill="none" stroke="#ffffff" stroke-opacity="0.09" stroke-width="2"/>
+  <!-- DualSense-style controller: editable shell, touchpad, controls, and sticks. -->
+  <ellipse cx="505" cy="807" rx="331" ry="39" fill="#030812" opacity="0.45"/>
+  <path d="M248 354 L264 299 Q309 279 364 296 L382 338 Z" fill="#080f1d"/>
+  <path d="M642 338 L660 296 Q715 279 760 299 L776 354 Z" fill="#080f1d"/>
+  <path d="M334 310 Q512 335 690 310 C814 280 935 710 809 790 C770 815 744 751 715 705 L667 638 Q512 674 357 638 L309 705 C280 751 254 815 215 790 C89 710 210 280 334 310 Z" fill="#080f1d" transform="translate(0 16)"/>
+  <path id="controller-shell" d="M334 310 Q512 335 690 310 C814 280 935 710 809 790 C770 815 744 751 715 705 L667 638 Q512 674 357 638 L309 705 C280 751 254 815 215 790 C89 710 210 280 334 310 Z" fill="url(#shell)"/>
+  <path d="M242 380 C270 337 307 319 334 320 Q512 345 690 320 C717 319 754 337 782 380" clip-path="url(#controller-clip)" fill="none" stroke="#ffffff" stroke-width="5" stroke-linecap="round"/>
+  <!-- Each outer side is a single cubic curve from the top to the grip base. -->
+  <!-- Dark center sweeps into the grips, a distinctive DualSense feature. -->
+  <path d="M395 343 Q512 354 629 343 L643 476 C650 536 721 608 765 687 L825 805 L750 825 L660 650 Q512 695 364 650 L274 825 L199 805 L259 687 C303 608 374 536 381 476 Z" fill="url(#core)" clip-path="url(#controller-clip)"/>
+  <path d="M394 348 L383 468 Q380 502 362 522" fill="none" stroke="#1769ed" stroke-width="16" stroke-linecap="round"/>
+  <path d="M394 348 L383 468 Q380 502 362 522" fill="none" stroke="#70dfff" stroke-width="5" stroke-linecap="round"/>
+  <path d="M630 348 L641 468 Q644 502 662 522" fill="none" stroke="#1769ed" stroke-width="16" stroke-linecap="round"/>
+  <path d="M630 348 L641 468 Q644 502 662 522" fill="none" stroke="#70dfff" stroke-width="5" stroke-linecap="round"/>
+  <path d="M410 340 Q512 350 614 340 Q626 341 628 354 L638 449 Q640 473 615 477 L409 477 Q384 473 386 449 L396 354 Q398 341 410 340 Z" fill="url(#touchpad)"/>
+  <path d="M410 344 Q512 354 614 344" fill="none" stroke="#ffffff" stroke-width="4" stroke-linecap="round"/>
+  <!-- D-pad and face buttons remain visually distinct at Dock sizes. -->
+  <path d="M271 391 L295 391 L295 421 L325 421 L325 445 L295 445 L295 475 L271 475 L271 445 L241 445 L241 421 L271 421 Z" fill="#253349" stroke="#142035" stroke-width="5" stroke-linejoin="round"/>
+  <g fill="#d5deeb" stroke="#a0afc3" stroke-width="3">
+    <circle cx="742" cy="385" r="25"/>
+    <circle cx="790" cy="433" r="25"/>
+    <circle cx="742" cy="481" r="25"/>
+    <circle cx="694" cy="433" r="25"/>
+  </g>
+  <g fill="none" stroke="#52657f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M742 372 L754 394 L730 394 Z"/>
+    <circle cx="790" cy="433" r="12"/>
+    <path d="M733 472 L751 490 M751 472 L733 490"/>
+    <rect x="684" y="423" width="20" height="20" rx="1"/>
+  </g>
+  <rect x="353" y="384" width="9" height="23" rx="4" fill="#7588a3"/>
+  <rect x="662" y="384" width="9" height="23" rx="4" fill="#7588a3"/>
+  <!-- Symmetrical analog sticks, with a narrow rim to preserve contrast. -->
+  <g stroke="#080f1d" stroke-width="7">
+    <circle cx="397" cy="574" r="60" fill="#101b2b"/>
+    <circle cx="627" cy="574" r="60" fill="#101b2b"/>
+  </g>
+  <g fill="url(#stick)" stroke="#52637b" stroke-width="3">
+    <circle cx="397" cy="570" r="43"/>
+    <circle cx="627" cy="570" r="43"/>
+  </g>
+  <path d="M376 553 Q397 538 418 553 M606 553 Q627 538 648 553" fill="none" stroke="#697c96" stroke-opacity="0.6" stroke-width="4" stroke-linecap="round"/>
+  <g fill="#71839d">
+    <circle cx="487" cy="508" r="3"/><circle cx="500" cy="508" r="3"/>
+    <circle cx="513" cy="508" r="3"/><circle cx="526" cy="508" r="3"/>
+    <circle cx="539" cy="508" r="3"/>
+  </g>
+  <rect x="498" y="559" width="28" height="17" rx="7" fill="#8193ab"/>
+  <rect x="501" y="611" width="22" height="7" rx="3" fill="#b8c6d8"/>
+  <!-- Eight-tooth gear; the inner disc forms a clear hub at small sizes. -->
+  <path d="M 748.03,651.16 L 761.26,646.79 L 761.48,622.17 L 806.52,622.17 L 806.74,646.79 L 819.97,651.16 L 819.97,651.16 L 832.41,657.43 L 849.98,640.17 L 881.83,672.02 L 864.57,689.59 L 870.84,702.03 L 870.84,702.03 L 875.21,715.26 L 899.83,715.48 L 899.83,760.52 L 875.21,760.74 L 870.84,773.97 L 870.84,773.97 L 864.57,786.41 L 881.83,803.98 L 849.98,835.83 L 832.41,818.57 L 819.97,824.84 L 819.97,824.84 L 806.74,829.21 L 806.52,853.83 L 761.48,853.83 L 761.26,829.21 L 748.03,824.84 L 748.03,824.84 L 735.59,818.57 L 718.02,835.83 L 686.17,803.98 L 703.43,786.41 L 697.16,773.97 L 697.16,773.97 L 692.79,760.74 L 668.17,760.52 L 668.17,715.48 L 692.79,715.26 L 697.16,702.03 L 697.16,702.03 L 703.43,689.59 L 686.17,672.02 L 718.02,640.17 L 735.59,657.43 L 748.03,651.16 Z" fill="#030812" stroke="#030812" stroke-width="34" stroke-linejoin="round" opacity="0.55" transform="translate(0 12)"/>
+  <path d="M 748.03,651.16 L 761.26,646.79 L 761.48,622.17 L 806.52,622.17 L 806.74,646.79 L 819.97,651.16 L 819.97,651.16 L 832.41,657.43 L 849.98,640.17 L 881.83,672.02 L 864.57,689.59 L 870.84,702.03 L 870.84,702.03 L 875.21,715.26 L 899.83,715.48 L 899.83,760.52 L 875.21,760.74 L 870.84,773.97 L 870.84,773.97 L 864.57,786.41 L 881.83,803.98 L 849.98,835.83 L 832.41,818.57 L 819.97,824.84 L 819.97,824.84 L 806.74,829.21 L 806.52,853.83 L 761.48,853.83 L 761.26,829.21 L 748.03,824.84 L 748.03,824.84 L 735.59,818.57 L 718.02,835.83 L 686.17,803.98 L 703.43,786.41 L 697.16,773.97 L 697.16,773.97 L 692.79,760.74 L 668.17,760.52 L 668.17,715.48 L 692.79,715.26 L 697.16,702.03 L 697.16,702.03 L 703.43,689.59 L 686.17,672.02 L 718.02,640.17 L 735.59,657.43 L 748.03,651.16 Z" fill="url(#blue)" stroke="#111d30" stroke-width="16" stroke-linejoin="round"/>
+  <circle cx="784" cy="738" r="43" fill="#122038"/>
+  <circle cx="784" cy="738" r="23" fill="#233c60"/>
+</svg>

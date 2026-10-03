@@ -1,0 +1,37 @@
+[project]
+name = "ps5-mcp"
+version = "0.1.0"
+description = "See and control a jailbroken PS5 from an MCP agent: capture-card video plus a TCP input payload."
+requires-python = ">=3.12"
+license = "MIT"
+dependencies = [
+    "mcp>=2.2.0",
+    "numpy>=2.5.3",
+    "pillow>=12.3.0",
+]
+
+[project.scripts]
+ps5mcp = "ps5mcp.cli:main"
+ps5mcp-server = "ps5mcp.server:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ps5mcp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 110
+src = ["src", "tests"]

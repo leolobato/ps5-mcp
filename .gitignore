@@ -1,0 +1,12 @@
+.deps/
+build/
+.env.local
+.venv/
+.DS_Store
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+app/Configuration/LocalSigning.xcconfig
+xcuserdata/
+results/
+app/PS5.xcodeproj/

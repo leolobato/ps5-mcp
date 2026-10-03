@@ -1,0 +1,8 @@
+{
+  "ps5_payload_sdk": {
+    "version": "v0.43",
+    "url": "https://github.com/ps5-payload-dev/sdk/releases/download/v0.43/ps5-payload-sdk.zip",
+    "sha256": "a9cc9929f21b2b2c5d5b309f3bab4997067c45281c0622cf4838b1aecba66fcb"
+  },
+  "llvm_version": "18.1.8"
+}

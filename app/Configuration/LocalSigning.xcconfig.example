@@ -1,0 +1,5 @@
+// Copy to LocalSigning.xcconfig (gitignored) and fill in your values.
+DEVELOPMENT_TEAM = YOUR_TEAM_ID
+CODE_SIGN_STYLE = Automatic
+CODE_SIGN_IDENTITY = Apple Development
+APP_BUNDLE_ID = com.example.ps5mcp
