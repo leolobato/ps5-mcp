@@ -9,9 +9,10 @@ struct Title {
     var icon: NSImage?
 }
 
-/// Titles from PS5 Web File Manager's API on the console (port 8888): `/user/app` for the ids, and
-/// `/user/appmeta/<id>/param.json` and `icon0.png` for names and icons. Names and icons are cached in
-/// `<state>/titles/`, so the list fills at once and only new titles are fetched.
+/// Titles from PS5 Web File Manager's API on the console (port 8888): `/user/app` for the ids, and `param.json` and
+/// `icon0.png` for names and icons: in `/user/appmeta/<id>/` for installed packages, else in
+/// `/user/app/<id>/sce_sys/` (homebrew such as Payload Manager). Names and icons are cached in `<state>/titles/`, so
+/// the list fills at once and only new titles, and titles still without a name, are fetched.
 final class TitleLibrary {
     let host: String
     let dir: String
@@ -39,7 +40,8 @@ final class TitleLibrary {
     /// Lists `/user/app` and fetches what the cache lacks. Blocking; call it off the main thread.
     func refresh() throws -> [Title] {
         try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-        let known = Dictionary(cached().map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let known = Dictionary(cached().filter { $0.name != $0.id }.map { ($0.id, $0) },
+                               uniquingKeysWith: { first, _ in first })
         let listing = try api("/api/list", ["path": "/user/app"])
         let ids = (listing["entries"] as? [[String: Any]] ?? []).compactMap { $0["name"] as? String }
             .filter { !$0.isEmpty && $0.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber) } }
@@ -51,17 +53,25 @@ final class TitleLibrary {
         return sorted(titles)
     }
 
-    /// A title without metadata (system apps, homebrew) keeps its id as its name. A network error ends the
-    /// refresh instead, so the title is not cached without its name.
+    /// A title without metadata in either place keeps its id as its name. A network error ends the refresh
+    /// instead, so the title is not cached without its name.
     private func fetchTitle(_ id: String) throws -> Title {
+        let places = ["/user/appmeta/\(id)", "/user/app/\(id)/sce_sys"]
         var name = id
-        if let data = try missingIsNil({ try download("/user/appmeta/\(id)/param.json") }),
-           let param = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            name = titleName(param) ?? id
+        for place in places {
+            if let data = try missingIsNil({ try download(place + "/param.json") }),
+               let param = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let found = titleName(param) {
+                name = found
+                break
+            }
         }
         let iconPath = "\(dir)/\(id).png"
-        if let data = try missingIsNil({ try download("/user/appmeta/\(id)/icon0.png") }), let png = thumbnail(data) {
-            try? png.write(to: URL(fileURLWithPath: iconPath))
+        for place in places {
+            if let data = try missingIsNil({ try download(place + "/icon0.png") }), let png = thumbnail(data) {
+                try? png.write(to: URL(fileURLWithPath: iconPath))
+                break
+            }
         }
         return Title(id: id, name: name, icon: NSImage(contentsOfFile: iconPath))
     }
