@@ -24,9 +24,11 @@ enum PMCP {
         switch status {
         case 0: return "uninstall requested"
         case 5: return "ShadowMountPlus refused to delete the source (an image shared by several titles?)"
+        case 13: return "ShadowMountPlus may not delete some of the source's files (written by the game?); still installed"
         case 16: return "busy: a game is running or ShadowMountPlus is moving files"
         case 22: return "not a title id"
         case 36: return "ShadowMountPlus is still deleting the source; try again shortly"
+        case 45: return "this ShadowMountPlus cannot delete sources (update it); still installed"
         case 61: return "ShadowMountPlus manages it but is not running; it would install it again"
         default: return String(format: "refused, status 0x%08X", UInt32(bitPattern: status))
         }

@@ -53,9 +53,11 @@ FLAG_UNINSTALL = 0x8
 UNINSTALL_RETRY = {16, 36}  # EBUSY (SMP busy or a game running), EINPROGRESS (source still being deleted)
 UNINSTALL_ERRORS = {
     5: "ShadowMountPlus refused to delete the source (an image shared by several titles?)",
+    13: "ShadowMountPlus may not delete some of the source's files (written by the game?); still installed",
     16: "busy: a game is running or ShadowMountPlus is moving files",
     22: "not a title id (4 letters and 5 digits)",
     36: "ShadowMountPlus is still deleting the source",
+    45: "this ShadowMountPlus cannot delete sources (update it); still installed",
     61: "ShadowMountPlus manages this title but is not running; it would install it again",
 }
 

@@ -198,13 +198,15 @@ def test_uninstall_reaches_the_system_with_valid_ids_only(padd):
 
 
 class FakeSmp:
-    """ShadowMountPlus's API as padd uses it: delete answers `delete`, the job stays active for `active_polls`."""
+    """ShadowMountPlus's API as padd uses it: delete answers `delete`, the job stays active for `active_polls`, then
+    ends with `result` (an errno; 0 completes it). Status reports job `status_job` (another job replaced ours)."""
 
-    def __init__(self, delete: int = 202, active_polls: int = 1):
+    def __init__(self, delete: int = 202, active_polls: int = 1, result: int = 0, status_job: int = 1,
+                 delete_error: str = "game source not found"):
         import http.server
         import threading
         self.requests: list[tuple[str, dict]] = []
-        self.delete, self.active_polls = delete, active_polls
+        self.delete, self.active_polls, self.result, self.status_job = delete, active_polls, result, status_job
         fake = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -212,11 +214,14 @@ class FakeSmp:
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])) or b"{}")
                 fake.requests.append((self.path, body))
                 if self.path == "/api/v1/games/delete":
-                    code, reply = fake.delete, {"status": 0 if fake.delete == 202 else 16}
+                    code, reply = fake.delete, ({"status": 0, "job_id": 1, "state": "running", "active": True}
+                                                if fake.delete == 202 else {"status": 16, "error": delete_error})
                 else:
                     active = fake.active_polls > 0
                     fake.active_polls -= 1
-                    code, reply = 200, {"status": 0, "job_id": 1, "active": active}
+                    state = "running" if active else "failed" if fake.result else "completed"
+                    code, reply = 200, {"status": 0, "job_id": fake.status_job, "state": state, "active": active,
+                                        "result_status": 0 if active else fake.result}
                 data = json.dumps(reply, indent=1).encode()  # json-c style spacing: "active": true
                 self.send_response(code)
                 self.send_header("Content-Length", str(len(data)))
@@ -272,6 +277,24 @@ def test_shadowmount_uninstall_outcomes(tmp_path, delete, polls, status):
     finally:
         padd.stop()
         smp.server.shutdown()
+
+
+@pytest.mark.parametrize(("smp", "status"), [
+    ({"result": 13}, 13),                                         # EACCES: SMP could not delete the source
+    ({"status_job": 2}, 16),                                      # another job replaced ours: EBUSY, retry
+    ({"delete": 404, "delete_error": "unknown API route"}, 45),  # SMP without source delete: ENOTSUP
+])
+def test_shadowmount_title_stays_installed_when_its_source_remains(tmp_path, smp, status):
+    fake = FakeSmp(**smp)
+    padd = smp_padd(tmp_path, fake.port, ("FAKE77001",))
+    try:
+        link = padd.connect()
+        assert link.command(p.Command.UNINSTALL, "FAKE77001") == status
+        assert not padd.calls("uninstall")  # SMP's next scan would install it again
+        link.close()
+    finally:
+        padd.stop()
+        fake.server.shutdown()
 
 
 def test_shadowmount_title_without_shadowmount_running_is_refused(tmp_path):

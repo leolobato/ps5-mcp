@@ -9,6 +9,7 @@
 #include <errno.h>
 #include <netinet/in.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -63,15 +64,25 @@ static int smp_post(int port, const char *path, const char *body, char *out, siz
     return status;
 }
 
-/* True when the JSON text has `"key": true` (SMP's json-c output, spaced or not). */
-static int json_true(const char *json, const char *key) {
+/* The text after `"key":` in SMP's json-c output (spaced or not), or NULL. */
+static const char *json_value(const char *json, const char *key) {
     char quoted[64];
     snprintf(quoted, sizeof quoted, "\"%s\"", key);
     const char *at = strstr(json, quoted);
-    if (!at) return 0;
+    if (!at) return NULL;
     at += strlen(quoted);
     while (*at == ' ' || *at == ':') at++;
-    return strncmp(at, "true", 4) == 0;
+    return at;
+}
+
+static int json_true(const char *json, const char *key) {
+    const char *at = json_value(json, key);
+    return at && strncmp(at, "true", 4) == 0;
+}
+
+static long json_long(const char *json, const char *key, long missing) {
+    const char *at = json_value(json, key);
+    return at && (*at == '-' || (*at >= '0' && *at <= '9')) ? strtol(at, NULL, 10) : missing;
 }
 
 int smp_managed(const char *app_dir, const char *title_id) {
@@ -87,7 +98,11 @@ int smp_uninstall(int port, const char *title_id) {
     int http = smp_post(port, "/api/v1/games/delete", body, reply, sizeof reply);
     if (http == 0) return ECONNREFUSED;  /* SMP is not running: an uninstall would come back with it */
     if (http == 409) return EBUSY;       /* another storage job, or a game is running */
+    if (http == 404 && strstr(reply, "unknown API route")) return ENOTSUP;  /* an SMP without source delete */
     if (http == 202) {
+        /* SMP keeps one job. Uninstall only when ours completed: after a failed delete the source is still
+         * there, and SMP's recovery scan installs the title again at once. */
+        long job = json_long(reply, "job_id", -1);
         int waited = 0;
         for (;;) {
             pause_ms(200);
@@ -96,6 +111,10 @@ int smp_uninstall(int port, const char *title_id) {
             if (code == 200 && !json_true(reply, "active")) break;
             if (waited >= SMP_WAIT_MS) return EINPROGRESS;  /* a large source; ask again when it is gone */
         }
+        if (json_long(reply, "job_id", -2) != job) return EBUSY;  /* replaced by another job; ask again */
+        long result = json_long(reply, "result_status", EIO);
+        if (result != 0) return (int)result;                     /* e.g. EACCES: a file SMP may not delete */
+        if (!strstr(reply, "\"completed\"")) return EIO;     /* cancelled */
     } else if (http != 404) {             /* 404: no source left, nothing would bring the title back */
         return EIO;
     }
