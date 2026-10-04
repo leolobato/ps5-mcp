@@ -35,6 +35,11 @@ game/app list, Install, and file transfers:
 Without them, load `padd.elf` with any ELF loader.
 PS5 MCP expects Web File Manager on port 8888; it moves to the next free port when 8888 is taken.
 
+To add zftpd, download `zftpd-ps5-v1.6.0.elf` from its
+[releases](https://github.com/seregonwar/zftpd/releases), rename it to `zftpd.elf`, and add it to Payload Manager's
+library with `uv run ps5mcp install zftpd.elf` (or Payload Manager's web page). Do not run it yourself: `push` and
+`pull` start it when they first need it. Without zftpd, `push` is slower and `pull` copies single files only.
+
 ## How it works
 
 - **`padd`** is a payload running on the PS5. It creates a virtual DualSense and accepts controller input over
@@ -67,14 +72,44 @@ No `make` target contacts the console.
    local network, and Documents access when prompted.
 3. **Start `padd`** with **Start** or `uv run ps5mcp padd start`, once per console boot. The app answers
    the user-selection dialog automatically. If your DualSense turns off, press its PS button and select your user again.
-4. **Control the console** from the app window or connect an MCP client. For Claude Code:
-   `claude mcp add ps5 -e PS5_HOST=$PS5_HOST -- uv run --project <repo> ps5mcp-server`. A config example is in
-   [examples/mcp.json](examples/mcp.json).
+4. **Control the console** from the app window or connect an MCP client (see [MCP clients](#mcp-clients)).
 5. **Stop `padd`** with **Stop** or `uv run ps5mcp padd stop` before turning off the console. Killing it
    through Payload Manager can leave a phantom controller until reboot.
 
 The MCP server starts the app when needed, headless by default (`PS5MCP_VIEW=1` shows the window).
 Closing an MCP session leaves the app running; quitting the app releases input and leaves `padd` running.
+
+### MCP clients
+
+Every client runs the same server from this checkout: `uv run --project <repo> ps5mcp-server`, with `PS5_HOST` set.
+Use the full path to `uv` (`command -v uv`) if the client does not have Homebrew on its `PATH`.
+
+**Claude Code:**
+
+```sh
+claude mcp add ps5 -e PS5_HOST=192.168.1.20 -- uv run --project /path/to/ps5-mcp ps5mcp-server
+```
+
+**Codex:** add this to `~/.codex/config.toml` (or run
+`codex mcp add ps5 --env PS5_HOST=192.168.1.20 -- uv run --project /path/to/ps5-mcp ps5mcp-server` and add the
+timeouts after). Installs and file transfers can take minutes, longer than Codex's default tool timeout.
+
+```toml
+[mcp_servers.ps5]
+command = "/opt/homebrew/bin/uv"
+args = ["run", "--project", "/path/to/ps5-mcp", "ps5mcp-server"]
+startup_timeout_sec = 60   # the first start can launch the app
+tool_timeout_sec = 600     # install, push, and pull
+
+[mcp_servers.ps5.env]
+PS5_HOST = "192.168.1.20"
+```
+
+**Other clients** that read a JSON config: see [examples/mcp.json](examples/mcp.json).
+
+Check the setup with `claude mcp list` or `codex mcp list`, then `/mcp` in a session. Agents from all clients share
+the console through the same claim and queue (see [Sharing the console](#sharing-the-console)). A running session
+keeps the server code it started with; restart it after updating this checkout.
 
 ### Live window and keyboard
 
