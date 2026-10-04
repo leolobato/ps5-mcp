@@ -22,12 +22,13 @@ from mcp.server.mcpserver import Image, MCPServer
 
 from . import capture, recording, stream, vision
 from . import protocol as p
-from .client import HumanHasControl, PadError
+from .client import ConsoleInUse, HumanHasControl, PadError
 from .hub import AppClient, state_from_json
 from .protocol import PadState
 
 HOST = os.environ.get("PS5_HOST")
 MAX_HOLD_MS = 10_000
+MAX_CLAIM_WAIT_S = 600
 HOME_METHOD = os.environ.get("PS5MCP_HOME_METHOD", "suspend")
 # The PS5 drops a press that follows a release too closely (seen on 13.60 with 0 ms gaps), so every hold ends
 # with this much neutral before the tool returns. The app's `press` adds it; `sequence` adds it here.
@@ -93,14 +94,22 @@ mcp = MCPServer(
         "Controls a PS5 through a virtual DualSense and sees it through an HDMI capture card. "
         "Call snapshot() to look before acting. Buttons: " + ", ".join(p.BUTTONS) + ". "
         "Cross confirms, circle goes back. The PS button cannot be pressed; use home() instead. "
-        "If a tool says a human has control, wait and retry."
+        "If a tool says a human has control, wait and retry. "
+        "The console is shared with other agents: call claim_console(reason) before a task so nobody interrupts "
+        "you, and release_console() when done. If a tool says the PS5 is in use, call claim_console(reason, "
+        "wait_s=...) to queue; it returns when the console is yours (call it again to keep waiting)."
     ),
     lifespan=lifespan,
 )
 
 
+def _looking() -> None:
+    """Frames come over a separate socket, so tell the app on ours: looking keeps a claim alive."""
+    runtime.app().lease()  # the app owns the card; never fall back to opening it here
+
+
 def _frame(max_width: int | None) -> Image:
-    runtime.app()  # the app owns the card; never fall back to opening it here
+    _looking()
     with tempfile.TemporaryDirectory() as scratch:
         path = capture.snapshot(Path(scratch) / "frame.jpg", max_width=max_width, daemon=runtime.capture)
         return Image(data=path.read_bytes(), format="jpeg")
@@ -147,6 +156,8 @@ def _errors(fn):
             return await fn(*args, **kwargs)
         except HumanHasControl as exc:
             return f"human has control: {exc}"
+        except ConsoleInUse as exc:
+            return f"in use: {exc}"
         except (PadError, capture.CaptureError, ValueError) as exc:
             return f"error: {exc}"
     return wrapper
@@ -284,7 +295,7 @@ async def play_recording(name: str, snapshot_after_ms: int | None = 500):
 
 
 def _current_frame() -> vision.Image.Image:
-    runtime.app()
+    _looking()
     with tempfile.TemporaryDirectory() as scratch:
         path = capture.snapshot(Path(scratch) / "frame.jpg", daemon=runtime.capture)
         image = vision.Image.open(path)
@@ -418,12 +429,16 @@ async def uninstall_apps(title_ids: list[str]) -> list[str]:
 @mcp.tool(structured_output=False)
 @_errors
 async def install(path: str, run: bool = False) -> str:
-    """Install a file from this Mac onto the console.
+    """Install a file from this Mac onto the console (refused while another agent has claimed it).
 
     path: a .pkg package (uploaded through Web File Manager to /data/ps5-mcp/pkg, then installed; can take minutes)
     or an .elf payload (added to Payload Manager's library). run=True also starts the .elf once.
     """
     from . import installer
+    app = await _app()  # the upload bypasses the app, so check the claim here
+    lease = await asyncio.to_thread(app.lease)
+    if lease["owner"] and not lease["granted"]:
+        raise ConsoleInUse(f"the PS5 is in use by {_holder(lease)}; call claim_console to queue for it")
     return await asyncio.to_thread(installer.install, capture.console_host(HOST), Path(path), run, lambda _line: None)
 
 
@@ -432,6 +447,7 @@ async def install(path: str, run: bool = False) -> str:
 async def wait_for_change(timeout_ms: int = 3000, threshold: float = 6.0):
     """Wait until the screen changes (mean luma difference >= threshold on a 32x18 grid); returns the new frame."""
     await _app()
+    await asyncio.to_thread(_looking)
     start = time.monotonic()
     _, result = await asyncio.to_thread(runtime.capture.watch_change, threshold, timeout_ms / 1000)
     if not result.get("ok"):
@@ -461,7 +477,53 @@ async def status() -> dict:
                        "frame_age_s": hub["frame_age"] if hub["frame_age"] >= 0 else None}
     info["app"] = {"pid": hub["pid"], "clients": hub["clients"], "agents_holding": link["agent_layers"],
                    "visible": hub["visible"], "notice": hub["notice"], "padd": hub["padd"]}
+    lease = await asyncio.to_thread(app.lease)
+    info["claim"] = {"held_by_you": lease["granted"], "queue_position": lease["position"] if lease["position"] > 0
+                     else None, "owner": lease["owner"], "queue": lease["queue"]}
     return info
+
+
+def _holder(lease: dict) -> str:
+    owner = lease["owner"]
+    reason = f' ("{owner["reason"]}")' if owner["reason"] else ""
+    return f"{owner['client']}{reason}, holding it for {owner['held_s']:.0f} s"
+
+
+@mcp.tool(structured_output=False)
+@_errors
+async def claim_console(reason: str, wait_s: int = 0, idle_timeout_s: int = 600) -> str:
+    """Reserve the PS5 so other agents cannot drive it until you call release_console().
+
+    reason: what you are doing, shown to other agents and in the app window. If another agent holds the console you
+    join the queue; with wait_s > 0 (up to 600) this waits for your turn. Calling it again keeps your place, so call
+    it again to keep waiting. The claim lapses after idle_timeout_s (10..3600, default 600) without a tool call from
+    you, and when this session or the app ends; status() shows claim.held_by_you. Looking (snapshot, status) needs
+    no claim; humans at the keyboard always win.
+    """
+    if not 0 <= wait_s <= MAX_CLAIM_WAIT_S:
+        raise ValueError(f"wait_s must be 0..{MAX_CLAIM_WAIT_S}")
+    app = await _app()
+    deadline = time.monotonic() + wait_s
+    while True:
+        lease = await asyncio.to_thread(app.claim, reason, idle_timeout_s)
+        if lease["granted"]:
+            return (f"the PS5 is yours; call release_console() when done "
+                    f"(lapses after {lease['owner']['expires_in_s']:.0f} s without a tool call)")
+        if time.monotonic() >= deadline:
+            return (f"queued #{lease['position']} behind {_holder(lease)}; call claim_console again "
+                    "(with wait_s) to keep waiting, your place is kept")
+        await asyncio.sleep(0.5)
+
+
+@mcp.tool(structured_output=False)
+@_errors
+async def release_console() -> str:
+    """Give up your claim on the PS5 (or your place in the queue); the next agent in the queue gets it."""
+    app = await _app()
+    lease = await asyncio.to_thread(app.unclaim)
+    if not lease["released"]:
+        return "you had no claim"
+    return "released" + (f"; now held by {_holder(lease)}" if lease["owner"] else "")
 
 
 @mcp.tool(structured_output=False)

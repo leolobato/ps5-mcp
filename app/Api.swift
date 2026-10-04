@@ -142,6 +142,7 @@ extension Hub {
     /// Quick commands run in order on the connection's thread; blocking ones run concurrently.
     private func handle(_ cmd: String, _ request: [String: Any], _ conn: Connection) {
         let blocking: Set<String> = ["press", "status", "watch_change", "command", "ping", "padd_start", "padd_stop", "snapshot"]
+        lease.touch(conn: conn.id)
         let work = {
             do {
                 try self.run(cmd, request, conn)
@@ -195,13 +196,17 @@ extension Hub {
             DispatchQueue.main.async { self.quit() }
         case "set":
             let state = try state(request)
-            if !state.isNeutral { _ = try requireLink(request, default: 0) }
+            if !state.isNeutral {
+                try lease.check(conn: conn.id)
+                _ = try requireLink(request, default: 0)
+            }
             try controller.set(client: conn.layer(request["client"] as? String), state)
             reply(conn, request, ["ok": true])
         case "press":
             let state = try state(request)
             let holdMS = request["hold_ms"] as? Int ?? 80
             guard holdMS > 0 && holdMS <= maxHoldMS else { throw BadInput("duration must be 1..\(maxHoldMS) ms") }
+            try lease.check(conn: conn.id)
             _ = try requireLink(request, default: 2)
             let layer = conn.layer(request["client"] as? String)
             try controller.set(client: layer, state)
@@ -228,6 +233,7 @@ extension Hub {
         case "command":
             let op = request["op"] as? String ?? ""
             let arg = request["arg"] as? String ?? ""
+            try lease.check(conn: conn.id)
             let status = try command(op, arg, link: requireLink(request, default: 2))
             reply(conn, request, ["ok": true, "status": Int(status)])
         case "ping":
@@ -239,8 +245,19 @@ extension Hub {
             reply(conn, request, ["ok": true, "events": names])
             if names.contains("status") { conn.send(["event": "status"].merging(status()) { a, _ in a }) }
         case "padd_start", "padd_stop":
+            try lease.check(conn: conn.id)
             let action = cmd == "padd_start" ? "start" : "stop"
             reply(conn, request, try padd.run(action, firmware: request["firmware"] as? String))
+        case "claim":
+            let client = request["client"] as? String ?? "default"
+            let reason = request["reason"] as? String ?? ""
+            let idle = request["idle_s"] as? Double ?? Lease.defaultIdle
+            reply(conn, request, lease.claim(conn: conn.id, client: client, reason: reason, idle: idle))
+        case "unclaim":
+            let had = lease.unclaim(conn: conn.id)
+            reply(conn, request, lease.view(conn: conn.id).merging(["released": had]) { a, _ in a })
+        case "lease":
+            reply(conn, request, lease.view(conn: conn.id))
         default:
             throw ApiError(code: "unknown_cmd", message: "unknown cmd")
         }

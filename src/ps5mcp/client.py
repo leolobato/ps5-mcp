@@ -166,6 +166,10 @@ class HumanHasControl(PadError):
     pass
 
 
+class ConsoleInUse(PadError):
+    """Another agent has claimed the console (the app's `leased` code)."""
+
+
 @dataclass
 class LinkStatus:
     connected: bool

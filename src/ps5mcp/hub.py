@@ -17,7 +17,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from . import capture
-from .client import HumanHasControl, PadError
+from .client import ConsoleInUse, HumanHasControl, PadError
 from .protocol import PadState, Touch
 
 API_VERSION = 1
@@ -124,11 +124,13 @@ class AppClient:
             return self._replies.pop(id_)
 
     def call(self, cmd: str, timeout: float | None = None, **fields) -> dict:
-        """One-reply command; raises HumanHasControl / AppError when the app says ok=false."""
+        """One-reply command; raises HumanHasControl / ConsoleInUse / AppError when the app says ok=false."""
         reply = self.request(cmd, timeout, **fields)[0]
         if not reply.get("ok"):
             if reply.get("code") == "human_has_control":
                 raise HumanHasControl(reply.get("error", "human has control"))
+            if reply.get("code") == "leased":
+                raise ConsoleInUse(reply.get("error", "the PS5 is in use"))
             raise AppError(reply.get("error", "failed"), reply.get("code"))
         return reply
 
@@ -160,6 +162,18 @@ class AppClient:
 
     def status(self) -> dict:
         return self.call("status")
+
+    # -- sharing (one connection claims the console, the others queue) ---------
+    def claim(self, reason: str = "", idle_s: float | None = None) -> dict:
+        """Claim the console or keep this connection's place in the queue; `granted` says which."""
+        fields = {"reason": reason} | ({"idle_s": float(idle_s)} if idle_s is not None else {})
+        return self.call("claim", **fields)
+
+    def unclaim(self) -> dict:
+        return self.call("unclaim")
+
+    def lease(self) -> dict:
+        return self.call("lease")
 
     def ping(self) -> dict:
         return self.call("ping", timeout=5.0)["pong"]

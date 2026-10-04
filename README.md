@@ -116,10 +116,19 @@ Quit with **⌘Q** or `uv run ps5mcp capture stop`.
 | Console apps | `home`, `close_app`, `launch`, `list_apps`, `install`, `uninstall_apps` |
 | Visual automation | `save_template`, `list_templates`, `wait_for`, `wait_for_change` |
 | Recording | `record_start`, `record_stop`, `list_recordings`, `play_recording` |
+| Sharing | `claim_console`, `release_console` |
 
 Input tools can return a frame with `snapshot_after_ms`. `home` suspends the game like the PS button;
 use `press("circle")` to back out of system screens. A game takes input only from the controller that launched it,
 so launch games with `launch` to control them through the MCP.
+
+### Sharing the console
+
+Several agents can use the console. An agent calls `claim_console(reason)` so that other agents cannot press
+buttons, run console commands, or install until it calls `release_console()`. Another agent that calls
+`claim_console` joins a queue. With `wait_s`, the call returns when the console is free for that agent.
+A claim ends when its session closes, or after 10 minutes without a tool call. The sidebar shows the agent that has
+the console and the number of agents in the queue. The keyboard and the window's buttons always work. The CLI (`ps5mcp pad`, `ps5mcp padd`) is blocked like any agent.
 
 ### Browser viewing
 

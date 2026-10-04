@@ -18,7 +18,7 @@ from PIL import Image
 
 from ps5mcp import capture
 from ps5mcp import protocol as p
-from ps5mcp.client import HumanHasControl
+from ps5mcp.client import ConsoleInUse, HumanHasControl
 from ps5mcp.hub import AppClient, AppError
 from ps5mcp.protocol import PadState
 
@@ -339,6 +339,59 @@ def test_record_events_capture_keys_and_agents(app):
     steps = recorder.steps()
     assert [s.get("buttons") for s in steps if s.get("buttons")] == [["triangle"], ["left"]]
     assert json.dumps(steps)
+
+
+def test_claim_blocks_other_agents_and_queues_them(app):
+    holder, waiter, bystander = app.client("holder"), app.client("waiter"), app.client("bystander")
+    assert holder.claim("menu test")["granted"]
+    holder.press(PadState(buttons=RIGHT), 30)
+    with pytest.raises(ConsoleInUse, match='holder \\("menu test"\\)'):
+        bystander.press(PadState(buttons=CROSS), 30)
+    with pytest.raises(ConsoleInUse):
+        bystander.command("home")
+    bystander.set(PadState())  # letting go is always allowed
+    queued = waiter.claim("next")
+    assert not queued["granted"] and queued["position"] == 1 and queued["owner"]["client"] == "holder"
+    assert waiter.claim("next")["position"] == 1  # claiming again keeps the place
+    status = bystander.status()["lease"]
+    assert status["owner"]["reason"] == "menu test" and [q["client"] for q in status["queue"]] == ["waiter"]
+    events = []
+    bystander.on("status", events.append)
+    bystander.subscribe("status")
+    assert holder.unclaim()["released"]
+    assert waiter.lease()["granted"]
+    assert wait_for(lambda: any((e["lease"]["owner"] or {}).get("client") == "waiter" for e in events))
+    waiter.press(PadState(buttons=CROSS), 30)
+    with pytest.raises(ConsoleInUse):
+        holder.press(PadState(buttons=RIGHT), 30)
+
+
+def test_keyboard_still_wins_over_a_claim(app):
+    agent, window = app.client("agent"), app.client()
+    agent.claim("busy")
+    window.key("enter", True)
+    assert wait_for(lambda: buttons(app.padd)[-1] == CROSS)
+    with pytest.raises(HumanHasControl):
+        agent.press(PadState(buttons=RIGHT), 30)
+    window.key("enter", False)
+
+
+def test_closing_the_holder_passes_the_claim_on(app):
+    leaving, waiting = app.client("leaving"), app.client("waiting")
+    leaving.claim("a")
+    assert waiting.claim("b")["position"] == 1
+    leaving.close()
+    assert wait_for(lambda: waiting.lease()["granted"])
+    waiting.close()
+    assert wait_for(lambda: app.client().status()["lease"]["owner"] is None)
+
+
+def test_idle_claim_lapses_to_the_next_in_queue(app):
+    idle, waiting = app.client("idle"), app.client("waiting")
+    idle.claim("forgot", idle_s=10)  # 10 s is the minimum
+    waiting.claim("b")
+    assert not waiting.lease()["granted"]
+    assert wait_for(lambda: waiting.lease()["granted"], timeout=15)
 
 
 def test_user_name_failure_does_not_block_app_connection(tmp_path):

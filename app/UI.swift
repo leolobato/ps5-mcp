@@ -36,7 +36,7 @@ final class VideoView: NSView {
 }
 
 final class Sidebar: NSStackView {
-    let fields = ["Link", "padd", "Pad", "User", "Reports", "Frame age", "Clients", "Control"]
+    let fields = ["Link", "padd", "Pad", "User", "Reports", "Frame age", "Clients", "Control", "In use by"]
     private var values: [String: NSTextField] = [:]
     let notice = NSTextField(wrappingLabelWithString: "")
     /// Keyed by id, not title: titles change ("Record" / "Stop") and repeat across sections.
@@ -607,6 +607,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
                     color: age < 0 || age > 2 ? .systemRed : .labelColor)
         sidebar.set("Clients", "\(hub.clientCount) API · \(link.agents) holding")
         sidebar.set("Control", link.humanActive ? "you (keys held)" : "shared")
+        let lease = hub.lease.json
+        let queued = (lease["queue"] as? [Any])?.count ?? 0
+        if let owner = lease["owner"] as? [String: Any] {
+            let reason = owner["reason"] as? String ?? ""
+            sidebar.set("In use by", "\(owner["client"] as? String ?? "?")" + (reason.isEmpty ? "" : " · \(reason)")
+                        + (queued > 0 ? " · \(queued) waiting" : ""), color: .systemOrange)
+        } else {
+            sidebar.set("In use by", "nobody")
+        }
         sidebar.notice.stringValue = hub.notice ?? ""
         let canRun = busy == nil && hub.padd.json["available"] as? Bool == true
         let fileManagerBusy = titlesLoading || installing != nil  // Web File Manager runs one task at a time

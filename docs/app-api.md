@@ -8,7 +8,7 @@ else talks to it here. The Python client is `src/ps5mcp/hub.py`.
 - **Framing:** one JSON object per line, both ways. Several clients can connect at once.
 - **Requests:** `{"cmd": "...", "id": n, ...}`. `id` is optional. Every reply echoes it.
 - **Replies:** `{"ok": true, ...}`, or `{"ok": false, "error": "text", "code": "..."}`. The codes are:
-  `human_has_control`, `not_connected`, `bad_request`, `pad_error`, `unknown_cmd`, `padd_busy`, `padd_unavailable`.
+  `human_has_control`, `leased`, `not_connected`, `bad_request`, `pad_error`, `unknown_cmd`, `padd_busy`, `padd_unavailable`.
 - **Events:** after `subscribe`, the app pushes `{"event": "...", ...}` lines. Events have no `id`.
 - **Version:** `status` returns `"api": 1`.
 
@@ -51,6 +51,27 @@ The JSON fields carry raw protocol values (`docs/protocol.md`):
 Keymap: arrows → D-pad; `enter`/`space` → Cross; `escape`/`backspace` → Circle; `[` `]` → Square, Triangle;
 `q` `e` → L1, R1; `z` `c` → L2, R2; `wasd` → left stick; `ijkl` → right stick; `tab` → Options; `t` → touchpad
 click; `h` → home (command).
+
+## Sharing
+
+One connection can claim the console; the others queue for it in order. Nobody has to claim: while the console is
+free, every client drives it as before.
+
+| cmd | fields | reply |
+|---|---|---|
+| `claim` | `reason`, `client?`, `idle_s?` (default 600, 10..3600) | Claims the console, or joins the queue. Claiming again keeps the place in the queue. |
+| `unclaim` | | Gives up the claim or the place in the queue; `released` says whether there was one. |
+| `lease` | | The lease as this connection sees it. |
+
+- All three reply `granted`, `position` (0 = holder, n = nth in the queue, -1 = neither), `owner` (`client`,
+  `reason`, `held_s`, `expires_in_s`, or null) and `queue` (`client`, `reason`, `waiting_s`). `status` has the same
+  `owner` and `queue` under `lease`, and `status` events go out when they change.
+- **Leased:** while another connection holds the claim, a non-neutral `set`, `press`, `command`, `padd_start` and
+  `padd_stop` fail with `leased`. Neutral `set`, `release`, `release_all`, `key` and the read-only commands still work.
+- **Lapses:** closing the connection gives up its claim. So do `idle_s` seconds without a request from the holder's
+  connection. The next connection in the queue then gets the claim.
+- **People win:** the keyboard, the window's buttons and auto-assign are never blocked. A held key still blocks the
+  holder with `human_has_control`.
 
 ## Console
 

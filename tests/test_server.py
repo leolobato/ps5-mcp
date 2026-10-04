@@ -185,3 +185,36 @@ async def test_wait_for_template(hub):
     assert "spot gone" in text(await server.mcp.call_tool("wait_for", {"template": "spot", "gone": True,
                                                                        "timeout_ms": 1000}))
     assert "timeout" in text(await server.mcp.call_tool("wait_for", {"template": "spot", "timeout_ms": 300}))
+
+
+async def test_claim_console_queues_a_second_session(hub):
+    other = server.Runtime()  # a second MCP session
+    other.capture = server.runtime.capture
+    try:
+        assert "is yours" in text(await server.mcp.call_tool("claim_console", {"reason": "testing menus"}))
+        other.app().claim("waiting")
+        with pytest.raises(server.ConsoleInUse):
+            other.app().press(p.PadState(buttons=p.BUTTONS["cross"]), 30)
+        info = json.loads(text(await server.mcp.call_tool("status", {})))
+        assert info["claim"]["held_by_you"] and info["claim"]["queue"][0]["reason"] == "waiting"
+        assert "released" in text(await server.mcp.call_tool("release_console", {}))
+        assert other.app().lease()["granted"]
+        busy = text(await server.mcp.call_tool("press", {"button": "right"}))
+        assert busy.startswith("in use:") and "waiting" in busy
+        queued = text(await server.mcp.call_tool("claim_console", {"reason": "again", "wait_s": 1}))
+        assert "queued #1" in queued
+        waiter = asyncio.create_task(server.mcp.call_tool("claim_console", {"reason": "again", "wait_s": 10}))
+        await asyncio.sleep(0.3)
+        await asyncio.to_thread(other.app().unclaim)
+        assert "is yours" in text(await waiter)
+        assert "pressed" in text(await server.mcp.call_tool("press", {"button": "right", "hold_ms": 30}))
+    finally:
+        other.stop()
+
+
+async def test_looking_keeps_a_claim_alive(hub):
+    await server.mcp.call_tool("claim_console", {"reason": "watching", "idle_timeout_s": 10})
+    await asyncio.sleep(3)
+    await server.mcp.call_tool("snapshot", {"max_width": 320})
+    info = json.loads(text(await server.mcp.call_tool("status", {})))
+    assert info["claim"]["owner"]["expires_in_s"] >= 9

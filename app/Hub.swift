@@ -14,6 +14,7 @@ final class Hub {
     let sink: FrameSink
     let controller: PadController
     let padd: PaddRunner
+    let lease = Lease()
     var source: FrameSource!
     weak var ui: HubUI?
     private(set) var assigner: Assigner?
@@ -48,6 +49,7 @@ final class Hub {
             self?.events.async { self?.broadcast("state", ["t": at, "state": state.json]) }
         }
         controller.onStatus = { [weak self] in self?.statusChanged() }
+        lease.onChange = { [weak self] in self?.statusChanged() }
         if config.autoAssign {
             controller.onConnected = { [weak self] link in self?.autoAssign(link) }
         }
@@ -80,11 +82,12 @@ final class Hub {
         return conn
     }
 
-    /// A client is gone: its agent layers and held keys are released, the rest keeps working.
+    /// A client is gone: its claim, agent layers and held keys are released, the rest keeps working.
     func unregister(_ conn: Connection) {
         lock.lock()
         connections.removeValue(forKey: conn.id)
         lock.unlock()
+        lease.unclaim(conn: conn.id)
         for layer in conn.allLayers() { controller.release(client: layer) }
         conn.keys.drop()
         close(conn.fd)
@@ -135,7 +138,7 @@ final class Hub {
         return ["ok": true, "api": apiVersion, "pid": Int(getpid()), "frames": sink.frames, "frame_age": sink.frameAge,
                 "visible": shown, "now": uptimeSeconds(), "source": source?.name ?? "none", "clients": clients,
                 "pad": link.json, "title": link.title, "notice": note ?? NSNull(), "padd": padd.json,
-                "auto_assign": config.autoAssign && assigner != nil, "camera": cameraPermission]
+                "auto_assign": config.autoAssign && assigner != nil, "camera": cameraPermission, "lease": lease.json]
     }
 
     var cameraPermission: String {
