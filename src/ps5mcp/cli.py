@@ -229,6 +229,18 @@ def _install(args) -> int:
     return 0
 
 
+def _transfer(args) -> int:
+    from . import transfer
+    run = transfer.push if args.command == "push" else transfer.pull
+    try:
+        print(run(_host(args), args.source, args.dest, lambda line: print(line, flush=True), force=args.force,
+                  autostart=transfer.AUTOSTART and not args.no_start))
+    except Exception as exc:  # noqa: BLE001 - shown to the user as is
+        print(f"{args.command} failed: {exc}")
+        return 1
+    return 0
+
+
 def _pad(args) -> int:
     import time
 
@@ -309,6 +321,18 @@ def main(argv: list[str] | None = None) -> int:
     inst.add_argument("--run", action="store_true", help="also run the .elf once it is installed")
     inst.add_argument("--host", help="console IP address (default: PS5_HOST)")
     inst.set_defaults(func=_install)
+
+    for name, source, dest in (
+            ("push", "local file or folder", "absolute console path (end with / to copy into it)"),
+            ("pull", "absolute console path", "local path (an existing folder or one ending in / receives it)")):
+        cmd = sub.add_parser(name, help=f"copy {'to' if name == 'push' else 'from'} the console over FTP (zftpd, "
+                             "started from Payload Manager when needed; Web File Manager otherwise)")
+        cmd.add_argument("source", help=source)
+        cmd.add_argument("dest", help=dest)
+        cmd.add_argument("--force", action="store_true", help="copy unchanged files too")
+        cmd.add_argument("--no-start", action="store_true", help="never start zftpd")
+        cmd.add_argument("--host", help="console IP address (default: PS5_HOST)")
+        cmd.set_defaults(func=_transfer)
 
     lat = sub.add_parser("latency", help="time a padd button press until the captured frame changes")
     lat.add_argument("--host", help="console IP address (default: PS5_HOST)")

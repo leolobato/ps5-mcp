@@ -4,7 +4,8 @@ A thin client of the PS5 app (app/*.swift), which owns the capture card and the 
 servers (and the keyboard in the app window) can drive the console at once; the app merges their input. If the
 app is not running, the server launches it: headless, or visible with PS5MCP_VIEW=1.
 
-Environment: PS5_HOST (the console's IP address, required), PS5MCP_VIEW=1, PS5MCP_STATE (the app's state dir).
+Environment: PS5_HOST (the console's IP address, required), PS5MCP_VIEW=1, PS5MCP_STATE (the app's state dir),
+PS5MCP_FTP=0 (no push/pull tools), PS5MCP_FTP_PORT, PS5MCP_FTP_AUTOSTART=0 (never start zftpd; see transfer.py).
 """
 
 from __future__ import annotations
@@ -435,11 +436,66 @@ async def install(path: str, run: bool = False) -> str:
     or an .elf payload (added to Payload Manager's library). run=True also starts the .elf once.
     """
     from . import installer
-    app = await _app()  # the upload bypasses the app, so check the claim here
+    await _check_claim()  # the upload bypasses the app, so check the claim here
+    return await asyncio.to_thread(installer.install, capture.console_host(HOST), Path(path), run, lambda _line: None)
+
+
+async def _check_claim() -> None:
+    app = await _app()
     lease = await asyncio.to_thread(app.lease)
     if lease["owner"] and not lease["granted"]:
         raise ConsoleInUse(f"the PS5 is in use by {_holder(lease)}; call claim_console to queue for it")
-    return await asyncio.to_thread(installer.install, capture.console_host(HOST), Path(path), run, lambda _line: None)
+
+
+def _transfer_tool(fn):
+    """push/pull are tools unless PS5MCP_FTP=0; transfer failures come back as tool text."""
+    import ftplib
+    import functools
+
+    @functools.wraps(fn)
+    async def wrapper(*args, **kwargs):
+        try:
+            return await fn(*args, **kwargs)
+        except (PadError, capture.CaptureError):
+            raise  # "in use" and the rest of _errors' wording
+        except (RuntimeError, OSError, ftplib.Error) as exc:
+            return f"error: {exc}"
+    wrapper = _errors(wrapper)
+    return mcp.tool(structured_output=False)(wrapper) if os.environ.get("PS5MCP_FTP", "1") != "0" else wrapper
+
+
+@_transfer_tool
+async def push(local_path: str, remote_path: str, force: bool = False) -> str:
+    """Copy a file or folder from this Mac to the console (refused while another agent has claimed it).
+
+    Uses FTP through zftpd (port 2120), starting it from Payload Manager when it is not running; without zftpd,
+    files go one at a time through Web File Manager. remote_path is absolute and names the destination itself;
+    end it with "/" to copy into that folder. Unchanged files (same size, not newer here) are skipped and partial
+    ones resumed; force=True sends everything again.
+    """
+    from . import transfer
+    await _check_claim()
+    return await asyncio.to_thread(transfer.push, capture.console_host(HOST), local_path, remote_path,
+                                   lambda _line: None, force=force)
+
+
+@_transfer_tool
+async def pull(remote_path: str, local_path: str, force: bool = False) -> str:
+    """Copy a file or folder from the console to this Mac.
+
+    Uses FTP through zftpd (port 2120), starting it from Payload Manager when it is not running (that start is
+    refused while another agent has claimed the console); without zftpd, only single files can be copied.
+    If local_path is an existing folder or ends with "/", the item is copied into it. Unchanged files are skipped
+    and partial ones resumed; force=True copies everything again.
+    """
+    from . import transfer
+
+    def before_start() -> None:
+        asyncio.run_coroutine_threadsafe(_check_claim(), loop).result()
+
+    loop = asyncio.get_running_loop()
+    return await asyncio.to_thread(transfer.pull, capture.console_host(HOST), remote_path, local_path,
+                                   lambda _line: None, force=force, before_start=before_start)
 
 
 @mcp.tool(structured_output=False)

@@ -84,20 +84,22 @@ def _free_bytes(console: Console, path: str) -> int | None:
     return next((s["free"] for s in spaces if s.get("path") == path), None)
 
 
-def _upload(console: Console, host: str, path: Path, directory: str, progress: Progress, timeout: float) -> None:
-    """One file through Web File Manager's upload task: prepare, stream the bytes, finish."""
+def _upload(console: Console, host: str, path: Path, directory: str, progress: Progress, timeout: float,
+            name: str | None = None) -> None:
+    """One file through Web File Manager's upload task: prepare, stream the bytes, finish. `name` renames it."""
     size = path.stat().st_size
-    task = console.api("/api/upload/prepare", {"path": directory, "src": path.name, "total": size, "count": 1,
-                                               "rels": path.name, "sizes": size, "overwrite": "1"}, form=True)
+    name = name or path.name
+    task = console.api("/api/upload/prepare", {"path": directory, "src": name, "total": size, "count": 1,
+                                               "rels": name, "sizes": size, "overwrite": "1"}, form=True)
     task_id = task["task_id"]
     try:
         connection = http.client.HTTPConnection(host, 8888, timeout=60)
         connection.putrequest("POST", "/api/upload-file")
-        for name, value in {"Content-Type": "application/octet-stream", "Content-Length": str(size),
+        for header, value in {"Content-Type": "application/octet-stream", "Content-Length": str(size),
                             "X-WFM-Task-ID": str(task_id), "X-WFM-Path": urllib.parse.quote(directory, safe=""),
-                            "X-WFM-Rel": urllib.parse.quote(path.name, safe=""), "X-WFM-Size": str(size),
+                            "X-WFM-Rel": urllib.parse.quote(name, safe=""), "X-WFM-Size": str(size),
                             "X-WFM-Overwrite": "1"}.items():
-            connection.putheader(name, value)
+            connection.putheader(header, value)
         connection.endheaders()
         sent, shown = 0, 0.0
         with path.open("rb") as source:
@@ -106,12 +108,12 @@ def _upload(console: Console, host: str, path: Path, directory: str, progress: P
                 sent += len(chunk)
                 if time.monotonic() - shown > 2 or sent == size:
                     shown = time.monotonic()
-                    progress(f"uploading {path.name}: {sent * 100 // max(size, 1)}% of {size >> 20} MB")
+                    progress(f"uploading {name}: {sent * 100 // max(size, 1)}% of {size >> 20} MB")
         response = connection.getresponse()
         body = response.read()
         connection.close()
         if not 200 <= response.status < 300:
-            raise RuntimeError(f"upload of {path.name} failed: HTTP {response.status} {body[:200]!r}")
+            raise RuntimeError(f"upload of {name} failed: HTTP {response.status} {body[:200]!r}")
     except BaseException:
         for step in ("/api/cancel", "/api/upload/finish"):  # free Web File Manager's only task slot
             with contextlib.suppress(Exception):  # the task may already be terminal
@@ -120,7 +122,7 @@ def _upload(console: Console, host: str, path: Path, directory: str, progress: P
     console.api("/api/upload/finish", {"task_id": task_id})
     task = _wait(console, "upload", timeout, progress, task_id)
     if task.get("state") not in (None, "done"):
-        raise RuntimeError(f"upload of {path.name} {task['state']}: {_task_error(task)}")
+        raise RuntimeError(f"upload of {name} {task['state']}: {_task_error(task)}")
 
 
 def _wait(console: Console, op: str, timeout: float, progress: Progress, task_id: int | None = None) -> dict:

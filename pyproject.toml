@@ -16,6 +16,7 @@ ps5mcp-server = "ps5mcp.server:main"
 
 [dependency-groups]
 dev = [
+    "pyftpdlib>=2.2.0",
     "pytest>=8",
     "pytest-asyncio>=1.4.0",
     "ruff>=0.6",

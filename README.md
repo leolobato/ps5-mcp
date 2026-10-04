@@ -24,12 +24,13 @@ See and control a jailbroken PS5 from an MCP agent or your keyboard, with live H
 ### Console services
 
 Controlling the console needs only `padd` running, however it was loaded. These payloads add padd Start/Stop, the
-game/app list, and Install:
+game/app list, Install, and file transfers:
 
 | Service | Port | Used for |
 |---|---|---|
 | [Payload Manager](https://github.com/itsPLK/ps5-payload-manager) (v0.5.2 tested) | 8084 | Deploying `padd` (Start), checking its process is gone (Stop), and installing `.elf` payloads |
 | [PS5 Web File Manager](https://github.com/owendswang/ps5-web-file-manager) (v1.9 tested; Payload Manager can load it) | 8888 | Verifying the `padd` upload and reading its logs (Start/Stop), the game/app list (app and `list_apps`), and installing `.pkg` packages |
+| [zftpd](https://github.com/seregonwar/zftpd) (v1.6.0 FTP-only `zftpd-ps5-v1.6.0.elf`; optional) | 2120 | `push`/`pull` over FTP. Add it to Payload Manager's library as `zftpd.elf`; it is started when first needed |
 
 Without them, load `padd.elf` with any ELF loader.
 PS5 MCP expects Web File Manager on port 8888; it moves to the next free port when 8888 is taken.
@@ -115,6 +116,7 @@ Quit with **⌘Q** or `uv run ps5mcp capture stop`.
 | Capture and status | `snapshot`, `status`, `show_viewer` |
 | Controller input | `press`, `hold`, `stick`, `trigger`, `touchpad`, `sequence`, `release_all` |
 | Console apps | `home`, `close_app`, `launch`, `list_apps`, `install`, `uninstall_apps` |
+| File transfer | `push`, `pull` |
 | Visual automation | `save_template`, `list_templates`, `wait_for`, `wait_for_change` |
 | Recording | `record_start`, `record_stop`, `list_recordings`, `play_recording` |
 | Sharing | `claim_console`, `release_console` |
@@ -130,6 +132,25 @@ buttons, run console commands, or install until it calls `release_console()`. An
 `claim_console` joins a queue. With `wait_s`, the call returns when the console is free for that agent.
 A claim ends when its session closes, or after 10 minutes without a tool call. The sidebar shows the agent that has
 the console and the number of agents in the queue. The keyboard and the window's buttons always work. The CLI (`ps5mcp pad`, `ps5mcp padd`) is blocked like any agent.
+
+### File transfer
+
+`push(local_path, remote_path)` copies a file or folder from this Mac to the console, and
+`pull(remote_path, local_path)` copies one back. Console paths are absolute. A path names the destination itself;
+end it with `/` to copy into that folder. Folders are copied recursively. A file with the same size and a
+destination that is not older is skipped (`force=True` copies it anyway). A shorter, newer destination resumes
+when its last 64 KB match the source; otherwise the file is copied again.
+
+Transfers use FTP through zftpd on port 2120. If zftpd is not running, the tool starts it from Payload Manager's
+library. Starting it counts as a console action, so it is refused while another agent has claimed the console.
+zftpd cannot be stopped remotely: it runs until the console restarts, and loading it again replaces the running
+copy. Without zftpd, `push` sends files one at a time through Web File Manager, and `pull` copies single files only.
+
+| Variable | Effect |
+|---|---|
+| `PS5MCP_FTP=0` | Remove the `push` and `pull` tools |
+| `PS5MCP_FTP_AUTOSTART=0` | Never start zftpd (for example, during experiments that must not load extra payloads) |
+| `PS5MCP_FTP_PORT` | zftpd's port (default 2120) |
 
 ### Browser viewing
 
@@ -152,6 +173,8 @@ uv run ps5mcp pad close                    # close the running game
 uv run ps5mcp pad launch PPSA06654          # launch a title
 uv run ps5mcp pad uninstall PPSA06654       # uninstall a title (padd 1.3)
 uv run ps5mcp install game.pkg             # install a package (or an .elf payload; --run starts it)
+uv run ps5mcp push build/title /data/homebrew/FAKE00001   # copy a folder to the console (zftpd)
+uv run ps5mcp pull /data/playden/logs ./logs/              # copy a folder from the console (--no-start, --force)
 uv run ps5mcp padd status                  # payload version, uptime, and counters
 uv run ps5mcp latency                      # measure input-to-frame latency
 ```
