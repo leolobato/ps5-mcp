@@ -264,7 +264,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
     private var imageLayer: CALayer?
     private var pong: Pong?
     private var pongAt = 0.0
-    private lazy var library = TitleLibrary(host: hub.config.host, stateDir: hub.stateDir)
+    private var titleLibrary: TitleLibrary?
+    /// Web File Manager on the current console (a new one after the address changes in Settings).
+    private var library: TitleLibrary {
+        if let titleLibrary, titleLibrary.host == hub.host { return titleLibrary }
+        let fresh = TitleLibrary(host: hub.host, stateDir: hub.stateDir)
+        titleLibrary = fresh
+        return fresh
+    }
+    private var settings: SettingsWindow?
     private var titleList: [Title] = []
     private var titlesFetched = false
     private var titlesLoading = false
@@ -374,6 +382,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         let appItem = NSMenuItem()
         main.addItem(appItem)
         let appMenu = NSMenu()
+        appMenu.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: ",").target = self
+        appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Hide Window", action: #selector(hideWindow), keyEquivalent: "w")
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Quit PS5 MCP", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -690,8 +700,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         }
     }
 
+    @objc func showSettings() {
+        if settings == nil {
+            settings = SettingsWindow(hub: hub) { [weak self] in
+                self?.reloadTitles()  // another console: fetch its games/apps
+                self?.refresh()
+            }
+        }
+        settings?.show()
+    }
+
     @objc func startPadd() {
-        guard confirm("Start padd on \(hub.config.host)?",
+        guard confirm("Start padd on \(hub.host)?",
                       "This uploads build/padd.elf through Payload Manager, launches it once and archives the run "
                       + "under results/. If the PS5 asks \"Who's using this controller?\", the virtual pad answers it, "
                       + "and that turns your DualSense off: press its PS button and pick the same user.", "Start")
@@ -814,7 +834,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
             if url.pathExtension.lowercased() == "elf" {
                 let alert = NSAlert()
                 alert.messageText = "Install \(url.lastPathComponent)?"
-                alert.informativeText = "It is added to Payload Manager's payloads on \(self.hub.config.host)."
+                alert.informativeText = "It is added to Payload Manager's payloads on \(self.hub.host)."
                 alert.addButton(withTitle: "Install and Run")
                 alert.addButton(withTitle: "Install Only")
                 alert.addButton(withTitle: "Cancel")
@@ -833,7 +853,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         guard !base.isEmpty, installing == nil else { return }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: base[0])
-        process.arguments = Array(base.dropFirst()) + ["install", url.path, "--host", hub.config.host]
+        process.arguments = Array(base.dropFirst()) + ["install", url.path, "--host", hub.host]
             + (run ? ["--run"] : [])
         process.environment = hub.padd.cliEnvironment
         let pipe = Pipe()

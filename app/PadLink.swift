@@ -20,7 +20,9 @@ enum PadError: Error, CustomStringConvertible {
 func errnoText() -> String { String(cString: strerror(errno)) }
 
 /// Shown when neither PS5_HOST nor --host gave the console's address.
-let missingHost = "no console address: set PS5_HOST to the console's IP address (or pass --host)"
+let missingHost = "No console address: set the PS5's IP address in Settings (⌘,), or PS5_HOST / --host."
+/// The UserDefaults key for the console address saved in Settings.
+let savedHostKey = "consoleHost"
 
 /// TCP connect with a timeout; returns a blocking socket with TCP_NODELAY.
 func connectTCP(host: String, port: UInt16, timeout: Double) throws -> Int32 {

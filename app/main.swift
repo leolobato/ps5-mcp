@@ -17,7 +17,10 @@ struct Config {
     var audio: String? = "eEver USB Audio Device"
     var headless = false
     var snapshotFPS = 5.0
-    var host = ProcessInfo.processInfo.environment["PS5_HOST"] ?? ""  // no default: see missingHost
+    /// --host, else PS5_HOST, else the address saved in Settings. No default: see missingHost.
+    var host = ProcessInfo.processInfo.environment["PS5_HOST"] ?? ""
+    /// Where `host` came from: "--host", "PS5_HOST", "settings" or "none".
+    var hostSource = "none"
     var port = PMCP.port
     var firmware = "13.60"
     var homeMethod = ProcessInfo.processInfo.environment["PS5MCP_HOME_METHOD"] ?? "suspend"
@@ -30,6 +33,7 @@ struct Config {
     var dialogScore: String?
 
     init(_ args: [String]) {
+        if !host.isEmpty { hostSource = "PS5_HOST" }
         var i = 1
         while i < args.count {
             let value = i + 1 < args.count ? args[i + 1] : ""
@@ -38,7 +42,7 @@ struct Config {
             case "--video": video = value; i += 1
             case "--audio": audio = value == "none" ? nil : value; i += 1
             case "--snapshot-fps": snapshotFPS = Double(value) ?? 5; i += 1
-            case "--host": host = value; i += 1
+            case "--host": host = value; hostSource = "--host"; i += 1
             case "--port": port = UInt16(value) ?? PMCP.port; i += 1
             case "--firmware": firmware = value; i += 1
             case "--repo": repo = value; i += 1
@@ -49,6 +53,10 @@ struct Config {
             default: break
             }
             i += 1
+        }
+        if host.isEmpty, let saved = UserDefaults.standard.string(forKey: savedHostKey), !saved.isEmpty {
+            host = saved
+            hostSource = "settings"
         }
         templatePath = Bundle.main.path(forResource: "assign-dialog", ofType: "png")
             ?? (repo ?? ".") + "/src/ps5mcp/assets/assign-dialog.png"

@@ -108,6 +108,8 @@ dialog is visible. The match uses the title template at (712, 168), within 24 px
 `"PS5 MCP" [--state-dir DIR] [--video NAME|file:PATH|synthetic] [--audio NAME|none] [--headless] [--host H] [--port N]
 [--no-auto-assign] [--padd-cli EXE] [--snapshot-fps N]`
 
+- The console address is `--host`, else `PS5_HOST`, else the address saved in Settings (UserDefaults key
+  `consoleHost`). Saving in Settings also switches the running app to it.
 - `--video file:PATH` (it re-reads the image when it changes) and `--video synthetic` run without the capture card.
   They are for development and tests.
 - `PS5 --dialog-score IMAGE` prints the auto-assign match score and exits.

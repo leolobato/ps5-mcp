@@ -63,7 +63,7 @@ final class PaddRunner {
         }
 
         hub.controller.pause()
-        var args = Array(base.dropFirst()) + ["padd", action, "--host", config.host]
+        var args = Array(base.dropFirst()) + ["padd", action, "--host", hub.host]
         if action == "start" { args += ["--firmware", firmware ?? config.firmware] }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: base[0])

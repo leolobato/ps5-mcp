@@ -60,7 +60,8 @@ No `make` target contacts the console.
 ## Usage
 
 1. **Point it at the console:** `export PS5_HOST=192.168.1.20` (your PS5's IP address). There is no default.
-   The CLI commands also take `--host`.
+   The CLI commands also take `--host`. In the app, set the address in **Settings** (**⌘,**). The app saves it
+   and reconnects to it at once. When the app starts, `--host` and `PS5_HOST` win over the saved address.
 2. **Open the app:** `uv run ps5mcp view` or `open --env PS5_HOST=$PS5_HOST "build/PS5 MCP.app"`. Allow camera, microphone,
    local network, and Documents access when prompted.
 3. **Start `padd`** with **Start** or `uv run ps5mcp padd start`, once per console boot. The app answers

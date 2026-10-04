@@ -128,6 +128,18 @@ final class Hub {
         set { recorderLock.lock(); activeRecorder = newValue; recorderLock.unlock() }
     }
 
+    /// The console address in use (Settings can change it while the app runs).
+    var host: String { controller.host }
+
+    /// Saves `host` for the next launches and reconnects to it now.
+    func setHost(_ host: String) {
+        UserDefaults.standard.set(host, forKey: savedHostKey)
+        say("console address set to \(host)")
+        controller.setHost(host)
+        if notice == missingHost { notice = nil }
+        statusChanged()
+    }
+
     var clientCount: Int { lock.lock(); defer { lock.unlock() }; return connections.count }
 
     func status() -> [String: Any] {

@@ -45,7 +45,6 @@ struct LinkStatus {
 }
 
 final class PadController {
-    let host: String
     let port: UInt16
     let keepalive: Double
     private let cond = NSCondition()
@@ -57,6 +56,8 @@ final class PadController {
     private var stopped = false
     private var connecting = false
     private var lastMerged = PadState.neutral
+    /// The console address; `setHost` changes it and the link reconnects there.
+    private var target: String
     private(set) var error: String?
     private(set) var reconnects = 0
     private(set) var statesSent: UInt64 = 0
@@ -69,12 +70,25 @@ final class PadController {
     var onConnected: ((PadLink) -> Void)?
 
     init(host: String, port: UInt16, keepalive: Double = 0.1) {
-        self.host = host
+        target = host
         self.port = port
         self.keepalive = keepalive
     }
 
     func start() { Thread.detachNewThread { self.run() } }
+
+    var host: String { cond.lock(); defer { cond.unlock() }; return target }
+
+    /// Points the link at another console: the current link goes neutral and closes, then it connects to `host`.
+    func setHost(_ host: String) {
+        cond.lock()
+        guard host != target else { cond.unlock(); return }
+        target = host
+        error = nil
+        cond.broadcast()
+        cond.unlock()
+        onStatus?()
+    }
 
     // MARK: inputs
 
@@ -149,7 +163,7 @@ final class PadController {
             if let link, !link.closed { return link }
             if paused { throw PadError.failed("padd start/stop is running; the link is paused") }
             if Date() >= deadline {
-                throw PadError.failed("padd not connected at \(host):\(port): \(error ?? "connecting")")
+                throw PadError.failed("padd not connected at \(target):\(port): \(error ?? "connecting")")
             }
             _ = cond.wait(until: min(deadline, Date().addingTimeInterval(0.05)))
         }
@@ -158,7 +172,7 @@ final class PadController {
     func status() -> LinkStatus {
         cond.lock(); defer { cond.unlock() }
         let up = link.map { !$0.closed } ?? false
-        return LinkStatus(connected: up, paused: paused, host: host, port: port, hello: up ? link?.hello : nil,
+        return LinkStatus(connected: up, paused: paused, host: target, port: port, hello: up ? link?.hello : nil,
                           error: error, reconnects: reconnects, statesSent: statesSent, humanActive: !keys.isEmpty,
                           agents: agents.count)
     }
@@ -193,6 +207,7 @@ final class PadController {
             if stopped { cond.unlock(); return }
             if paused { nap(1); cond.unlock(); continue }
             connecting = true
+            let host = target
             cond.unlock()
             let link: PadLink
             do {
@@ -206,8 +221,8 @@ final class PadController {
                 onStatus?()
                 cond.lock()
                 nap(backoff)
+                backoff = target == host ? min(backoff * 2, 5) : 0.25
                 cond.unlock()
-                backoff = min(backoff * 2, 5)
                 continue
             }
             backoff = 0.25
@@ -249,7 +264,7 @@ final class PadController {
             if !dirty && !paused && !stopped {
                 _ = cond.wait(until: Date().addingTimeInterval(max(0, keepalive - (uptimeSeconds() - lastSent))))
             }
-            let leaving = paused || stopped
+            let leaving = paused || stopped || link.host != target  // a new address: reconnect there
             let state = leaving ? PadState.neutral : merged()
             dirty = false
             cond.unlock()
