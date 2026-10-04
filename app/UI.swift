@@ -67,6 +67,16 @@ final class Sidebar: NSStackView {
             grid.addRow(with: [label, value])
         }
         grid.column(at: 0).xPlacement = .trailing
+        // The holder's reason can be long: two lines, then an ellipsis (the tooltip has the full text).
+        if let holder = values["In use by"] {
+            holder.lineBreakMode = .byWordWrapping
+            holder.maximumNumberOfLines = 2
+            holder.cell?.truncatesLastVisibleLine = true
+            let labelWidth = (0..<grid.numberOfRows).compactMap { grid.cell(atColumnIndex: 0, rowIndex: $0).contentView }
+                .map(\.fittingSize.width).max() ?? 0
+            holder.preferredMaxLayoutWidth = 260 - 28 - grid.columnSpacing - ceil(labelWidth)
+            grid.row(at: fields.firstIndex(of: "In use by")!).yPlacement = .top
+        }
         // Status, then padd, then what acts on the console as it is now (Console), on a chosen game (Launch),
         // on the picture and input (Capture), on saved input (Recordings) and on what is installed (Install).
         addArrangedSubview(header("Status"))
