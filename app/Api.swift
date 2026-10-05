@@ -258,6 +258,9 @@ extension Hub {
             reply(conn, request, lease.view(conn: conn.id).merging(["released": had]) { a, _ in a })
         case "lease":
             reply(conn, request, lease.view(conn: conn.id))
+        case "force_release":
+            let evicted = forceRelease(client: request["holder"] as? String)
+            reply(conn, request, lease.view(conn: conn.id).merging(["evicted": evicted ?? NSNull()]) { a, _ in a })
         default:
             throw ApiError(code: "unknown_cmd", message: "unknown cmd")
         }

@@ -62,6 +62,7 @@ free, every client drives it as before.
 | `claim` | `reason`, `client?`, `idle_s?` (default 600, 10..3600) | Claims the console, or joins the queue. Claiming again keeps the place in the queue. |
 | `unclaim` | | Gives up the claim or the place in the queue; `released` says whether there was one. |
 | `lease` | | The lease as this connection sees it. |
+| `force_release` | `holder?` | Takes the claim from its holder (only if its client is `holder`, when given) and passes it on; `evicted` is the holder's client, or null. For the window's Force release button and tests; the MCP server does not expose it. |
 
 - All three reply `granted`, `position` (0 = holder, n = nth in the queue, -1 = neither), `owner` (`client`,
   `reason`, `held_s`, `expires_in_s`, or null) and `queue` (`client`, `reason`, `waiting_s`). `status` has the same
@@ -70,6 +71,9 @@ free, every client drives it as before.
   `padd_stop` fail with `leased`. Neutral `set`, `release`, `release_all`, `key` and the read-only commands still work.
 - **Lapses:** closing the connection gives up its claim. So do `idle_s` seconds without a request from the holder's
   connection. The next connection in the queue then gets the claim.
+- **Force release:** the window's Force release agent… button (or `force_release`) takes the claim from a holder that
+  will not let go. The next in the queue gets it and the holder's held input is released. The holder's next driving
+  command fails once with a message that says its claim was force-released; it can `claim` again to queue.
 - **People win:** the keyboard, the window's buttons and auto-assign are never blocked. A held key still blocks the
   holder with `human_has_control`.
 

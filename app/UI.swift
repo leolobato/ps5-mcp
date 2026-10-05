@@ -92,6 +92,10 @@ final class Sidebar: NSStackView {
         let release = button("releaseAll", "Release all input", "hand.raised", #selector(AppDelegate.releaseAll), target)
         release.toolTip = "Release every held button, stick and trigger (⌘.)"
         full(release)
+        let kick = button("forceRelease", "Force release agent…", "person.crop.circle.badge.xmark",
+                          #selector(AppDelegate.forceRelease), target)
+        kick.toolTip = "Take the console from the agent that claimed it and pass it to the next one in the queue"
+        full(kick)
 
         section("Launch")
         for popup in [titles, recordings] {
@@ -429,6 +433,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
             ("Close Running Game/App…", #selector(closeApp), ""),
             ("Home", #selector(home), ""),
             ("Release All Input", #selector(releaseAll), "."),
+            ("Force Release Agent…", #selector(forceRelease), ""),
             ("-", nil, ""),
             ("Record Button Presses", #selector(toggleRecording), "r"),
             ("Play Recording", #selector(togglePlayback), ""),
@@ -644,6 +649,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         } else {
             sidebar.set("In use by", "nobody")
         }
+        sidebar.buttons["forceRelease"]?.isEnabled = lease["owner"] is [String: Any]
         sidebar.notice.stringValue = hub.notice ?? ""
         let canRun = busy == nil && hub.padd.json["available"] as? Bool == true
         let fileManagerBusy = titlesLoading || installing != nil  // Web File Manager runs one task at a time
@@ -696,6 +702,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         case #selector(closeApp): return enabled("closeApp")
         case #selector(home): return enabled("home")
         case #selector(releaseAll): return enabled("releaseAll")
+        case #selector(forceRelease): return enabled("forceRelease")
         case #selector(toggleRecording):
             menuItem.title = hub.recorder == nil ? "Record Button Presses" : "Stop Recording Button Presses…"
             return enabled("record")
@@ -1203,6 +1210,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
             try? FileManager.default.removeItem(at: from)
             return "Video not saved: \(error.localizedDescription)"
         }
+    }
+
+    /// For an agent that claimed the console and will not let go (its claim only lapses after `idle_s`).
+    @objc func forceRelease() {
+        defer { window.makeFirstResponder(video) }
+        guard let owner = hub.lease.json["owner"] as? [String: Any] else { return }
+        let client = owner["client"] as? String ?? "the agent"
+        let held = Int(owner["held_s"] as? Double ?? 0)
+        let queued = (hub.lease.json["queue"] as? [[String: Any]]) ?? []
+        let next = (queued.first?["client"] as? String).map { "\($0) will use it next." }
+            ?? "Nobody is waiting for it."
+        guard confirm("Force release \(client)?",
+                      "\(client) has held the PS5 for \(held < 60 ? "\(held) s" : "\(held / 60) min").\n\(next)",
+                      "Force Release") else { return }
+        guard let evicted = hub.forceRelease(client: owner["client"] as? String) else {
+            hub.notice = "\(client) no longer holds the PS5; nothing released."
+            return refresh()
+        }
+        hub.notice = "Force-released \(evicted)."
+        refresh()
     }
 
     @objc func releaseAll() {

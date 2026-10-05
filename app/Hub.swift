@@ -88,6 +88,7 @@ final class Hub {
         connections.removeValue(forKey: conn.id)
         lock.unlock()
         lease.unclaim(conn: conn.id)
+        lease.forget(conn: conn.id)
         for layer in conn.allLayers() { controller.release(client: layer) }
         conn.keys.drop()
         close(conn.fd)
@@ -138,6 +139,19 @@ final class Hub {
         controller.setHost(host)
         if notice == missingHost { notice = nil }
         statusChanged()
+    }
+
+    /// Takes the console from an agent that will not let go: the next in the queue gets it, and the evicted
+    /// connection's held input is released. `client` limits it to that holder (the one the user confirmed).
+    /// Returns the evicted holder's client name.
+    @discardableResult
+    func forceRelease(client: String? = nil) -> String? {
+        guard let holder = lease.forceRelease(client: client) else { return nil }
+        lock.lock()
+        let conn = connections[holder.conn]
+        lock.unlock()
+        for layer in conn?.allLayers() ?? [] { controller.release(client: layer) }
+        return holder.client
     }
 
     var clientCount: Int { lock.lock(); defer { lock.unlock() }; return connections.count }

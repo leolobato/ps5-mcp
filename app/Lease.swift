@@ -6,6 +6,8 @@
 // - A claim lapses after `idle` s without a request from its connection; the next in the queue gets it.
 // - Agent vs agent only: the keyboard, the window's buttons and auto-assign are never blocked.
 // - Nobody has to claim. While the console is free, every client drives it as before.
+// - The window can force-release a holder that will not let go: the next in the queue gets the console, and the
+//   evicted connection's next driving command fails once with `leased`, saying so.
 
 import Foundation
 
@@ -36,6 +38,8 @@ final class Lease {
     private let lock = NSLock()
     private var owner: Entry?
     private var queue: [Entry] = []
+    /// Connections whose claim was force-released and that have not been told yet.
+    private var revoked = Set<Int>()
     /// Called (off the lock) whenever the owner or the queue changes.
     var onChange: (() -> Void)?
 
@@ -45,6 +49,7 @@ final class Lease {
         let idle = min(max(idle, 10), Lease.maxIdle)
         let entry = Entry(conn: conn, client: client, reason: reason, idle: idle, since: now, active: now)
         lock.lock()
+        revoked.remove(conn)
         var changed = expire(now)
         if owner == nil || owner?.conn == conn {
             owner = Entry(conn: conn, client: client, reason: reason, idle: idle, since: owner?.since ?? now,
@@ -67,6 +72,7 @@ final class Lease {
     @discardableResult
     func unclaim(conn: Int) -> Bool {
         lock.lock()
+        revoked.remove(conn)
         let had = owner?.conn == conn || queue.contains { $0.conn == conn }
         queue.removeAll { $0.conn == conn }
         if owner?.conn == conn { advance(uptimeSeconds()) }
@@ -82,13 +88,39 @@ final class Lease {
         let changed = expire(now)
         let holder = owner
         let position = queue.firstIndex { $0.conn == conn }.map { $0 + 1 }
+        let wasRevoked = revoked.remove(conn) != nil
         lock.unlock()
         if changed { onChange?() }
+        if wasRevoked {
+            throw ApiError(code: "leased", message: "the user force-released your claim on the PS5 from the app "
+                           + "window; call claim to queue for it again")
+        }
         guard let holder, holder.conn != conn else { return }
         let held = Int(now - holder.since)
         let place = position.map { "you are #\($0) in the queue" } ?? "call claim to queue for it"
         throw ApiError(code: "leased", message: "the PS5 is in use by \(holder.client) (\"\(holder.reason)\") "
                        + "for \(held) s; \(place)")
+    }
+
+    /// Takes the console from its holder (only if it is `client`, when given) and passes it to the next in the
+    /// queue. Returns the evicted holder.
+    @discardableResult
+    func forceRelease(client: String? = nil) -> Entry? {
+        lock.lock()
+        let holder = owner.flatMap { client == nil || $0.client == client ? $0 : nil }
+        if let holder {
+            say("lease: force-released \(holder.client) (\"\(holder.reason)\")")
+            revoked.insert(holder.conn)
+            advance(uptimeSeconds())
+        }
+        lock.unlock()
+        if holder != nil { onChange?() }
+        return holder
+    }
+
+    /// A closed connection cannot be told any more.
+    func forget(conn: Int) {
+        lock.lock(); revoked.remove(conn); lock.unlock()
     }
 
     /// Any request from the holder keeps its claim alive.

@@ -386,6 +386,26 @@ def test_closing_the_holder_passes_the_claim_on(app):
     assert wait_for(lambda: app.client().status()["lease"]["owner"] is None)
 
 
+def test_force_release_passes_the_claim_on_and_tells_the_holder(app):
+    hijacker, waiter, window = app.client("hijacker"), app.client("waiter"), app.client()
+    hijacker.claim("stuck")
+    hijacker.set(PadState(buttons=RIGHT))
+    assert wait_for(lambda: buttons(app.padd)[-1] == RIGHT)
+    waiter.claim("next")
+    assert window.call("force_release", holder="someone else")["evicted"] is None  # holder changed: no-op
+    assert window.call("force_release", holder="hijacker")["evicted"] == "hijacker"
+    assert waiter.lease()["granted"]
+    assert wait_for(lambda: buttons(app.padd)[-1] == 0)  # its held input is let go
+    with pytest.raises(ConsoleInUse, match="force-released"):
+        hijacker.press(PadState(buttons=RIGHT), 30)
+    with pytest.raises(ConsoleInUse, match="waiter"):  # told once; then the usual leased error
+        hijacker.press(PadState(buttons=RIGHT), 30)
+    assert hijacker.claim("again")["position"] == 1
+    waiter.press(PadState(buttons=CROSS), 30)
+    assert window.call("force_release")["evicted"] == "waiter"
+    assert hijacker.lease()["granted"]
+
+
 def test_idle_claim_lapses_to_the_next_in_queue(app):
     idle, waiting = app.client("idle"), app.client("waiting")
     idle.claim("forgot", idle_s=10)  # 10 s is the minimum
