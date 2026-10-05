@@ -181,11 +181,33 @@ library. Starting it counts as a console action, so it is refused while another 
 zftpd cannot be stopped remotely: it runs until the console restarts, and loading it again replaces the running
 copy. Without zftpd, `push` sends files one at a time through Web File Manager, and `pull` copies single files only.
 
+Native uploads set `eboot.bin`, `.prx` and `.sprx` files to `0755` and read back the remote
+execute bits. Other files with source execute bits are also restored when the upload contains native
+binaries; ordinary assets are left alone. This check runs even for skipped and resumed files. A rejected
+`SITE CHMOD` or an unreadable/incorrect remote mode fails the upload. Native executable uploads require
+zftpd: Web File Manager cannot provide this permission guarantee.
+
+For folders containing `eboot.bin` and a PS5 `sce_sys/param.json` with `titleId`, `push` then polls
+ShadowMount's `/api/v1/games` until that title is installed, managed, and available from the uploaded
+source path (up to 90 seconds). Its API must be reachable from this Mac: allow LAN access in ShadowMount's
+settings, and use `PS5MCP_SMP_PORT` if its port differs from 10101. The default console-local listener
+cannot be reached by this check. Failure reports that files may already be uploaded and readiness is
+unverified; retrying repairs permissions and checks registration again. Within this MCP server session,
+`launch` blocks titles whose upload is still running or failed its checks. Other sessions and the console's
+own launcher do not share this guard. Uploads without a recognized manifest report registration as
+unverified. These checks prevent the reported execute-permission failure; they do not prove a title will boot.
+
+The `.pkg` installer follows a separate Web File Manager upload and install-task path; it does not upload
+unpacked title executables through FTP. Package installs have not been validated for this reported issue.
+Existing titles are not changed automatically. A read-only permission audit can use FTP `MLSD`'s
+`unix.mode` or Unix `LIST` for `eboot.bin` and native modules, then scope any repairs to the identified files.
+
 | Variable | Effect |
 |---|---|
 | `PS5MCP_FTP=0` | Remove the `push` and `pull` tools |
 | `PS5MCP_FTP_AUTOSTART=0` | Never start zftpd (for example, during experiments that must not load extra payloads) |
 | `PS5MCP_FTP_PORT` | zftpd's port (default 2120) |
+| `PS5MCP_SMP_PORT` | ShadowMount's API port for native-title registration checks (default 10101) |
 
 ### Browser viewing
 

@@ -7,7 +7,9 @@
 - Folders are copied recursively. A file is skipped when the destination has the same size and is not older (a
   quick check like rsync's: `force` sends everything). A shorter destination that is not older is resumed (APPE
   up, REST down) only when its last bytes match the source at the same offset; otherwise it is sent again.
-- Without zftpd, `push` uploads one file at a time through Web File Manager (no skipping or resuming), and `pull`
+- Native executable uploads restore and verify execute permissions through FTP. Recognized PS5 title folders
+  also wait for ShadowMount registration through its LAN-accessible API.
+- Without zftpd, `push` uploads ordinary files through Web File Manager (no skipping or resuming), and `pull`
   takes single files only.
 
 A remote path is absolute and names the destination itself; end it with "/" to copy into that folder instead.
@@ -16,8 +18,10 @@ A remote path is absolute and names the destination itself; end it with "/" to c
 from __future__ import annotations
 
 import ftplib
+import json
 import os
 import posixpath
+import re
 import socket
 import time
 import urllib.parse
@@ -32,6 +36,8 @@ FTP_PORT = int(os.environ.get("PS5MCP_FTP_PORT", "2120"))
 AUTOSTART = os.environ.get("PS5MCP_FTP_AUTOSTART", "1") != "0"
 BLOCK = 1 << 20
 TAIL = 64 << 10  # bytes compared before resuming
+SMP_PORT = int(os.environ.get("PS5MCP_SMP_PORT", "10101"))
+REGISTRATION_TIMEOUT = 90.0
 START_TIMEOUT = 15.0
 
 Progress = Callable[[str], None]
@@ -78,9 +84,14 @@ def push(host: str, local: str | Path, remote: str, progress: Progress = print, 
     if not source.exists():
         raise ValueError(f"{source} does not exist")
     target = _target(remote, source.name)
+    executables = _executables(source, target)
+    titles = native_titles(source, target)
     stats = Stats("", started=time.monotonic())
     ftp = connect(host, port, autostart, progress, before_start)
     if ftp is None:
+        if executables:
+            raise RuntimeError("native executable uploads require zftpd for remote permission repair and "
+                               "verification; start zftpd and retry")
         stats.backend = "Web File Manager (zftpd not running)"
         _wfm_push(host, source, target, progress, stats)
         return stats.summary("sent", f"{source} -> {target}")
@@ -91,7 +102,113 @@ def push(host: str, local: str | Path, remote: str, progress: Progress = print, 
         else:
             _ensure_dir(ftp, posixpath.dirname(target))
             _push_file(ftp, source, target, _listing(ftp, posixpath.dirname(target)), progress, force, stats)
-    return stats.summary("sent", f"{source} -> {target}")
+        for remote_file in executables:
+            _restore_execute(ftp, remote_file)
+    summary = stats.summary("sent", f"{source} -> {target}")
+    if executables:
+        summary += f"; permissions verified for {len(executables)} executable files"
+        if not titles:
+            summary += "; registration unverified (no native titleId in sce_sys/param.json); do not assume launch readiness"
+    for title_id, title_path in titles:
+        wait_registration(host, title_id, title_path, progress)
+        summary += f"; registration verified: {title_id}"
+    return summary
+
+
+def native_titles(source: Path, target: str) -> list[tuple[str, str]]:
+    """Identify title roots from standard PS5 manifests, including enclosing folder uploads."""
+    if not source.is_dir():
+        return []
+    titles = []
+    for manifest in sorted(source.rglob("sce_sys/param.json")):
+        root = manifest.parent.parent
+        if not (root / "eboot.bin").is_file():
+            continue
+        try:
+            data = json.loads(manifest.read_text())
+        except (ValueError, OSError) as exc:
+            raise ValueError(f"cannot read native title manifest {manifest}: {exc}") from exc
+        title_id = data.get("titleId") if isinstance(data, dict) else None
+        if isinstance(title_id, str) and re.fullmatch(r"PPSA[0-9]{5}", title_id):
+            relative = root.relative_to(source).as_posix()
+            titles.append((title_id, target if relative == "." else posixpath.join(target, relative)))
+    return titles
+
+
+def wait_registration(host: str, title_id: str, target: str, progress: Progress = print,
+                      timeout: float = REGISTRATION_TIMEOUT) -> None:
+    """Poll SMP's app.db-backed installed state; a mount.lnk is written before registration finishes."""
+    console = Console(host)
+    deadline = time.monotonic() + timeout
+    progress(f"waiting for ShadowMount registration: {title_id} ({target})")
+    while time.monotonic() < deadline:
+        try:
+            data = json.loads(console.request(SMP_PORT, "/api/v1/games", data=b"{}",
+                                             headers={"Content-Type": "application/json"}))
+            games = data["games"]
+            if not isinstance(games, list):
+                raise TypeError("games is not an array")
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise RuntimeError(f"registration for {title_id} unverified: ShadowMount API on port {SMP_PORT} "
+                               "is unavailable or invalid. Allow LAN access in ShadowMount's API bind settings "
+                               "(default is console-local), check PS5MCP_SMP_PORT, and retry; files may already "
+                               f"be uploaded, but launch readiness is not verified: {exc}") from exc
+        for game in games:
+            if (isinstance(game, dict) and game.get("title_id") == title_id
+                    and game.get("installed") is True and game.get("managed") is True
+                    and game.get("source_available") is True and game.get("source_type", "folder") == "folder"
+                    and game.get("path") == target):
+                return
+        time.sleep(min(1.0, max(0.0, deadline - time.monotonic())))
+    raise TimeoutError(f"ShadowMount registration for {title_id} ({target}) did not finish within {timeout:g} s; "
+                       "files were uploaded, but launch readiness is not verified. Check scan paths and "
+                       "ShadowMount's registration errors, then retry")
+
+
+def _native_file(path: Path) -> bool:
+    return path.name.lower() == "eboot.bin" or path.suffix.lower() in (".prx", ".sprx")
+
+
+def _executables(source: Path, target: str) -> list[str]:
+    files = [source] if source.is_file() else sorted(p for p in source.rglob("*") if p.is_file())
+    native = any(_native_file(p) for p in files)
+    return [target if source.is_file() else posixpath.join(target, p.relative_to(source).as_posix())
+            for p in files if _native_file(p) or (native and p.stat().st_mode & 0o111)]
+
+
+def _remote_mode(ftp: ftplib.FTP, target: str) -> int:
+    parent, name = posixpath.split(target)
+    mode = _listing(ftp, parent).get(name, {}).get("unix.mode")
+    if mode is not None:
+        try:
+            return int(mode, 8)
+        except ValueError:
+            pass
+    # Older zftpd builds do not include unix.mode in MLSD. LIST includes actual stat bits;
+    # MLSD's `perm` fact describes FTP operations and cannot prove OS execute permissions.
+    lines: list[str] = []
+    ftp.retrlines(f"LIST {parent}", lines.append)
+    for line in lines:
+        fields = line.split(maxsplit=8)
+        if len(fields) == 9 and fields[8] == name and re.fullmatch(r"-[rwxstST-]{9}", fields[0]):
+            return sum(bit for char, bit in zip(fields[0][1:],
+                       (0o400, 0o200, 0o100, 0o40, 0o20, 0o10, 0o4, 0o2, 0o1), strict=True)
+                       if char in "rwxts")
+    raise RuntimeError(f"{target}: cannot read remote execute permissions; use zftpd with unix.mode or Unix LIST")
+
+
+def _restore_execute(ftp: ftplib.FTP, target: str) -> None:
+    try:
+        ftp.voidcmd(f"SITE CHMOD 755 {target}")
+    except ftplib.Error as exc:
+        raise RuntimeError(f"{target}: SITE CHMOD 755 rejected; upload is not ready: {exc}") from exc
+    try:
+        mode = _remote_mode(ftp, target)
+    except (ftplib.Error, OSError) as exc:
+        raise RuntimeError(f"{target}: cannot verify remote execute permissions: {exc}") from exc
+    if mode & 0o111 != 0o111:
+        raise RuntimeError(f"{target}: missing required execute bits after SITE CHMOD 755 (mode {mode:04o}); "
+                           "upload is not ready")
 
 
 def pull(host: str, remote: str, local: str | Path, progress: Progress = print, *, force: bool = False,

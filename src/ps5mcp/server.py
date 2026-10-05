@@ -43,6 +43,7 @@ class Runtime:
         self.recorder: recording.Recorder | None = None
         self._app: AppClient | None = None
         self._lock = threading.Lock()
+        self.title_uploads: dict[str, str] = {}
 
     def start(self) -> None:
         self.capture = capture.NativeApp()
@@ -391,6 +392,8 @@ async def launch(title_id: str, snapshot_after_ms: int | None = 5000):
     A game takes input only from the controller that launched it: launch it here to control it, because a game the
     user started with their own controller ignores this pad (and one launched here ignores theirs).
     """
+    if reason := runtime.title_uploads.get(title_id):
+        return f"{title_id}: launch blocked: {reason}"
     status = await _command("launch", title_id)
     text = "launched" if status == 0 else f"launch failed: status {status & 0xFFFFFFFF:#010x}"
     return await _result(f"{title_id}: {text}", snapshot_after_ms)
@@ -471,12 +474,32 @@ async def push(local_path: str, remote_path: str, force: bool = False) -> str:
     Uses FTP through zftpd (port 2120), starting it from Payload Manager when it is not running; without zftpd,
     files go one at a time through Web File Manager. remote_path is absolute and names the destination itself;
     end it with "/" to copy into that folder. Unchanged files (same size, not newer here) are skipped and partial
-    ones resumed; force=True sends everything again.
+    ones resumed; force=True sends everything again. Native executables/modules are chmodded to 0755 and
+    remote execute bits verified, including skipped files (requires zftpd). Native title folders with a PS5
+    manifest also wait for ShadowMount registration through its LAN-accessible API (port 10101 or
+    PS5MCP_SMP_PORT). Failed title uploads block launch in this server session until push succeeds.
     """
     from . import transfer
     await _check_claim()
-    return await asyncio.to_thread(transfer.push, capture.console_host(HOST), local_path, remote_path,
-                                   lambda _line: None, force=force)
+    source = Path(local_path).expanduser()
+    target = transfer._target(remote_path, source.name)
+    titles = transfer.native_titles(source, target)
+    if any(runtime.title_uploads.get(title_id) == "title upload in progress" for title_id, _ in titles):
+        raise RuntimeError("a title upload is already in progress; wait for it to finish")
+    for title_id, _ in titles:
+        runtime.title_uploads[title_id] = "title upload in progress"
+    complete = False
+    try:
+        result = await asyncio.to_thread(transfer.push, capture.console_host(HOST), local_path, remote_path,
+                                        lambda _line: None, force=force)
+        complete = True
+        return result
+    finally:
+        for title_id, _ in titles:
+            if complete:
+                runtime.title_uploads.pop(title_id, None)
+            else:
+                runtime.title_uploads[title_id] = "title upload checks incomplete; retry push before launch"
 
 
 @_transfer_tool
