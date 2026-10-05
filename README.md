@@ -119,8 +119,10 @@ The window shows live video, audio, and connection status. The sidebar has these
 - **Console:** Home, close the running game/app, and Release all input (**⌘.**).
 - **Launch:** pick an installed game/app and launch it (**⌘L**). The list comes from PS5 Web File Manager and is cached
   in `titles/`; ↻ reloads it.
-- **Capture:** record your input (**⌘R**) and save a snapshot as PNG (**⌘S**).
-- **Recordings:** pick a saved recording and play it. These are the same files that agents use with `play_recording`.
+- **Capture:** save a snapshot as PNG (**⌘S**), and record the picture and sound to an MP4 (**⇧⌘R**). Stop asks where
+  to save the video; quitting while recording saves it to `~/Movies`.
+- **Recordings:** record your button presses (**⌘R**), then pick a saved recording and play it. These are the same
+  files that agents use with `play_recording`.
 - **Install:** install a `.pkg` package or add an `.elf` payload to Payload Manager (and run it), and uninstall
   checked games/apps (padd 1.3). For titles ShadowMountPlus manages, uninstalling also deletes their source folder or
   image through ShadowMountPlus, so its next scan does not install them again.

@@ -78,7 +78,7 @@ final class Sidebar: NSStackView {
             grid.row(at: fields.firstIndex(of: "In use by")!).yPlacement = .top
         }
         // Status, then padd, then what acts on the console as it is now (Console), on a chosen game (Launch),
-        // on the picture and input (Capture), on saved input (Recordings) and on what is installed (Install).
+        // on the picture (Capture), on recorded input (Recordings) and on what is installed (Install).
         addArrangedSubview(header("Status"))
         addArrangedSubview(grid)
         section("padd")
@@ -111,17 +111,21 @@ final class Sidebar: NSStackView {
         full(launch)
 
         section("Capture")
-        let record = button("record", "Record", "record.circle", #selector(AppDelegate.toggleRecording), target)
-        record.toolTip = "Record the console input (keyboard and agents) until you press Stop (⌘R)"
         let snapshot = button("snapshot", "Snapshot", "camera", #selector(AppDelegate.saveSnapshot), target)
         snapshot.toolTip = "Save the current frame as a PNG (⌘S)"
-        full(row([record, snapshot]))
+        let video = button("video", "Record video", "video", #selector(AppDelegate.toggleVideoRecording), target)
+        video.toolTip = "Record the picture and sound to an MP4 until you press Stop (⇧⌘R)"
+        full(row([snapshot, video]))
 
         section("Recordings")
         recordings.setAccessibilityLabel("Recording to play")
         let play = button("play", "Play", "play.fill", #selector(AppDelegate.togglePlayback), target)
         play.setContentHuggingPriority(.required, for: .horizontal)
         full(row([recordings, play], equal: false))
+        let record = button("record", "Record button presses", "record.circle",
+                            #selector(AppDelegate.toggleRecording), target)
+        record.toolTip = "Record the button presses sent to the console (keyboard and agents) until you press Stop (⌘R)"
+        full(record)
 
         section("Install")
         let install = button("install", "Install…", "square.and.arrow.down", #selector(AppDelegate.installFile), target)
@@ -288,6 +292,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
     private var titlesLoading = false
     private var titlesError: String?
     private var playing: String?
+    private var videoRecorder: VideoRecorder?
+    /// From Stop until the video is saved or discarded (the save sheet included).
+    private var videoSaving = false
     private var installing: Process?
     private var uninstallSheet: UninstallSheet?
     private let playbackLock = NSLock()
@@ -423,9 +430,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
             ("Home", #selector(home), ""),
             ("Release All Input", #selector(releaseAll), "."),
             ("-", nil, ""),
-            ("Start Recording", #selector(toggleRecording), "r"),
+            ("Record Button Presses", #selector(toggleRecording), "r"),
             ("Play Recording", #selector(togglePlayback), ""),
             ("Save Snapshot…", #selector(saveSnapshot), "s"),
+            ("Record Video", #selector(toggleVideoRecording), "R"),
             ("-", nil, ""),
             ("Install…", #selector(installFile), ""),
             ("Uninstall…", #selector(showUninstall), ""),
@@ -654,13 +662,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         let recorder = hub.recorder
         if let recorder {
             let seconds = Int(uptimeSeconds() - recorder.started)
-            sidebar.setButton("record", title: String(format: "Stop %d:%02d", seconds / 60, seconds % 60),
+            sidebar.setButton("record", title: String(format: "Stop recording %d:%02d", seconds / 60, seconds % 60),
                               symbol: "stop.circle.fill")
         } else {
-            sidebar.setButton("record", title: "Record", symbol: "record.circle")
+            sidebar.setButton("record", title: "Record button presses", symbol: "record.circle")
         }
         sidebar.buttons["record"]?.contentTintColor = recorder == nil ? nil : .systemRed
         sidebar.buttons["record"]?.isEnabled = playing == nil
+        if let videoRecorder {
+            let seconds = Int(uptimeSeconds() - videoRecorder.started)
+            sidebar.setButton("video", title: String(format: "Stop %d:%02d", seconds / 60, seconds % 60),
+                              symbol: "stop.circle.fill")
+        } else {
+            sidebar.setButton("video", title: videoSaving ? "Saving…" : "Record video", symbol: "video")
+        }
+        sidebar.buttons["video"]?.contentTintColor = videoRecorder == nil ? nil : .systemRed
+        sidebar.buttons["video"]?.isEnabled = !videoSaving
         sidebar.setButton("play", title: playing == nil ? "Play" : "Stop",
                           symbol: playing == nil ? "play.fill" : "stop.fill")
         sidebar.buttons["play"]?.isEnabled = playing != nil
@@ -680,8 +697,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         case #selector(home): return enabled("home")
         case #selector(releaseAll): return enabled("releaseAll")
         case #selector(toggleRecording):
-            menuItem.title = hub.recorder == nil ? "Start Recording" : "Stop Recording…"
+            menuItem.title = hub.recorder == nil ? "Record Button Presses" : "Stop Recording Button Presses…"
             return enabled("record")
+        case #selector(toggleVideoRecording):
+            menuItem.title = videoRecorder == nil ? "Record Video" : "Stop Recording Video…"
+            return enabled("video")
         case #selector(togglePlayback):
             menuItem.title = playing == nil ? "Play Recording" : "Stop Playback"
             return enabled("play")
@@ -1111,6 +1131,80 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         }
     }
 
+    // MARK: video
+
+    private static func stamp() -> String {
+        let format = DateFormatter()
+        format.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss"
+        return format.string(from: Date())
+    }
+
+    /// Records to a file in the state directory; Stop asks where to save it.
+    @objc func toggleVideoRecording() {
+        defer { refresh(); window.makeFirstResponder(video) }
+        guard let recorder = videoRecorder else {
+            let url = URL(fileURLWithPath: hub.stateDir).appendingPathComponent("video-\(UUID().uuidString).mp4")
+            do {
+                let recorder = try VideoRecorder(url: url, audioFormat: hub.sink.audioFormat)
+                videoRecorder = recorder
+                hub.sink.record(recorder)
+                hub.notice = hub.sink.audioFormat == nil
+                    ? "Recording video (no audio). Press Stop (⇧⌘R) to save it."
+                    : "Recording video and audio. Press Stop (⇧⌘R) to save it."
+            } catch {
+                hub.notice = "Could not record video: \(error.localizedDescription)"
+            }
+            return
+        }
+        let name = "PS5 \(Self.stamp()).mp4"
+        stopVideo(recorder) { [weak self] reason in
+            guard let self else { return }
+            if let reason {
+                self.videoSaved("Video not saved: \(reason)")
+                return
+            }
+            let panel = NSSavePanel()
+            panel.allowedContentTypes = [.mpeg4Movie]
+            panel.nameFieldStringValue = name
+            panel.directoryURL = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask).first
+            panel.beginSheetModal(for: self.window) { response in
+                defer { self.window.makeFirstResponder(self.video) }
+                guard response == .OK, let url = panel.url else {
+                    try? FileManager.default.removeItem(at: recorder.url)
+                    self.videoSaved("Video discarded.")
+                    return
+                }
+                self.videoSaved(self.moveVideo(recorder.url, to: url))
+            }
+        }
+    }
+
+    private func stopVideo(_ recorder: VideoRecorder, _ done: @escaping (String?) -> Void) {
+        hub.sink.record(nil)
+        videoRecorder = nil
+        videoSaving = true
+        refresh()
+        recorder.finish(done)
+    }
+
+    private func videoSaved(_ notice: String) {
+        videoSaving = false
+        hub.notice = notice
+        refresh()
+    }
+
+    /// Moves the finished file into place; returns the notice to show.
+    private func moveVideo(_ from: URL, to url: URL) -> String {
+        do {
+            try? FileManager.default.removeItem(at: url)  // the save panel already asked to replace it
+            try FileManager.default.moveItem(at: from, to: url)
+            return "Saved video to \(url.lastPathComponent)."
+        } catch {
+            try? FileManager.default.removeItem(at: from)
+            return "Video not saved: \(error.localizedDescription)"
+        }
+    }
+
     @objc func releaseAll() {
         hub.controller.releaseAll()
         window.makeFirstResponder(video)
@@ -1127,6 +1221,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // Quitting mid-recording keeps the video: it goes to ~/Movies without asking.
+        if let recorder = videoRecorder,
+           let movies = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask).first {
+            let url = movies.appendingPathComponent("PS5 \(Self.stamp()).mp4")
+            stopVideo(recorder) { [weak self] reason in
+                if reason == nil { _ = self?.moveVideo(recorder.url, to: url) }
+                self?.hub.quit()
+            }
+            return .terminateLater
+        }
         hub.quit()
         return .terminateNow
     }

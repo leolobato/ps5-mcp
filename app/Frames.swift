@@ -3,7 +3,8 @@
 // - camera:     AVCaptureSession; the window draws it with AVCaptureVideoPreviewLayer, audio plays directly.
 // - file:PATH   the image at PATH (re-read when it changes), scaled to 1920x1080, fed at 30 fps.
 // - synthetic   a moving bar on gray, 1920x1080 at 30 fps.
-// Every frame goes to FrameSink: newest frame, <state>/latest.jpg at the snapshot rate, change detection.
+// Every frame goes to FrameSink: newest frame, <state>/latest.jpg at the snapshot rate, change detection and the
+// video recorder (with the capture card's audio).
 
 import AVFoundation
 import CoreImage
@@ -19,7 +20,8 @@ func say(_ message: String) {
 }
 
 /// Receives every frame; keeps the newest, writes snapshots, detects changes for latency measurements.
-final class FrameSink: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
+final class FrameSink: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate,
+    AVCaptureAudioDataOutputSampleBufferDelegate {
     private let ci = CIContext(options: [.useSoftwareRenderer: false])
     private let lock = NSLock()
     private var latest: CVPixelBuffer?
@@ -28,6 +30,9 @@ final class FrameSink: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     private let interval: Double
     private(set) var frames: UInt64 = 0
     private(set) var lastFrameAt = 0.0
+    private var recorder: VideoRecorder?
+    /// The capture card's audio format, once its first buffer arrives (nil: no audio to record).
+    private(set) var audioFormat: CMFormatDescription?
 
     // Change detection: a 32x18 luma thumbnail per frame, compared with an armed reference.
     private var reference: [UInt8]?
@@ -41,23 +46,39 @@ final class FrameSink: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer,
                        from connection: AVCaptureConnection) {
+        if output is AVCaptureAudioDataOutput {
+            lock.lock()
+            if audioFormat == nil { audioFormat = CMSampleBufferGetFormatDescription(sampleBuffer) }
+            let recorder = recorder
+            lock.unlock()
+            recorder?.append(audio: sampleBuffer)
+            return
+        }
         guard let buffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-        push(buffer)
+        push(buffer, at: CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
     }
 
-    func push(_ buffer: CVPixelBuffer) {
+    /// `time` is on the capture clock; the camera-free sources use the host clock.
+    func push(_ buffer: CVPixelBuffer, at time: CMTime = CMClockGetTime(CMClockGetHostTimeClock())) {
         let now = uptimeSeconds()
         lock.lock()
         latest = buffer
         frames += 1
         lastFrameAt = now
         let callback = watchCallback
+        let recorder = recorder
         lock.unlock()
+        recorder?.append(buffer, at: time)
         if callback != nil { checkChange(buffer, at: now) }
         if now - lastWrite >= interval {
             lastWrite = now
             write(buffer)
         }
+    }
+
+    /// Frames (and audio) go to `recorder` from the next one on; nil stops feeding it.
+    func record(_ recorder: VideoRecorder?) {
+        lock.lock(); self.recorder = recorder; lock.unlock()
     }
 
     func latestBuffer() -> CVPixelBuffer? {
@@ -161,6 +182,7 @@ final class CameraSource: FrameSource {
     let session = AVCaptureSession()
     let name: String
     private let queue = DispatchQueue(label: "frames", qos: .userInteractive)
+    private let audioQueue = DispatchQueue(label: "audio", qos: .userInteractive)
     private let audioPreview = AVCaptureAudioPreviewOutput()
 
     init(video: String, audio: String?, sink: FrameSink) throws {
@@ -197,6 +219,9 @@ final class CameraSource: FrameSource {
                 session.addInput(try AVCaptureDeviceInput(device: mic))
                 audioPreview.volume = 1.0
                 session.addOutput(audioPreview)
+                let audioOutput = AVCaptureAudioDataOutput()  // for the video recorder
+                audioOutput.setSampleBufferDelegate(sink, queue: audioQueue)
+                if session.canAddOutput(audioOutput) { session.addOutput(audioOutput) }
             } else {
                 say("audio device '\(audio)' not found; continuing without audio")
             }
