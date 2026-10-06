@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import signal
 import socket
@@ -264,7 +265,9 @@ def test_uninstall_deletes_a_shadowmount_source_first(tmp_path):
         smp.server.shutdown()
 
 
-@pytest.mark.parametrize(("delete", "polls", "status"), [(409, 0, 16), (500, 0, 5), (202, 100, 36), (404, 0, 0)])
+@pytest.mark.parametrize(("delete", "polls", "status"), [
+    (409, 0, errno.EBUSY), (500, 0, errno.EIO), (202, 100, errno.EINPROGRESS), (404, 0, 0),
+])
 def test_shadowmount_uninstall_outcomes(tmp_path, delete, polls, status):
     smp = FakeSmp(delete=delete, active_polls=polls)
     padd = smp_padd(tmp_path, smp.port, ("FAKE77001",))
@@ -280,9 +283,9 @@ def test_shadowmount_uninstall_outcomes(tmp_path, delete, polls, status):
 
 
 @pytest.mark.parametrize(("smp", "status"), [
-    ({"result": 13}, 13),                                         # EACCES: SMP could not delete the source
-    ({"status_job": 2}, 16),                                      # another job replaced ours: EBUSY, retry
-    ({"delete": 404, "delete_error": "unknown API route"}, 45),  # SMP without source delete: ENOTSUP
+    ({"result": errno.EACCES}, errno.EACCES),  # SMP could not delete the source
+    ({"status_job": 2}, errno.EBUSY),  # another job replaced ours: retry
+    ({"delete": 404, "delete_error": "unknown API route"}, errno.ENOTSUP),  # SMP without source delete
 ])
 def test_shadowmount_title_stays_installed_when_its_source_remains(tmp_path, smp, status):
     fake = FakeSmp(**smp)
@@ -301,7 +304,7 @@ def test_shadowmount_title_without_shadowmount_running_is_refused(tmp_path):
     padd = smp_padd(tmp_path, free_port(), ("FAKE77001",))
     try:
         link = padd.connect()
-        assert link.command(p.Command.UNINSTALL, "FAKE77001") == 61  # ECONNREFUSED: it would come back
+        assert link.command(p.Command.UNINSTALL, "FAKE77001") == errno.ECONNREFUSED  # it would come back
         assert not padd.calls("uninstall")
         link.close()
     finally:
