@@ -116,7 +116,7 @@ final class Sidebar: NSStackView {
 
         section("Capture")
         let snapshot = button("snapshot", "Snapshot", "camera", #selector(AppDelegate.saveSnapshot), target)
-        snapshot.toolTip = "Save the current frame as a PNG (⌘S)"
+        snapshot.toolTip = "Save the current frame as a PNG to the folder set in Settings (⌘S)"
         let video = button("video", "Record video", "video", #selector(AppDelegate.toggleVideoRecording), target)
         video.toolTip = "Record the picture and sound to an MP4 until you press Stop (⇧⌘R)"
         full(row([snapshot, video]))
@@ -437,7 +437,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
             ("-", nil, ""),
             ("Record Button Presses", #selector(toggleRecording), "r"),
             ("Play Recording", #selector(togglePlayback), ""),
-            ("Save Snapshot…", #selector(saveSnapshot), "s"),
+            ("Save Snapshot", #selector(saveSnapshot), "s"),
             ("Record Video", #selector(toggleVideoRecording), "R"),
             ("-", nil, ""),
             ("Install…", #selector(installFile), ""),
@@ -1113,28 +1113,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
 
     // MARK: snapshot
 
+    /// Saves the current frame straight to the snapshot folder from Settings (Desktop by default), no dialog.
     @objc func saveSnapshot() {
         guard let image = hub.sink.latestImage() else {
             hub.notice = "No frame to save yet."
             return
         }
-        let stamp = DateFormatter()
-        stamp.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss"
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.png]
-        panel.nameFieldStringValue = "PS5 \(stamp.string(from: Date())).png"
-        panel.beginSheetModal(for: window) { response in
-            defer { self.window.makeFirstResponder(self.video) }
-            guard response == .OK, let url = panel.url else { return }
-            do {
-                guard let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else {
-                    throw BadInput("could not encode the frame")
-                }
-                try png.write(to: url)
-                self.hub.notice = "Saved snapshot to \(url.lastPathComponent)."
-            } catch {
-                self.hub.notice = "Snapshot not saved: \(error.localizedDescription)"
+        let folder = snapshotFolder
+        let name = "PS5 \(Self.stamp())"
+        var url = folder.appendingPathComponent(name + ".png")
+        var copy = 2
+        while FileManager.default.fileExists(atPath: url.path) {  // two snapshots in the same second
+            url = folder.appendingPathComponent("\(name) \(copy).png")
+            copy += 1
+        }
+        do {
+            guard let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else {
+                throw BadInput("could not encode the frame")
             }
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try png.write(to: url)
+            hub.notice = "Saved snapshot to \(folder.lastPathComponent)/\(url.lastPathComponent)."
+        } catch {
+            hub.notice = "Snapshot not saved: \(error.localizedDescription)"
         }
     }
 
