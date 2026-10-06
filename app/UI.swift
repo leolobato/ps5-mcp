@@ -549,7 +549,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         CATransaction.commit()
     }
 
-    func setVisible(_ visible: Bool) {
+    /// Show or hide the window. Hiding through the API (and a headless launch) also drops the Dock icon and menu bar;
+    /// the user closing the window keeps them (`dock`), so a Dock click brings it back.
+    func setVisible(_ visible: Bool) { setVisible(visible, dock: visible) }
+
+    private func setVisible(_ visible: Bool, dock: Bool) {
         hub.setVisible(visible)
         if visible {
             NSApp.setActivationPolicy(.regular)
@@ -560,13 +564,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         } else {
             keys?.releaseHeld()
             window.orderOut(nil)
-            NSApp.setActivationPolicy(.accessory)
+            if !dock { NSApp.setActivationPolicy(.accessory) }
         }
         updatePlaybackControls()
         refresh()
     }
 
-    @objc func hideWindow() { setVisible(false) }
+    @objc func hideWindow() { setVisible(false, dock: true) }
 
     /// Every quit path (menu, API `quit`, SIGTERM) ends in `exit`: save where the window was, for the next launch.
     func willQuit() {
@@ -1240,8 +1244,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
 
     // Closing the window keeps the hub (capture, padd link, API) running; Quit ends it.
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        setVisible(false)
+        setVisible(false, dock: true)
         return false
+    }
+
+    /// A Dock click, or opening the app again from Finder, Spotlight or `open`, while the window is hidden (by the user,
+    /// the API or a headless launch) brings it back.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !window.isVisible { setVisible(true) }
+        return true
     }
 
     func windowDidResignKey(_ notification: Notification) { keys?.releaseHeld() }
