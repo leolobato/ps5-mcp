@@ -25,7 +25,8 @@ final class PaddRunner {
     /// or network step, which hung under `uv run` when launched from the app), else `uv run --project <repo> ps5mcp`.
     var cli: [String] {
         if let cli = config.paddCLI { return [cli] }
-        guard let repo = config.repo, !repo.isEmpty else { return [] }
+        guard let repo = config.repo, !repo.isEmpty, FileManager.default.fileExists(atPath: repo + "/pyproject.toml")
+        else { return [] }
         let venv = repo + "/.venv/bin/ps5mcp"
         if FileManager.default.isExecutableFile(atPath: venv) { return [venv] }
         guard let uv = config.uv, !uv.isEmpty else { return [] }
@@ -46,7 +47,8 @@ final class PaddRunner {
         guard let hub else { throw BadInput("hub gone") }
         let base = cli
         guard !base.isEmpty else {
-            throw ApiError(code: "padd_unavailable", message: "no repo/uv known to the app; rebuild it with make")
+            let repo = config.repo.map { "the checkout this app was built from (\($0)) is gone" } ?? "no repo/uv known to the app"
+            throw ApiError(code: "padd_unavailable", message: "\(repo); rebuild it with make")
         }
         lock.lock()
         if let running {

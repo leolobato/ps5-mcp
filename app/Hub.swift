@@ -39,6 +39,9 @@ final class Hub {
         padd = PaddRunner(config: config)
         padd.hub = self
         if config.host.isEmpty { noticeText = missingHost }
+        else if padd.cli.isEmpty, let repo = config.repo {
+            noticeText = "padd Start/Stop and Install are off: \(repo) is gone. Rebuild the app with make from the checkout."
+        }
         do {
             assigner = try Assigner(templatePath: config.templatePath)
         } catch {

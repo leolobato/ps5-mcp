@@ -36,9 +36,14 @@ def current_run_file() -> Path:
 
 def current_run() -> Path:
     try:
-        return Path(current_run_file().read_text().strip())
+        run = Path(current_run_file().read_text().strip())
     except FileNotFoundError:
         raise SystemExit("No padd run recorded; use `ps5mcp padd start` first") from None
+    if not run.is_absolute():
+        return ROOT / run
+    # Older pointers are absolute and the state dir outlives the checkout: after a move, find the run here by name.
+    moved = ROOT / "results" / run.name
+    return moved if not run.exists() and moved.exists() else run
 
 
 def classify(raw: bytes) -> tuple[str, list[dict]]:
@@ -116,7 +121,7 @@ def start(host: str, firmware: str | None, timeout: float = 20) -> int:
                 "git_commit": _git("rev-parse", "HEAD"), "git_status_before_run": _git("status", "--porcelain"),
                 "status": "incomplete", "launch_requested": False,
                 "limitations": "Console model and kernel patch state are not verified."}
-    current_run_file().write_text(f"{run}\n")
+    current_run_file().write_text(f"{run.relative_to(ROOT)}\n")
     console = Console(host)
     try:
         evidence["loader_version"] = console.request(8084, "/version", method="GET").decode().strip()
@@ -306,15 +311,26 @@ def killtest(host: str) -> int:
 
 
 def stop(host: str, timeout: float = 10) -> int:
-    run = current_run()
-    evidence = _load(run)
+    try:
+        run: Path | None = current_run()
+    except SystemExit:
+        run = None
+    evidence = _load(run) if run else {}
+    handle = None
     try:
         link = PadLink(host)
+        handle = link.hello.pad_handle
         link.shutdown()
         link.close()
         evidence["shutdown_acked"] = True
     except (OSError, PadError) as exc:
         evidence["shutdown_error"] = str(exc)
+    # A padd launched another way (e.g. from Payload Manager) has its own pad: the recorded run says nothing about it.
+    if handle is not None and (run is None or evidence.get("hello", {}).get("pad_handle") != handle):
+        return _stop_untracked(host, timeout)
+    if run is None:
+        print(f"padd unreachable at {host}:{p.PORT}: {evidence['shutdown_error']}")
+        return 1
     _save(run, evidence)
     deadline = time.monotonic() + timeout
     while True:
@@ -332,3 +348,15 @@ def stop(host: str, timeout: float = 10) -> int:
     for record in evidence.get("last_events", []):
         print(json.dumps(record))
     return 0 if evidence["status"] == "passed" else 1
+
+
+def _stop_untracked(host: str, timeout: float) -> int:
+    """Stop result for a padd with no archived run: only whether its port closed."""
+    deadline = time.monotonic() + timeout
+    while _port_open(host) and time.monotonic() < deadline:
+        time.sleep(0.5)
+    if _port_open(host):
+        print(f"failed: padd at {host}:{p.PORT} acknowledged SHUTDOWN but is still listening")
+        return 1
+    print("stopped: padd was not started by `ps5mcp padd start`, so no run was archived")
+    return 0
