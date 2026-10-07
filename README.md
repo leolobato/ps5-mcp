@@ -78,6 +78,10 @@ No `make` target contacts the console.
 
 The MCP server starts the app when needed, headless by default (`PS5MCP_VIEW=1` shows the window).
 Closing an MCP session leaves the app running; quitting the app releases input and leaves `padd` running.
+When `PS5_HOST` is set, the server refuses tools if the app is targeting a different console, including after
+a Settings change. Set the app back to that address or restart the MCP server with the intended `PS5_HOST`.
+Without `PS5_HOST`, tools use the app's current saved address; controls, installs, and file transfers use that
+same target. A missing or unverifiable app address is an error.
 
 ### MCP clients
 

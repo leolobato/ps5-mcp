@@ -4,7 +4,8 @@ A thin client of the PS5 app (app/*.swift), which owns the capture card and the 
 servers (and the keyboard in the app window) can drive the console at once; the app merges their input. If the
 app is not running, the server launches it: headless, or visible with PS5MCP_VIEW=1.
 
-Environment: PS5_HOST (the console's IP address, required), PS5MCP_VIEW=1, PS5MCP_STATE (the app's state dir),
+Environment: PS5_HOST (pins the console's IP address; otherwise use the app's host), PS5MCP_VIEW=1,
+PS5MCP_STATE (the app's state dir),
 PS5MCP_FTP=0 (no push/pull tools), PS5MCP_FTP_PORT, PS5MCP_FTP_AUTOSTART=0 (never start zftpd; see transfer.py).
 """
 
@@ -12,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import http.client
 import os
 import tempfile
 import threading
@@ -20,6 +22,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 
 from mcp.server.mcpserver import Image, MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 
 from . import capture, recording, stream, vision
 from . import protocol as p
@@ -63,7 +66,13 @@ class Runtime:
                 client.on("state", self._on_state)
                 client.subscribe("state")
                 self._app = client
+            self.capture.target_host(HOST)
             return self._app
+
+    def target_host(self) -> str:
+        """Use the app's verified target for direct console requests too."""
+        self.app()
+        return self.capture.target_host(HOST)
 
     def _on_state(self, event: dict) -> None:
         recorder = self.recorder
@@ -404,7 +413,8 @@ async def launch(title_id: str, snapshot_after_ms: int | None = 5000):
 async def list_apps() -> list[str]:
     """Installed title ids (from /user/app on the console)."""
     from .probe_runner import Console
-    entries = await asyncio.to_thread(Console(capture.console_host(HOST)).listdir, "/user/app")
+    host = await asyncio.to_thread(runtime.target_host)
+    entries = await asyncio.to_thread(Console(host).listdir, "/user/app")
     return sorted(e["name"] for e in entries if e.get("name", "").isalnum())
 
 
@@ -440,7 +450,11 @@ async def install(path: str, run: bool = False) -> str:
     """
     from . import installer
     await _check_claim()  # the upload bypasses the app, so check the claim here
-    return await asyncio.to_thread(installer.install, capture.console_host(HOST), Path(path), run, lambda _line: None)
+    host = await asyncio.to_thread(runtime.target_host)
+    try:
+        return await asyncio.to_thread(installer.install, host, Path(path), run, lambda _line: None)
+    except (RuntimeError, OSError, http.client.HTTPException) as exc:
+        raise ToolError(f"install failed: {exc}") from exc
 
 
 async def _check_claim() -> None:
@@ -481,6 +495,7 @@ async def push(local_path: str, remote_path: str, force: bool = False) -> str:
     """
     from . import transfer
     await _check_claim()
+    host = await asyncio.to_thread(runtime.target_host)
     source = Path(local_path).expanduser()
     target = transfer._target(remote_path, source.name)
     titles = transfer.native_titles(source, target)
@@ -490,7 +505,7 @@ async def push(local_path: str, remote_path: str, force: bool = False) -> str:
         runtime.title_uploads[title_id] = "title upload in progress"
     complete = False
     try:
-        result = await asyncio.to_thread(transfer.push, capture.console_host(HOST), local_path, remote_path,
+        result = await asyncio.to_thread(transfer.push, host, local_path, remote_path,
                                         lambda _line: None, force=force)
         complete = True
         return result
@@ -517,7 +532,8 @@ async def pull(remote_path: str, local_path: str, force: bool = False) -> str:
         asyncio.run_coroutine_threadsafe(_check_claim(), loop).result()
 
     loop = asyncio.get_running_loop()
-    return await asyncio.to_thread(transfer.pull, capture.console_host(HOST), remote_path, local_path,
+    host = await asyncio.to_thread(runtime.target_host)
+    return await asyncio.to_thread(transfer.pull, host, remote_path, local_path,
                                    lambda _line: None, force=force, before_start=before_start)
 
 

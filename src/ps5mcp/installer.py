@@ -67,12 +67,16 @@ def install_pkg(host: str, path: Path, progress: Progress, timeout: float) -> st
     remote = f"{PKG_DIR}/{path.name}"
     _upload(console, host, path, PKG_DIR, progress, timeout)
     progress(f"installing {remote}")
-    console.api("/api/install-pkg", {"paths": remote}, form=True)
-    task = _wait(console, "pkg_install", timeout, progress)
-    if not task:
-        return f"requested the install of {path.name}; follow it on the console (the package is at {remote})"
+    submitted = console.api("/api/install-pkg", {"paths": remote}, form=True)
+    task_ids = submitted.get("task_ids", [submitted.get("task_id")])
+    if (not isinstance(task_ids, list) or len(task_ids) != 1
+            or type(task_ids[0]) is not int or task_ids[0] <= 0):
+        raise RuntimeError(f"install of {path.name} unverified: no unambiguous task id ({task_ids!r}); "
+                           "outcome unknown, check the console before retrying")
+    task_id = task_ids[0]
+    task = _wait(console, "pkg_install", timeout, progress, task_id)
     if task.get("state") != "done":
-        raise RuntimeError(f"install of {path.name} {task.get('state', 'failed')}: {_task_error(task)}")
+        raise RuntimeError(f"install of {path.name} {task.get('state', 'unknown')}: {_task_error(task)}")
     return f"installed {path.name} (the package stays at {remote})"
 
 
@@ -91,7 +95,10 @@ def _upload(console: Console, host: str, path: Path, directory: str, progress: P
     name = name or path.name
     task = console.api("/api/upload/prepare", {"path": directory, "src": name, "total": size, "count": 1,
                                                "rels": name, "sizes": size, "overwrite": "1"}, form=True)
-    task_id = task["task_id"]
+    task_id = task.get("task_id")
+    if type(task_id) is not int or task_id <= 0:
+        raise RuntimeError(f"upload of {name} unverified: invalid task id ({task_id!r}); "
+                           "outcome unknown, check the console before retrying")
     try:
         connection = http.client.HTTPConnection(host, 8888, timeout=60)
         connection.putrequest("POST", "/api/upload-file")
@@ -121,38 +128,50 @@ def _upload(console: Console, host: str, path: Path, directory: str, progress: P
         raise
     console.api("/api/upload/finish", {"task_id": task_id})
     task = _wait(console, "upload", timeout, progress, task_id)
-    if task.get("state") not in (None, "done"):
-        raise RuntimeError(f"upload of {name} {task['state']}: {_task_error(task)}")
+    if task.get("state") != "done":
+        raise RuntimeError(f"upload of {name} {task.get('state', 'unknown')}: {_task_error(task)}")
 
 
 def _wait(console: Console, op: str, timeout: float, progress: Progress, task_id: int | None = None) -> dict:
-    """Polls `/api/tasks` until the task (by id, or the newest of `op`) is terminal and returns it. A finished task
-    leaves the list and shows up as `completion`; a task that never appears within 15 s counts as finished."""
+    """Return a confirmed terminal task, never infer success from a missing task.
+
+    Prefer the submitted id; otherwise latch onto the newest task of `op`. Web File Manager's upload
+    `completion` records are success-only and omit `state`, so a matching record confirms that upload.
+    Package installs need an explicit terminal state. Unknown outcomes raise rather than report success.
+    """
     start = time.monotonic()
     seen: dict = {}
     shown = ""
     while time.monotonic() - start < timeout:
         data = console.api("/api/tasks")
+        expected_id = task_id if task_id is not None else seen.get("id")
         matches = [t for t in data.get("tasks", [])
-                   if (t.get("id") == task_id if task_id is not None else t.get("op") == op)]
+                   if t.get("op") == op and (expected_id is None or t.get("id") == expected_id)]
         if matches:
-            seen = matches[-1]
+            seen = matches[0]  # Web File Manager prepends new tasks.
             if seen.get("state") in ("done", "failed", "canceled"):
                 return seen
             line = f"{op}: {seen.get('state')} {seen.get('current') or ''}".strip()
             if line != shown:
                 shown = line
                 progress(line)
-        else:
-            completion = data.get("completion") or {}
-            if seen and completion.get("id") == seen.get("id"):
+        completion = data.get("completion") or {}
+        expected_id = task_id if task_id is not None else seen.get("id")
+        if expected_id is not None and completion.get("id") == expected_id and completion.get("op") == op:
+            state = completion.get("state")
+            if state in ("done", "failed", "canceled"):
                 return completion
-            if seen:  # left the list without a completion record: it ended without failing
-                return {**seen, "state": "done"}
-            if time.monotonic() - start > 15:
-                return {}
-        time.sleep(1)
-    raise TimeoutError(f"{op} did not finish within {timeout:.0f} s")
+            if op == "upload" and state is None:
+                return {**completion, "state": "done"}
+        if seen and not matches:
+            raise RuntimeError(f"{op} task {expected_id} disappeared without a confirmed completion; "
+                               "outcome unknown, check the console before retrying")
+        if not seen and time.monotonic() - start >= 15:
+            raise TimeoutError(f"{op} task was not observed within 15 s; outcome unknown, "
+                               "check the console before retrying")
+        time.sleep(min(1, max(0, timeout - (time.monotonic() - start))))
+    raise TimeoutError(f"{op} did not finish within {timeout:.0f} s; outcome unknown, "
+                       "check the console before retrying")
 
 
 def _task_error(task: dict) -> str:
