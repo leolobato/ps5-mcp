@@ -31,6 +31,8 @@ final class Hub {
 
     var stateDir: String { config.stateDir }
     var socketPath: String { config.stateDir + "/capture.sock" }
+    /// The inode of the socket this app bound, so quitting removes only its own socket file.
+    var boundSocket: ino_t?
 
     init(config: Config) {
         self.config = config
@@ -248,7 +250,8 @@ final class Hub {
         ui?.willQuit()
         controller.close()
         source?.stop()
-        unlink(socketPath)
+        var info = stat()
+        if let bound = boundSocket, lstat(socketPath, &info) == 0, info.st_ino == bound { unlink(socketPath) }
         exit(0)
     }
 }

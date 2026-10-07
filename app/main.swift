@@ -79,6 +79,12 @@ if let path = config.dialogScore {
 }
 
 try? FileManager.default.createDirectory(atPath: config.stateDir, withIntermediateDirectories: true)
+// One app per state directory: a second copy (another build, or the one in /Applications) would take over the
+// control socket and compete with the first for the console's only padd connection. Show the running one instead.
+if askRunningApp(config.stateDir + "/capture.sock", config.headless ? #"{"cmd":"status"}"# : #"{"cmd":"show"}"#) != nil {
+    say("PS5 MCP is already running for \(config.stateDir); \(config.headless ? "leaving it as it is" : "showing its window")")
+    exit(0)
+}
 // No window restoration: after a crash it would block every launch (headless too) on a "reopen windows?" alert.
 UserDefaults.standard.set(true, forKey: "ApplePersistenceIgnoreState")
 let hub = Hub(config: config)

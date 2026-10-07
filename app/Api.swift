@@ -33,6 +33,37 @@ func bindUnix(_ path: String) -> Int32 {
     return fd
 }
 
+/// Sends one JSON line to a running app's control socket and returns its first reply line, or nil when nothing
+/// answers within a second (no socket, or a stale one left by a crash).
+func askRunningApp(_ path: String, _ line: String) -> String? {
+    let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+    guard fd >= 0 else { return nil }
+    defer { close(fd) }
+    var addr = sockaddr_un()
+    addr.sun_family = sa_family_t(AF_UNIX)
+    guard path.utf8.count < MemoryLayout.size(ofValue: addr.sun_path) else { return nil }
+    _ = withUnsafeMutableBytes(of: &addr.sun_path) { raw in
+        path.withCString { strncpy(raw.baseAddress!.assumingMemoryBound(to: CChar.self), $0, raw.count - 1) }
+    }
+    var timeout = timeval(tv_sec: 1, tv_usec: 0)
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+    let connected = withUnsafePointer(to: &addr) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+    }
+    guard connected == 0 else { return nil }
+    let request = Array((line + "\n").utf8)
+    guard write(fd, request, request.count) == request.count else { return nil }
+    var reply = [UInt8]()
+    var chunk = [UInt8](repeating: 0, count: 4096)
+    while !reply.contains(UInt8(ascii: "\n")) {
+        let count = read(fd, &chunk, chunk.count)
+        guard count > 0 else { break }
+        reply += chunk[0..<count]
+    }
+    return reply.isEmpty ? nil : String(decoding: reply, as: UTF8.self)
+}
+
 final class Connection {
     let fd: Int32
     let id: Int
@@ -91,6 +122,8 @@ extension Hub {
     func serveApi() {
         let fd = bindUnix(socketPath)
         guard fd >= 0 else { exit(3) }
+        var info = stat()
+        if lstat(socketPath, &info) == 0 { boundSocket = info.st_ino }
         Thread.detachNewThread {
             while true {
                 let client = accept(fd, nil, nil)
