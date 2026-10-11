@@ -209,6 +209,13 @@ async def test_wait_for_template(hub):
     assert "timeout" in text(await server.mcp.call_tool("wait_for", {"template": "spot", "timeout_ms": 300}))
 
 
+async def test_wait_for_says_it_matches_templates_not_text():
+    tool = next(t for t in await server.mcp.list_tools() if t.name == "wait_for")
+    assert tool.input_schema["required"] == ["template"]
+    assert "save_template" in tool.description
+    assert "matches pixels, not text" in " ".join(tool.description.split())
+
+
 async def test_claim_console_queues_a_second_session(hub):
     other = server.Runtime()  # a second MCP session
     other.capture = server.runtime.capture

@@ -329,10 +329,12 @@ async def list_templates() -> list[str]:
 @mcp.tool(structured_output=False)
 @_errors
 async def wait_for(template: str, timeout_ms: int = 5000, min_score: float = 0.85, gone: bool = False):
-    """Wait until a saved template appears on screen (or disappears, with gone=true).
+    """Wait until a saved template image appears on screen (or disappears, with gone=true).
 
-    Matching is normalised cross-correlation over the whole frame; score 1.0 is identical. Returns where it was
-    found, the score and the frame.
+    template: the name of an image saved with save_template (list_templates shows them). This matches pixels, not
+    text: there is no OCR, so to wait for some text, first save_template a region of the screen that shows it.
+    timeout_ms is in milliseconds. Matching is normalised cross-correlation over the whole frame; score 1.0 is
+    identical. Returns where it was found, the score and the frame. For any change at all, use wait_for_change.
     """
     target, _ = vision.load_template(capture.state_dir(), template)
     started = time.monotonic()
