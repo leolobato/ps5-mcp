@@ -30,7 +30,7 @@ game/app list, Install, and file transfers:
 |---|---|---|
 | [Payload Manager](https://github.com/itsPLK/ps5-payload-manager) (v0.5.2 tested) | 8084 | Deploying `padd` (Start), checking its process is gone (Stop), and installing `.elf` payloads |
 | [PS5 Web File Manager](https://github.com/owendswang/ps5-web-file-manager) (v1.9 tested; Payload Manager can load it) | 8888 | Verifying the `padd` upload and reading its logs (Start/Stop), the game/app list (app and `list_apps`), and installing `.pkg` packages |
-| [zftpd](https://github.com/seregonwar/zftpd) (v1.6.0 FTP-only `zftpd-ps5-v1.6.0.elf`; optional) | 2120 | `push`/`pull` over FTP. Add it to Payload Manager's library as `zftpd.elf`; it is started when first needed |
+| [zftpd](https://github.com/seregonwar/zftpd) (v1.6.0 FTP-only `zftpd-ps5-v1.6.0.elf`; optional) | 2120 | `push`/`pull` over FTP. Add it to Payload Manager's library; it is started when first needed |
 
 Without them, load `padd.elf` with any ELF loader.
 PS5 MCP expects Web File Manager on port 8888; it moves to the next free port when 8888 is taken.
@@ -39,9 +39,10 @@ If the CLI or the MCP server reports "no route to host" while other apps reach t
 privacy is blocking its Python: allow it in System Settings › Privacy & Security › Local Network.
 
 To add zftpd, download `zftpd-ps5-v1.6.0.elf` from its
-[releases](https://github.com/seregonwar/zftpd/releases), rename it to `zftpd.elf`, and add it to Payload Manager's
-library with `uv run ps5mcp install zftpd.elf` (or Payload Manager's web page). Do not run it yourself: `push` and
-`pull` start it when they first need it. Without zftpd, `push` is slower and `pull` copies single files only.
+[releases](https://github.com/seregonwar/zftpd/releases) and add it to Payload Manager's library with
+`uv run ps5mcp install zftpd-ps5-v1.6.0.elf` (or Payload Manager's web page). Any library payload named `zftpd*.elf`
+is used: `zftpd.elf` if there is one, else the highest version. Do not run it yourself: `push` and `pull` start it
+when they first need it. Without zftpd, `push` is slower and `pull` copies single files only.
 
 ## How it works
 

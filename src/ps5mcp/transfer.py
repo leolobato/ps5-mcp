@@ -1,7 +1,7 @@
 """Copy files and folders between this Mac and the console: FTP through zftpd, Web File Manager as the fallback.
 
 - zftpd (https://github.com/seregonwar/zftpd) listens on `PS5MCP_FTP_PORT` (2120). When it is not running, it is
-  started once from Payload Manager's library (an `.elf` whose name starts with `zftpd`) unless
+  started once from Payload Manager's library (`zftpd.elf`, else the newest `zftpd*.elf`) unless
   `PS5MCP_FTP_AUTOSTART=0`. It cannot be stopped remotely: it stays up until the console reboots, and loading it
   again replaces the running copy.
 - Folders are copied recursively. A file is skipped when the destination has the same size and is not older (a
@@ -278,9 +278,20 @@ def _payload(host: str) -> str | None:
         payloads = json.loads(Console(host).request(8084, "/list_payloads", method="GET"))["payloads"]
     except Exception:  # noqa: BLE001 - no Payload Manager means no autostart, not a failed transfer
         return None
-    matches = sorted(p for p in payloads if posixpath.basename(p).lower().startswith("zftpd")
-                     and p.lower().endswith(".elf"))
-    return matches[-1] if matches else None
+    return _zftpd_payload(payloads)
+
+
+def _zftpd_payload(payloads: list[str]) -> str | None:
+    """`zftpd.elf` if the library has it, else the newest `zftpd*.elf` (such as the release's
+    `zftpd-ps5-v1.6.0.elf`), comparing version numbers as numbers."""
+    names = {p: posixpath.basename(p).lower() for p in payloads}
+    matches = [p for p, name in names.items() if name.startswith("zftpd") and name.endswith(".elf")]
+    if exact := [p for p in matches if names[p] == "zftpd.elf"]:
+        return exact[0]
+
+    def version(path: str) -> list:
+        return [int(part) if part.isdigit() else part for part in re.split(r"(\d+)", names[path])]
+    return max(matches, key=version, default=None)
 
 
 # -- FTP ----------------------------------------------------------------------------------------------------------

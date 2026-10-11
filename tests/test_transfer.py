@@ -197,6 +197,14 @@ def test_without_zftpd_push_falls_back_to_web_file_manager(tmp_path, monkeypatch
     assert calls == ["/data/t/title"] and "Web File Manager" in summary
 
 
+def test_zftpd_is_found_under_its_release_name_too():
+    library = "/data/pldmgr/payloads/"
+    release = [library + "zftpd/zftpd-ps5-v1.6.0.elf", library + "zftpd/zftpd-ps5-v1.10.0.elf"]
+    assert transfer._zftpd_payload([library + "padd.elf", *release]) == release[1]
+    assert transfer._zftpd_payload([*release, library + "ZFTPD.elf"]) == library + "ZFTPD.elf"
+    assert transfer._zftpd_payload([library + "padd.elf", library + "zftpd.bin"]) is None
+
+
 def test_autostart_needs_zftpd_in_payload_manager(tmp_path, monkeypatch):
     monkeypatch.setattr(transfer, "_payload", lambda host: None)
     assert transfer.connect("127.0.0.1", free_port(), autostart=True) is None
