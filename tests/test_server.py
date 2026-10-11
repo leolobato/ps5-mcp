@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import signal
+import subprocess
+import threading
 
 import pytest
 
@@ -149,6 +152,25 @@ async def test_tools_reconnect_after_the_app_restarts(hub):
     assert "pressed" in text(await server.mcp.call_tool("press", {"button": "right", "hold_ms": 30}))
     server.runtime.app().close()  # as if the app had gone away and come back
     assert "pressed" in text(await server.mcp.call_tool("press", {"button": "left", "hold_ms": 30}))
+
+
+async def test_commands_wait_out_a_padd_reconnect(hub, tmp_path):
+    # The app's link is down for longer than the app's own 2 s default (padd restarting, or busy with a stale session).
+    hub.padd.stop()
+    assert wait_for(lambda: not hub.client().status()["pad"]["connected"])
+    restarted = []
+    restart = threading.Timer(3.0, lambda: restarted.append(subprocess.Popen(
+        [str(BINARY), "--port", str(hub.padd.port), "--log-dir", str(tmp_path / "logs2")],
+        env={"PADD_TRACE": str(tmp_path / "trace2.jsonl")})))
+    restart.start()
+    try:
+        result = await server.mcp.call_tool("launch", {"title_id": "PPSA01325", "snapshot_after_ms": None})
+        assert "PPSA01325: launched" in text(result)
+    finally:
+        restart.join()
+        for process in restarted:
+            process.send_signal(signal.SIGTERM)
+            process.wait(5)
 
 
 def test_title_reflects_link_state(hub):

@@ -219,6 +219,10 @@ final class PadController {
                 cond.broadcast()
                 cond.unlock()
                 onStatus?()
+                // Busy after a lost link is usually padd still holding our old session: it drops it after its 5 s
+                // idle limit, so keep knocking instead of backing off past that moment (even after a run of
+                // "No route to host" has grown the backoff).
+                if case .busy? = error as? PadError { backoff = 0.25 }
                 cond.lock()
                 nap(backoff)
                 backoff = target == host ? min(backoff * 2, 5) : 0.25

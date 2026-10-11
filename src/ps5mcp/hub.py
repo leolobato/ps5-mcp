@@ -21,6 +21,8 @@ from .client import ConsoleInUse, HumanHasControl, PadError
 from .protocol import PadState, Touch
 
 API_VERSION = 1
+# The app waits this long for padd's answer to a console command (Hub.command); launching can take a while.
+COMMAND_TIMEOUT_S = 30.0
 
 
 class AppError(PadError):
@@ -157,8 +159,10 @@ class AppClient:
     def key(self, key: str, down: bool) -> None:
         self.call("key", key=key, down=down)
 
-    def command(self, op: str, arg: str = "", timeout: float = 12.0) -> int:
-        return self.call("command", op=op, arg=arg, timeout=timeout)["status"]
+    def command(self, op: str, arg: str = "", wait: float = 2.0) -> int:
+        """`wait`: how long the app waits for its padd link; padd then has COMMAND_TIMEOUT_S to answer."""
+        timeout = wait + COMMAND_TIMEOUT_S + self.timeout
+        return self.call("command", op=op, arg=arg, wait=wait, timeout=timeout)["status"]
 
     def status(self) -> dict:
         return self.call("status")

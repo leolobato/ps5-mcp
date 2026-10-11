@@ -46,7 +46,10 @@ The JSON fields carry raw protocol values (`docs/protocol.md`):
 - **Closing a connection** releases its layers and its held keys. Nothing else changes.
 - **Link:** the app repeats the merged state every 100 ms (padd's watchdog is 1 s). After every (re)connect it resets
   all layers to neutral.
-- **`wait`:** `set` and `press` wait up to `wait` seconds for the padd link, then fail with `not_connected`.
+- **`wait`:** `set`, `press`, `command` and `ping` wait up to `wait` seconds for the padd link, then fail with
+  `not_connected`. The MCP server passes 8 s: after a lost link, padd answers the app's reconnects with busy until it
+  drops the old session (5 s without bytes), and the app keeps retrying every 0.25 s meanwhile. padd has 30 s to
+  answer a `command`.
 
 Keymap: arrows → D-pad; `enter`/`space` → Cross; `escape`/`backspace` → Circle; `[` `]` → Square, Triangle;
 `q` `e` → L1, R1; `z` `c` → L2, R2; `wasd` → left stick; `ijkl` → right stick; `tab` → Options; `t` → touchpad

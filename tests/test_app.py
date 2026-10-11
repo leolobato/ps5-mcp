@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
@@ -18,7 +19,7 @@ from PIL import Image
 
 from ps5mcp import capture
 from ps5mcp import protocol as p
-from ps5mcp.client import ConsoleInUse, HumanHasControl
+from ps5mcp.client import ConsoleInUse, HumanHasControl, PadError, PadLink
 from ps5mcp.hub import AppClient, AppError
 from ps5mcp.protocol import PadState
 
@@ -264,6 +265,41 @@ def test_reconnects_neutral_after_padd_restarts(app, tmp_path):
         assert wait_for(lambda: client.status()["pad"]["connected"], 8)
         assert client.call("state")["state"]["buttons"] == 0
         assert client.status()["pad"]["reconnects"] >= 1
+    finally:
+        restarted.send_signal(signal.SIGTERM)
+        restarted.wait(5)
+
+
+def test_reconnects_soon_after_padd_drops_a_stale_session(padd):
+    # padd still holds a session the Mac has lost (a network blip): it answers busy until its 5 s idle limit.
+    stale = padd.connect()
+    held_since = time.monotonic()
+    hub = App(padd)
+    try:
+        assert {"event": "client_rejected", "reason": "busy"} in padd.events()
+        assert time.monotonic() - held_since < 6.5  # connected right after the idle drop, not a long backoff later
+    finally:
+        hub.stop()
+        stale.close()
+
+
+def test_busy_after_a_long_outage_does_not_wait_out_the_backoff(app, tmp_path):
+    # Failed connects grow the backoff (as "No route to host" does), then padd answers busy for a stale session.
+    client = app.client("agent")
+    app.padd.stop()
+    assert wait_for(lambda: not client.status()["pad"]["connected"])
+    time.sleep(4)
+    restarted = subprocess.Popen([str(BINARY), "--port", str(app.padd.port), "--log-dir", str(tmp_path / "logs2")],
+                                 env={"PADD_TRACE": str(tmp_path / "trace2.jsonl")})
+    try:
+        stale = None
+        while stale is None:
+            with contextlib.suppress(OSError, PadError):
+                stale = PadLink("127.0.0.1", app.padd.port)
+        held_since = time.monotonic()
+        assert wait_for(lambda: client.status()["pad"]["connected"], 10)
+        assert time.monotonic() - held_since < 6.5  # padd's 5 s idle drop, then the next 0.25 s knock
+        stale.close()
     finally:
         restarted.send_signal(signal.SIGTERM)
         restarted.wait(5)

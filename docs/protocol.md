@@ -40,6 +40,7 @@ Flags: `0x8` uninstall supported, `0x4` user-name lookup supported, `0x1` pad re
 - padd re-sends the current state to the pad every 8 ms, like a real controller.
 - No STATE for 1 s: the state becomes neutral (`neutral` event, reason `watchdog`). Clients that hold input send
   the same state again every 100 ms or less.
-- No bytes at all for 5 s: the client is dropped.
+- No bytes at all for 5 s: the client is dropped. Time padd spends running a COMMAND (a launch can block for
+  seconds) does not count.
 - Disconnect, SHUTDOWN, SIGTERM/SIGINT: neutral, then the pad is removed.
 - The listening port is the single-instance lock. A second padd logs `already_running` and exits with code 3.

@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "system.h"
 
@@ -85,6 +86,8 @@ int system_launch(const char *title_id, int32_t user_id) {
     char line[128];
     snprintf(line, sizeof line, "{\"call\":\"launch\",\"title_id\":\"%.31s\",\"user_id\":%d}\n", title_id, user_id);
     emit(line);
+    const char *delay = getenv("PADD_LAUNCH_DELAY_MS");  /* a slow launch, as the console's can be */
+    if (delay) usleep((useconds_t)atoi(delay) * 1000);
     return strcmp(title_id, "BADTITLE") == 0 ? (int)0x80940005u : 0;
 }
 

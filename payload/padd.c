@@ -248,11 +248,12 @@ static void handle_message(struct daemon *d, uint8_t type, const uint8_t *payloa
             status = !valid_title_id(command.arg) ? EINVAL
                    : managed ? smp_uninstall(d->cfg.smp_port, command.arg)
                    : system_uninstall(command.arg);
-            d->last_rx_ms = d->last_state_ms = now_ms();  /* the SMP wait is not the client going quiet */
         } else {
             send_error(d, PMCP_ERR_UNKNOWN_TYPE, "unknown command op");
             return;
         }
+        /* A launch or the SMP wait can block this loop for seconds; that is not the client going quiet. */
+        d->last_rx_ms = d->last_state_ms = now_ms();
         log_event("command_result", "\"op\":%u,\"status\":%d", command.op, status);
         struct pmcp_ack ack = {command.seq, status};
         send_message(d, PMCP_ACK, &ack, sizeof ack);

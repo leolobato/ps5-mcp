@@ -183,25 +183,29 @@ final class Hub {
 
     // MARK: console commands
 
+    /// How long padd may take to answer a console command; launching a title can take several seconds.
+    static let commandTimeout = 30.0
+
     func command(_ op: String, _ arg: String, link: PadLink) throws -> Int32 {
+        let timeout = Hub.commandTimeout
         switch op {
         case "home":
             let method = arg.isEmpty ? config.homeMethod : arg
             guard PMCP.homeMethods.contains(method) else {
                 throw BadInput("method must be one of \(PMCP.homeMethods.joined(separator: ", "))")
             }
-            return try link.command(.home, method)
+            return try link.command(.home, method, timeout: timeout)
         case "close":
-            return try link.command(.close)
+            return try link.command(.close, timeout: timeout)
         case "launch":
             guard !arg.isEmpty else { throw BadInput("launch needs a title id") }
-            return try link.command(.launch, arg)
+            return try link.command(.launch, arg, timeout: timeout)
         case "uninstall":
             guard link.hello.flags & PMCP.flagUninstall != 0 else {
                 throw BadInput("this padd cannot uninstall; deploy padd 1.3 or later")
             }
             guard arg.count == 9 else { throw BadInput("uninstall needs a title id such as PPSA01234") }
-            return try link.command(.uninstall, arg)
+            return try link.command(.uninstall, arg, timeout: timeout)
         default:
             throw BadInput("op must be home, close, launch or uninstall")
         }

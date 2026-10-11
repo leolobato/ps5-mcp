@@ -34,6 +34,10 @@ HOME_METHOD = os.environ.get("PS5MCP_HOME_METHOD", "suspend")
 # The PS5 drops a press that follows a release too closely (seen on 13.60 with 0 ms gaps), so every hold ends
 # with this much neutral before the tool returns. The app's `press` adds it; `sequence` adds it here.
 RELEASE_GAP_S = 0.06
+# How long input and console commands wait for the app's padd link. When the Mac loses the link without padd seeing
+# it close (a network blip), padd rejects the app's reconnects as busy until it drops the silent session after its
+# 5 s idle limit; waiting past that lets the tool ride out the reconnect instead of failing.
+LINK_WAIT_S = 8.0
 
 
 class Runtime:
@@ -135,10 +139,10 @@ def _check_duration(ms: int) -> float:
 
 
 async def _apply_for(state: PadState, duration_ms: int) -> None:
-    """Hold `state`, release, then the release gap; the app times it (waiting up to 2 s for the padd link)."""
+    """Hold `state`, release, then the release gap; the app times it (waiting up to LINK_WAIT_S for the padd link)."""
     _check_duration(duration_ms)
     app = await _app()
-    await asyncio.to_thread(app.press, state, duration_ms)
+    await asyncio.to_thread(app.press, state, duration_ms, LINK_WAIT_S)
 
 
 async def _result(message: str, snapshot_after_ms: int | None):
@@ -245,7 +249,7 @@ async def _run_steps(steps: list[dict], max_total_ms: int) -> int:
     deadline = time.monotonic()
     try:
         for index, (state, seconds) in enumerate(states):
-            await asyncio.to_thread(app.set, state, 2.0 if index == 0 else 0.0)
+            await asyncio.to_thread(app.set, state, LINK_WAIT_S if index == 0 else 0.0)
             deadline += seconds
             await asyncio.sleep(max(0.0, deadline - time.monotonic()))
     finally:
@@ -359,7 +363,7 @@ async def release_all() -> str:
 
 async def _command(op: str, arg: str = "") -> int:
     app = await _app()
-    return await asyncio.to_thread(app.command, op, arg)
+    return await asyncio.to_thread(app.command, op, arg, LINK_WAIT_S)
 
 
 @mcp.tool(structured_output=False)

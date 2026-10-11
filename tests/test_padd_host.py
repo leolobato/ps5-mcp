@@ -186,6 +186,19 @@ def test_commands_report_system_status(padd):
     link.close()
 
 
+def test_slow_command_does_not_count_as_a_silent_client(tmp_path):
+    # The console's launch can block padd's loop for seconds; the client's keepalives wait unread meanwhile.
+    daemon = Padd(tmp_path, "--idle-ms", "400", env={"PADD_LAUNCH_DELAY_MS": "700"})
+    try:
+        link = daemon.connect()
+        assert link.command(p.Command.LAUNCH, "PPSA01325") == 0
+        assert link.ping(timeout=1).protocol == p.VERSION
+        assert {"event": "client_closed", "reason": "idle"} not in daemon.events()
+        link.close()
+    finally:
+        daemon.stop()
+
+
 def test_uninstall_reaches_the_system_with_valid_ids_only(padd):
     link = padd.connect()
     assert link.hello.flags & p.FLAG_UNINSTALL
