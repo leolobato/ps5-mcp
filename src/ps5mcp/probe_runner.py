@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
+import os
 import subprocess
+import sys
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import UTC, datetime
@@ -13,6 +17,36 @@ from pathlib import Path
 from . import capture
 
 ROOT = Path(__file__).resolve().parents[2]
+SERVICES = {8084: "Payload Manager", 8888: "PS5 Web File Manager"}
+STARTERS = {8888: "Payload Manager can load it"}
+
+
+class ConsoleError(OSError):
+    """A console service could not be reached; the message names the service and what to do about it."""
+
+
+def local_network_hint() -> str:
+    python = sys.executable
+    if (real := os.path.realpath(python)) != python:  # a venv links to the interpreter macOS actually sees
+        python += f" → {real}"
+    return (f"macOS Local Network privacy may be blocking this Python ({python}) even though other "
+            "apps reach the console: allow it in System Settings › Privacy & Security › Local Network (it can "
+            "be listed under the terminal or app that started it), then retry")
+
+
+def unreachable(host: str, port: int, exc: BaseException) -> ConsoleError:
+    """`exc` (a connection failure to host:port) as a message naming the service and the likely fix."""
+    reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+    service = SERVICES.get(port, "Console service")
+    code = getattr(reason, "errno", None)
+    if code == errno.ECONNREFUSED:
+        start = f"; start it ({STARTERS[port]})" if port in STARTERS else "; start it"
+        return ConsoleError(f"{service} is not running on {host}:{port}{start}")
+    if code == errno.EHOSTUNREACH:
+        return ConsoleError(f"{service} at {host}:{port}: no route to host. {local_network_hint()}")
+    if isinstance(reason, TimeoutError):
+        return ConsoleError(f"{service} at {host}:{port} did not answer in time; is the console on?")
+    return ConsoleError(f"{service} at {host}:{port} is unreachable: {reason}")
 
 
 def digest(data: bytes) -> str:
@@ -29,8 +63,13 @@ class Console:
             path += "?" + urllib.parse.urlencode(params)
         req = urllib.request.Request(f"http://{self.host}:{port}{path}", data=data,
                                      headers=headers or {}, method=method)
-        with self.opener.open(req, timeout=10) as response:
-            return response.read()
+        try:
+            with self.opener.open(req, timeout=10) as response:
+                return response.read()
+        except urllib.error.HTTPError:
+            raise  # the service answered
+        except (urllib.error.URLError, OSError) as exc:
+            raise unreachable(self.host, port, exc) from exc
 
     def api(self, path, params=None, form=False) -> dict:
         if form:

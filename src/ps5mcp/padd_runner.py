@@ -23,7 +23,7 @@ from pathlib import Path
 from . import capture
 from . import protocol as p
 from .client import PadController, PadError, PadLink
-from .probe_runner import ROOT, Console, _git, _snapshot, digest
+from .probe_runner import ROOT, Console, ConsoleError, _git, _snapshot, digest
 
 LOG_DIR = "/data/ps5-mcp/logs"
 SOURCES = ("payload/padd.c", "payload/smp.c", "payload/smp.h", "payload/protocol.h", "payload/system.h",
@@ -102,12 +102,23 @@ def collect(run: Path | None = None) -> dict:
     return evidence
 
 
+def preflight(host: str) -> None:
+    """Start deploys through Payload Manager and verifies the upload and reads padd's log through Web File Manager."""
+    console = Console(host)
+    try:
+        console.request(8084, "/version", method="GET")
+        console.listdir("/data")
+    except ConsoleError as exc:
+        raise SystemExit(f"padd start needs Payload Manager (8084) and PS5 Web File Manager (8888): {exc}") from exc
+
+
 def start(host: str, firmware: str | None, timeout: float = 20) -> int:
     elf = ROOT / "build/padd.elf"
     raw = elf.read_bytes()
     report = json.loads((ROOT / "build/toolchain-report.json").read_text())
     if report["artifacts"].get(elf.name, {}).get("sha256") != digest(raw):
         raise SystemExit("Build report is stale; run make first")
+    preflight(host)
     if _port_open(host):
         raise SystemExit(f"Something already listens on {host}:{p.PORT}; padd is probably running. "
                          "Use `ps5mcp padd status` or `ps5mcp padd stop`.")
@@ -333,11 +344,16 @@ def stop(host: str, timeout: float = 10) -> int:
         return 1
     _save(run, evidence)
     deadline = time.monotonic() + timeout
-    while True:
-        evidence = collect(run)
-        if evidence["status"] != "running" or time.monotonic() > deadline:
-            break
-        time.sleep(0.5)
+    try:
+        while True:
+            evidence = collect(run)
+            if evidence["status"] != "running" or time.monotonic() > deadline:
+                break
+            time.sleep(0.5)
+    except ConsoleError as exc:
+        acked = "padd acknowledged SHUTDOWN" if evidence.get("shutdown_acked") else "SHUTDOWN was not acknowledged"
+        print(f"unverified: {acked}, but its log cannot be read: {exc}")
+        return 1
     evidence["port_closed_after"] = not _port_open(host)
     _snapshot(run, "after", evidence)
     processes = json.loads(Console(host).request(8084, "/processes_list", method="GET"))["processes"]

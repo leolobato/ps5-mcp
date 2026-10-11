@@ -192,13 +192,16 @@ def _padd_via_app(app, args) -> int:
             print(json.dumps({"pad": status["pad"], "pong": app.ping() if status["pad"]["connected"] else None},
                              indent=2))
             return 0 if status["pad"]["connected"] else 1
-        result = app.call(f"padd_{args.action}", firmware=args.firmware, timeout=180)
+        result = app.request(f"padd_{args.action}", firmware=args.firmware, timeout=180)[0]
     except Exception as exc:  # noqa: BLE001 - shown to the user as is
         print(f"padd {args.action} through the PS5 app failed: {exc}")
         return 1
     finally:
         app.close()
-    print(result.get("output", ""))
+    if "output" not in result:  # refused before the CLI ran: in use, already running, no checkout
+        print(f"padd {args.action} through the PS5 app failed: {result.get('error', result)}")
+        return 1
+    print(result["output"])
     return 0 if result.get("ok") else 1
 
 

@@ -25,6 +25,7 @@ from . import capture, recording, stream, vision
 from . import protocol as p
 from .client import ConsoleInUse, HumanHasControl, PadError
 from .hub import AppClient, state_from_json
+from .probe_runner import ConsoleError
 from .protocol import PadState
 
 HOST = os.environ.get("PS5_HOST")
@@ -164,7 +165,7 @@ def _errors(fn):
             return f"human has control: {exc}"
         except ConsoleInUse as exc:
             return f"in use: {exc}"
-        except (PadError, capture.CaptureError, ValueError) as exc:
+        except (PadError, capture.CaptureError, ConsoleError, ValueError) as exc:
             return f"error: {exc}"
     return wrapper
 
@@ -406,7 +407,7 @@ async def launch(title_id: str, snapshot_after_ms: int | None = 5000):
 @mcp.tool(structured_output=False)
 @_errors
 async def list_apps() -> list[str]:
-    """Installed title ids (from /user/app on the console)."""
+    """Installed title ids (from /user/app on the console, read through PS5 Web File Manager on port 8888)."""
     from .probe_runner import Console
     entries = await asyncio.to_thread(Console(capture.console_host(HOST)).listdir, "/user/app")
     return sorted(e["name"] for e in entries if e.get("name", "").isalnum())

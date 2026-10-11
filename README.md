@@ -34,6 +34,9 @@ game/app list, Install, and file transfers:
 
 Without them, load `padd.elf` with any ELF loader.
 PS5 MCP expects Web File Manager on port 8888; it moves to the next free port when 8888 is taken.
+When one of them is not running, the tool or command that needs it says which one.
+If the CLI or the MCP server reports "no route to host" while other apps reach the console, macOS Local Network
+privacy is blocking its Python: allow it in System Settings › Privacy & Security › Local Network.
 
 To add zftpd, download `zftpd-ps5-v1.6.0.elf` from its
 [releases](https://github.com/seregonwar/zftpd/releases), rename it to `zftpd.elf`, and add it to Payload Manager's
