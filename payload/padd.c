@@ -29,7 +29,8 @@
 #include "system.h"
 
 /* Bump with every behaviour change: HELLO reports it, and the app compares it with the build to offer an update.
-   1.3: uninstall command. 1.4: time spent running a command no longer counts towards the idle drop. */
+   1.3: uninstall command. 1.4: time spent running a command no longer counts towards the idle drop, and a client
+   that hung up no longer makes the next one busy. */
 #define PADD_VERSION 0x0104
 
 struct config {
@@ -400,8 +401,9 @@ int main(int argc, char **argv) {
         struct pollfd fds[2] = {{d.listen_fd, POLLIN, 0}, {d.client_fd, POLLIN, 0}};
         int count = d.client_fd >= 0 ? 2 : 1;
         int ready = poll(fds, (nfds_t)count, (int)d.cfg.tick_ms);
-        if (ready > 0 && (fds[0].revents & POLLIN)) accept_client(&d);
+        /* Read the client first: when its close and the next connect arrive together, the next one is not busy. */
         if (ready > 0 && count == 2 && (fds[1].revents & (POLLIN | POLLHUP | POLLERR))) read_client(&d);
+        if (ready > 0 && (fds[0].revents & POLLIN)) accept_client(&d);
 
         uint64_t now = now_ms();
         if (d.client_fd >= 0 && now - d.last_state_ms > d.cfg.watchdog_ms) force_neutral(&d, "watchdog");

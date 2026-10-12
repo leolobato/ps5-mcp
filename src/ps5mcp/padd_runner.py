@@ -23,7 +23,7 @@ from pathlib import Path
 
 from . import capture
 from . import protocol as p
-from .client import PadController, PadError, PadLink
+from .client import PadBusy, PadController, PadError, PadLink
 from .probe_runner import ROOT, Console, ConsoleError, _git, _snapshot, digest
 
 LOG_DIR = "/data/ps5-mcp/logs"
@@ -82,7 +82,21 @@ def _save(run: Path, evidence: dict) -> None:
     (run / "run.json").write_text(json.dumps(evidence, indent=2) + "\n")
 
 
+def _connect(host: str, timeout: float = 6.0, port: int = p.PORT) -> PadLink:
+    """padd takes one client: wait out a slot that is about to free (a port probe, or a silent session that padd drops
+    after its 5 s idle limit) instead of failing as busy."""
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            return PadLink(host, port)
+        except PadBusy:
+            if time.monotonic() > deadline:
+                raise
+            time.sleep(0.25)
+
+
 def _port_open(host: str, port: int = p.PORT) -> bool:
+    """Connects, so padd counts this as its client until it sees the close: connect with `_connect` afterwards."""
     try:
         with socket.create_connection((host, port), timeout=2):
             return True
@@ -360,7 +374,7 @@ def stop(host: str, timeout: float = 10) -> int:
     evidence = _load(run) if run else {}
     handle = None
     try:
-        link = PadLink(host)
+        link = _connect(host)
         handle = link.hello.pad_handle
         link.shutdown()
         link.close()

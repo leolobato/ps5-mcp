@@ -199,6 +199,20 @@ def test_slow_command_does_not_count_as_a_silent_client(tmp_path):
         daemon.stop()
 
 
+def test_a_client_that_hung_up_does_not_make_the_next_one_busy(tmp_path):
+    # On the console, padd's loop is slow enough that the old client's close and the next connect arrive together.
+    daemon = Padd(tmp_path, env={"PADD_LAUNCH_DELAY_MS": "500"})
+    try:
+        old = socket.create_connection(("127.0.0.1", daemon.port))
+        old.sendall(p.encode_command(1, p.Command.LAUNCH, "PPSA01325"))
+        time.sleep(0.2)  # padd is inside the slow launch
+        old.close()
+        PadLink("127.0.0.1", daemon.port).close()  # queued behind the close, not rejected as busy
+        assert {"event": "client_rejected", "reason": "busy"} not in daemon.events()
+    finally:
+        daemon.stop()
+
+
 def test_uninstall_reaches_the_system_with_valid_ids_only(padd):
     link = padd.connect()
     assert link.hello.flags & p.FLAG_UNINSTALL
@@ -445,3 +459,4 @@ def test_user_name_request_is_skipped_without_capability(padd, monkeypatch):
         assert link.get_user() is None
     finally:
         link.close()
+

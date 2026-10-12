@@ -35,7 +35,7 @@ def test_stop_of_a_padd_without_a_recorded_run_checks_only_its_port(tmp_path, mo
     shutdowns = []
 
     class Link:
-        def __init__(self, host):
+        def __init__(self, host, port=None):
             self.hello = SimpleNamespace(pad_handle=2)  # padd launched from Payload Manager: a different pad
 
         def shutdown(self):
@@ -111,3 +111,18 @@ def test_build_report_records_the_padd_version_from_its_source(tmp_path):
     source = tmp_path / "padd.c"
     source.write_text("/* 1.3: uninstall */\n#define PADD_VERSION 0x010a\n")
     assert verify.padd_version(source) == "1.10"
+
+
+def test_stop_waits_out_a_busy_slot(monkeypatch):
+    from ps5mcp import padd_runner
+    from ps5mcp.client import PadBusy
+    answers = iter([PadBusy("another client is connected")] * 2 + ["link"])
+
+    def link(host, port):
+        answer = next(answers)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+    monkeypatch.setattr(padd_runner, "PadLink", link)
+    monkeypatch.setattr(padd_runner.time, "sleep", lambda s: None)
+    assert padd_runner._connect("ps5") == "link"
