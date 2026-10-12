@@ -121,7 +121,7 @@ keeps the server code it started with; restart it after updating this checkout.
 
 The window shows live video, audio, and connection status. The sidebar has these controls:
 
-- **padd:** Start, Update (stop, then start the build in `build/padd.elf`; enabled only when padd runs another version), and Stop.
+- **padd:** Start, Update (stop, then start the padd built into the app; enabled only when padd runs another version), and Stop.
 - **Console:** Home, close the running game/app, Release all input (**⌘.**), and Force release agent… to take the
   console from an agent that claimed it and will not let go (the next agent in the queue gets it).
 - **Launch:** pick an installed game/app and launch it (**⌘L**). The list comes from PS5 Web File Manager and is cached
@@ -264,6 +264,12 @@ Runs are archived in `results/` with firmware, loader version, payload hash, log
 Unfinished runs stay marked incomplete.
 
 ## Development
+
+**Versions.** `pyproject.toml` holds the one version of the app and the MCP server; `make` passes it to the app, with
+the commit count as the build number, and copies `build/padd.elf` into the app, so the app always deploys the padd it
+shows. padd has its own version (`PADD_VERSION` in `payload/padd.c`, bumped with every behaviour change), shown next to
+the app's: `0.6.0 (padd 1.4)` in About PS5 MCP and `ps5mcp --version`. Bump the app version for every release that
+ships, including a new padd, and tag it `v<version>`.
 
 [Findings](docs/findings.md) · [App API](docs/app-api.md) · [Virtual-pad ABI](docs/vpad-abi.md) ·
 [Wire protocol](docs/protocol.md) · [PS button and app control](docs/ps-button.md)

@@ -9,17 +9,23 @@ all: payloads verify app
 # The macOS hub app (capture card, padd link, local API): app/project.yml (XcodeGen) built with xcodebuild and
 # signed ad hoc by default (app/Configuration/Base.xcconfig). Sign with a team through DEVELOPMENT_TEAM=/APP_BUNDLE_ID=
 # here or app/Configuration/LocalSigning.xcconfig: a stable signature keeps the macOS permissions across builds.
-# Info.plist records this checkout and uv for padd Start/Stop.
+# Info.plist records this checkout and uv for padd Start/Stop. The version is pyproject.toml's (one for the app and the
+# MCP server), the build number is the commit count, and build/padd.elf goes into the app: Start and Update deploy that.
 APP := build/PS5 MCP.app
+APP_VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml)
+APP_BUILD := $(shell git rev-list --count HEAD 2>/dev/null || echo 0)
 APP_EXECUTABLE := build/PS5\ MCP.app/Contents/MacOS/PS5\ MCP
 APP_SOURCES := $(wildcard app/*.swift)
 APP_ICON_ASSETS := $(wildcard app/Assets.xcassets/*.json app/Assets.xcassets/AppIcon.appiconset/*)
 XCODE_OVERRIDES := $(if $(DEVELOPMENT_TEAM),DEVELOPMENT_TEAM=$(DEVELOPMENT_TEAM)) $(if $(APP_BUNDLE_ID),APP_BUNDLE_ID=$(APP_BUNDLE_ID))
 app: $(APP_EXECUTABLE)
-$(APP_EXECUTABLE): $(APP_SOURCES) $(APP_ICON_ASSETS) app/Info.plist app/project.yml $(wildcard app/Configuration/*.xcconfig) src/ps5mcp/assets/assign-dialog.png Makefile | build
+$(APP_EXECUTABLE): $(APP_SOURCES) $(APP_ICON_ASSETS) app/Info.plist app/project.yml $(wildcard app/Configuration/*.xcconfig) src/ps5mcp/assets/assign-dialog.png pyproject.toml $(wildcard build/padd.elf build/toolchain-report.json) Makefile | build
+	rm -rf build/bundle && mkdir -p build/bundle/padd
+	if [ -f build/padd.elf ] && [ -f build/toolchain-report.json ]; then cp build/padd.elf build/toolchain-report.json build/bundle/padd/; fi
 	cd app && xcodegen generate --quiet
 	xcodebuild -quiet -project app/PS5.xcodeproj -scheme PS5 -destination "generic/platform=macOS" -configuration Release -derivedDataPath build/DerivedData \
-		-allowProvisioningUpdates PS5MCP_REPO="$(CURDIR)" PS5MCP_UV="$$(command -v uv)" $(XCODE_OVERRIDES) build
+		-allowProvisioningUpdates PS5MCP_REPO="$(CURDIR)" PS5MCP_UV="$$(command -v uv)" MARKETING_VERSION="$(APP_VERSION)" \
+		CURRENT_PROJECT_VERSION="$(APP_BUILD)" $(XCODE_OVERRIDES) build
 	rm -rf "$(APP)"
 	ditto "build/DerivedData/Build/Products/Release/PS5 MCP.app" "$(APP)"
 

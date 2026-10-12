@@ -19,12 +19,17 @@ targets:
         buildPhase: resources
       - path: ../src/ps5mcp/assets/assign-dialog.png
         buildPhase: resources
+      # padd.elf and its build report, staged by the Makefile (empty when the payload was not built).
+      - path: ../build/bundle/padd
+        type: folder
+        buildPhase: resources
     settings:
       base:
         PRODUCT_NAME: PS5 MCP
         PRODUCT_BUNDLE_IDENTIFIER: $(APP_BUNDLE_ID)
-        MARKETING_VERSION: "0.5"
-        CURRENT_PROJECT_VERSION: "5"
+        # The Makefile passes pyproject.toml's version and the commit count.
+        MARKETING_VERSION: "0.0.0"
+        CURRENT_PROJECT_VERSION: "0"
         SWIFT_VERSION: "5.0"
         INFOPLIST_FILE: Info.plist
         GENERATE_INFOPLIST_FILE: NO

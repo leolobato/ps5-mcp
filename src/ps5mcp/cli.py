@@ -173,7 +173,7 @@ def _padd(args) -> int:
     if args.action in ("start", "stop", "update", "status") and (app := _running_app()):
         return _padd_via_app(app, args)
     if args.action in ("start", "update"):
-        return getattr(padd_runner, args.action)(_host(args), args.firmware)
+        return getattr(padd_runner, args.action)(_host(args), args.firmware, Path(args.elf) if args.elf else None)
     if args.action == "soak":
         return padd_runner.soak(_host(args), args.minutes)
     if args.action == "collect":
@@ -278,8 +278,17 @@ def _pad(args) -> int:
         link.close()
 
 
+def version_text() -> str:
+    """`0.6.0 (padd 1.4)`: the app and MCP server version, then the padd that `padd start` deploys from this checkout."""
+    from importlib.metadata import version
+
+    from .padd_runner import bundled
+    return f"ps5mcp {version('ps5-mcp')} (padd {bundled()['version'] or 'not built'})"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="ps5mcp", description=__doc__)
+    parser.add_argument("--version", action="version", version=version_text())
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("devices", help="list AVFoundation capture devices").set_defaults(func=_devices)
@@ -310,6 +319,8 @@ def main(argv: list[str] | None = None) -> int:
     padd.add_argument("--host", help="console IP address (default: PS5_HOST)")
     padd.add_argument("--firmware", default="13.60", help="user-reported firmware; not independently verified")
     padd.add_argument("--minutes", type=float, default=10)
+    padd.add_argument("--elf", help="start/update: deploy this padd.elf (its toolchain-report.json next to it; "
+                      "default: build/padd.elf; the PS5 app, when it runs, deploys the padd built into it)")
     padd.set_defaults(func=_padd)
 
     pad = sub.add_parser("pad", help="one-off input through a running padd (through the PS5 app when it runs)")

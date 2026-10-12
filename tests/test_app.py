@@ -327,16 +327,24 @@ def test_padd_update_deploys_the_bundled_build(padd, tmp_path):
     hub = App(padd, None, "--repo", str(repo))
     try:
         client = hub.client()
-        assert client.status()["padd"]["bundled"] == {"version": "9.9", "stale": False, "error": None}
+        assert client.status()["padd"]["bundled"] == {"version": "9.9", "stale": False, "error": None, "source": "checkout",
+                                                      "path": str(repo / "build/padd.elf")}
         result = client.call("padd_update", timeout=20)
         assert result["ok"] and result["action"] == "update" and "slot free" in result["output"]
         assert (hub.root / "cli-args").read_text().split() == ["padd", "update", "--host", "127.0.0.1",
-                                                             "--firmware", "13.60"]
+                                                             "--firmware", "13.60", "--elf", str(repo / "build/padd.elf")]
         (repo / "build/padd.elf").write_bytes(elf + b"rebuilt")  # make ran payloads but not verify
         bundled = client.status()["padd"]["bundled"]
         assert bundled["stale"] and "run make" in bundled["error"]
     finally:
         hub.stop()
+
+
+def test_status_reports_the_app_version_from_pyproject(app):
+    import tomllib
+    status = app.client().status()
+    assert status["version"] == tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
+    assert int(status["build"]) > 0
 
 
 def test_status_events_follow_the_link(app):

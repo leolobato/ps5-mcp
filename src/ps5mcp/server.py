@@ -17,6 +17,7 @@ import tempfile
 import threading
 import time
 from collections.abc import AsyncIterator
+from importlib.metadata import version
 from pathlib import Path
 
 from mcp.server.mcpserver import Image, MCPServer
@@ -545,7 +546,8 @@ async def wait_for_change(timeout_ms: int = 3000, threshold: float = 6.0):
 @mcp.tool(structured_output=False)
 @_errors
 async def status() -> dict:
-    """Payload link, payload version and counters, capture state and frame age."""
+    """Payload link, payload version and counters, capture state and frame age, and the app's version (app.padd.bundled
+    is the padd version the app deploys)."""
     app = await _app()
     # Right after startup the link may still be connecting; the app waits up to 1.5 s for it.
     hub = await asyncio.to_thread(app.call, "status", wait=1.5, timeout=5.0)
@@ -561,7 +563,8 @@ async def status() -> dict:
             info["payload"]["pong"] = await asyncio.to_thread(app.ping)
     info["capture"] = {"backend": "NativeApp", "running": True, "source": hub["source"],
                        "frame_age_s": hub["frame_age"] if hub["frame_age"] >= 0 else None}
-    info["app"] = {"pid": hub["pid"], "clients": hub["clients"], "agents_holding": link["agent_layers"],
+    info["app"] = {"version": hub.get("version"), "build": hub.get("build"), "server_version": version("ps5-mcp"),
+                   "pid": hub["pid"], "clients": hub["clients"], "agents_holding": link["agent_layers"],
                    "visible": hub["visible"], "notice": hub["notice"], "padd": hub["padd"]}
     lease = await asyncio.to_thread(app.lease)
     info["claim"] = {"held_by_you": lease["granted"], "queue_position": lease["position"] if lease["position"] > 0

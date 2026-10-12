@@ -98,6 +98,7 @@ async def test_status_reports_link_and_counters(runtime):
     assert info["payload"]["connected"] and info["payload"]["version"] == "1.4"
     assert info["payload"]["pong"]["report_failures"] == 0
     assert info["capture"]["running"]
+    assert info["app"]["version"] == info["app"]["server_version"]  # one version for the app and the MCP server
 
 
 async def test_snapshot_returns_jpeg(runtime):

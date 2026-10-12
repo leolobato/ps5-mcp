@@ -166,7 +166,7 @@ final class Hub {
         lock.lock()
         let shown = visible, clients = connections.count, note = noticeText
         lock.unlock()
-        return ["ok": true, "api": apiVersion, "pid": Int(getpid()), "frames": sink.frames, "frame_age": sink.frameAge,
+        return ["ok": true, "api": apiVersion, "version": AppVersion.short, "build": AppVersion.build, "pid": Int(getpid()), "frames": sink.frames, "frame_age": sink.frameAge,
                 "visible": shown, "now": uptimeSeconds(), "source": source?.name ?? "none", "clients": clients,
                 "pad": link.json, "title": link.title, "notice": note ?? NSNull(), "padd": padd.json,
                 "auto_assign": config.autoAssign && assigner != nil, "camera": cameraPermission, "lease": lease.json]

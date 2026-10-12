@@ -62,7 +62,7 @@ def _build(root, elf=b"\x7fELF padd", version="1.4"):
 
 def test_bundled_build_reports_its_version_and_staleness(tmp_path, monkeypatch):
     from ps5mcp import padd_runner
-    monkeypatch.setattr(padd_runner, "ROOT", tmp_path)
+    monkeypatch.setattr(padd_runner, "ELF", tmp_path / "build/padd.elf")
     assert padd_runner.bundled()["version"] is None
     _build(tmp_path)
     assert padd_runner.bundled()["version"] == "1.4" and not padd_runner.bundled()["stale"]
@@ -72,24 +72,26 @@ def test_bundled_build_reports_its_version_and_staleness(tmp_path, monkeypatch):
 
 def test_update_stops_the_running_padd_before_starting_the_build(tmp_path, monkeypatch):
     from ps5mcp import padd_runner
-    monkeypatch.setattr(padd_runner, "ROOT", tmp_path)
+    monkeypatch.setattr(padd_runner, "ELF", tmp_path / "build/padd.elf")
     _build(tmp_path)
     steps = []
     listening = iter([True, True, False])  # padd takes a moment to exit after SHUTDOWN
     monkeypatch.setattr(padd_runner, "preflight", lambda host: steps.append("preflight"))
     monkeypatch.setattr(padd_runner, "_port_open", lambda host: next(listening))
     monkeypatch.setattr(padd_runner, "stop", lambda host: steps.append("stop") or 1)  # "unverified" is fine
-    monkeypatch.setattr(padd_runner, "start", lambda host, firmware: steps.append(("start", firmware)) or 0)
+    monkeypatch.setattr(padd_runner, "start", lambda host, firmware, elf: steps.append(("start", firmware, elf)) or 0)
     monkeypatch.setattr(padd_runner.time, "sleep", lambda s: None)
-    assert padd_runner.update("ps5", "13.60") == 0
-    assert steps == ["preflight", "stop", ("start", "13.60")]
+    _build(tmp_path / "app", version="9.9")  # another build, like the copy inside the PS5 app
+    elf = tmp_path / "app/build/padd.elf"
+    assert padd_runner.update("ps5", "13.60", elf) == 0
+    assert steps == ["preflight", "stop", ("start", "13.60", elf)]
 
 
 def test_update_leaves_padd_running_when_it_cannot_deploy(tmp_path, monkeypatch):
     import pytest
 
     from ps5mcp import padd_runner
-    monkeypatch.setattr(padd_runner, "ROOT", tmp_path)
+    monkeypatch.setattr(padd_runner, "ELF", tmp_path / "build/padd.elf")
     _build(tmp_path)
     (tmp_path / "build/padd.elf").write_bytes(b"rebuilt without verify")
     monkeypatch.setattr(padd_runner, "stop", lambda host: pytest.fail("stopped padd with nothing to deploy"))
@@ -126,3 +128,17 @@ def test_stop_waits_out_a_busy_slot(monkeypatch):
     monkeypatch.setattr(padd_runner, "PadLink", link)
     monkeypatch.setattr(padd_runner.time, "sleep", lambda s: None)
     assert padd_runner._connect("ps5") == "link"
+
+
+def test_version_names_the_app_and_the_padd_it_deploys(tmp_path, monkeypatch, capsys):
+    import tomllib
+
+    import pytest
+
+    from ps5mcp import cli, padd_runner
+    _build(tmp_path)
+    monkeypatch.setattr(padd_runner, "ELF", tmp_path / "build/padd.elf")
+    with pytest.raises(SystemExit):
+        cli.main(["--version"])
+    version = tomllib.loads((padd_runner.ROOT / "pyproject.toml").read_text())["project"]["version"]
+    assert capsys.readouterr().out.strip() == f"ps5mcp {version} (padd 1.4)"

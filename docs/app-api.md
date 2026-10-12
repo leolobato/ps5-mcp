@@ -10,7 +10,8 @@ else talks to it here. The Python client is `src/ps5mcp/hub.py`.
 - **Replies:** `{"ok": true, ...}`, or `{"ok": false, "error": "text", "code": "..."}`. The codes are:
   `human_has_control`, `leased`, `not_connected`, `bad_request`, `pad_error`, `unknown_cmd`, `padd_busy`, `padd_unavailable`.
 - **Events:** after `subscribe`, the app pushes `{"event": "...", ...}` lines. Events have no `id`.
-- **Version:** `status` returns `"api": 1`.
+- **Version:** `status` returns `"api": 1`, and the app's `version` (pyproject.toml's, shared with the MCP server)
+  and `build` (the commit count).
 
 Commands that can block run concurrently: `press`, `status`, `watch_change`, `command`, `ping`, `snapshot`,
 `padd_start`, `padd_stop` and `padd_update`. The other commands are answered in order on each connection.
@@ -88,10 +89,12 @@ free, every client drives it as before.
 | `ping` | | `pong`: uptime, reports sent and failed, neutral events |
 | `padd_start` | `firmware?` (default 13.60) | Pauses the link, runs `ps5mcp padd start` once, then resumes. Returns `status`, `run` (the `results/` dir), `exit` and `output`. |
 | `padd_stop` | | The same flow, with `ps5mcp padd stop`. |
-| `padd_update` | `firmware?` | The same flow, with `ps5mcp padd update`: stops the running padd, then starts `build/padd.elf`. |
+| `padd_update` | `firmware?` | The same flow, with `ps5mcp padd update`: stops the running padd, then starts the bundled padd. |
 
-- `status` has `padd.bundled`: `version` of `build/padd.elf` from the build report (compare it with `pad.version`),
-  `stale` when the ELF no longer matches that report, and `error` when there is nothing to deploy (run `make`).
+- `status` has `padd.bundled`, the padd that Start and Update deploy: `path` (`source` `app` for the `padd.elf` that
+  `make` builds into the app, else `checkout` for `build/padd.elf`), `version` from its build report (compare it with
+  `pad.version`), `stale` when the ELF no longer matches that report, and `error` when there is nothing to deploy
+  (run `make`). The app passes `path` to the CLI as `--elf`.
 - `padd_start` and `padd_update` deploy to the console. Nothing calls it on its own, and it never retries.
 - The CLI writes the archive exactly as it does without the app.
 

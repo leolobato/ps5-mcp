@@ -1,6 +1,6 @@
 [project]
 name = "ps5-mcp"
-version = "0.1.0"
+version = "0.6.0"
 description = "See and control a jailbroken PS5 from an MCP agent: capture-card video plus a TCP input payload."
 requires-python = ">=3.12"
 license = "MIT"

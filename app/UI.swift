@@ -405,6 +405,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         let appItem = NSMenuItem()
         main.addItem(appItem)
         let appMenu = NSMenu()
+        appMenu.addItem(withTitle: "About PS5 MCP", action: #selector(showAbout), keyEquivalent: "").target = self
+        appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: ",").target = self
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Hide Window", action: #selector(hideWindow), keyEquivalent: "w")
@@ -670,7 +672,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         // Only a running padd with another version than the build needs it; with padd down, Start deploys the build.
         let outdated = bundled.error == nil && link.hello.map { $0.payloadVersion != bundled.number } == true
         sidebar.buttons["paddUpdate"]?.isEnabled = canRun && !fileManagerBusy && outdated
-        let build = "build/padd.elf (v\(bundled.version ?? "?"))"
+        let build = bundled.name
         sidebar.buttons["paddUpdate"]?.toolTip = bundled.error
             ?? (link.hello == nil ? "padd is not running; Start deploys \(build)"
                 : outdated ? "Stop padd and start \(build) from \(hub.config.repo ?? "the checkout")"
@@ -757,6 +759,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         }
     }
 
+    @objc func showAbout() {
+        let credits = NSMutableAttributedString(string: "Controls a PS5 through a virtual DualSense and sees it through "
+                                                + "an HDMI capture card.\n\n", attributes: [.font: NSFont.systemFont(ofSize: 11)])
+        credits.append(NSAttributedString(string: AppVersion.github, attributes: [
+            .link: URL(string: AppVersion.github)!, .font: NSFont.systemFont(ofSize: 11)]))
+        credits.setAlignment(.center, range: NSRange(location: 0, length: credits.length))
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.orderFrontStandardAboutPanel(options: [
+            .applicationVersion: AppVersion.short + (hub.padd.bundled.version.map { " (padd \($0))" } ?? ""),
+            .version: "build \(AppVersion.build)",
+            .credits: credits,
+        ])
+    }
+
     @objc func showSettings() {
         if settings == nil {
             settings = SettingsWindow(hub: hub) { [weak self] in
@@ -769,7 +785,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
 
     @objc func startPadd() {
         guard confirm("Start padd on \(hub.host)?",
-                      "This uploads build/padd.elf through Payload Manager, launches it once and archives the run "
+                      "This uploads \(hub.padd.bundled.name) through Payload Manager, launches it once and archives the run "
                       + "under results/. If the PS5 asks \"Who's using this controller?\", the virtual pad answers it, "
                       + "and that turns your DualSense off: press its PS button and pick the same user.", "Start")
         else { return }
@@ -781,7 +797,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         let bundled = hub.padd.bundled.version ?? "?"
         let running = hub.controller.status().hello.map { "padd v\($0.versionString)" } ?? "padd, if it runs,"
         guard confirm("Update padd on \(hub.host) to v\(bundled)?",
-                      "This stops \(running) (input is released and the virtual pad removed), then uploads build/padd.elf "
+                      "This stops \(running) (input is released and the virtual pad removed), then uploads \(hub.padd.bundled.name) "
                       + "through Payload Manager and starts it once; both runs are archived under results/. If the PS5 "
                       + "asks \"Who's using this controller?\", the virtual pad answers it, and that turns your DualSense "
                       + "off: press its PS button and pick the same user.", "Update")
