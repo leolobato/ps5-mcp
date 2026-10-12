@@ -174,7 +174,7 @@ extension Hub {
 
     /// Quick commands run in order on the connection's thread; blocking ones run concurrently.
     private func handle(_ cmd: String, _ request: [String: Any], _ conn: Connection) {
-        let blocking: Set<String> = ["press", "status", "watch_change", "command", "ping", "padd_start", "padd_stop", "snapshot"]
+        let blocking: Set<String> = ["press", "status", "watch_change", "command", "ping", "padd_start", "padd_stop", "padd_update", "snapshot"]
         lease.touch(conn: conn.id)
         let work = {
             do {
@@ -277,9 +277,9 @@ extension Hub {
             conn.subscribe(names)
             reply(conn, request, ["ok": true, "events": names])
             if names.contains("status") { conn.send(["event": "status"].merging(status()) { a, _ in a }) }
-        case "padd_start", "padd_stop":
+        case "padd_start", "padd_stop", "padd_update":
             try lease.check(conn: conn.id)
-            let action = cmd == "padd_start" ? "start" : "stop"
+            let action = String(cmd.dropFirst("padd_".count))
             reply(conn, request, try padd.run(action, firmware: request["firmware"] as? String))
         case "claim":
             let client = request["client"] as? String ?? "default"

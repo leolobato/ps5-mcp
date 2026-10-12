@@ -28,7 +28,9 @@
 #include "smp.h"
 #include "system.h"
 
-#define PADD_VERSION 0x0103  /* 1.3: uninstall command */
+/* Bump with every behaviour change: HELLO reports it, and the app compares it with the build to offer an update.
+   1.3: uninstall command. 1.4: time spent running a command no longer counts towards the idle drop. */
+#define PADD_VERSION 0x0104
 
 struct config {
     int port;

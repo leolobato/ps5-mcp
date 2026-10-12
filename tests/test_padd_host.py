@@ -101,7 +101,7 @@ def test_ping_reports_uptime_and_counters(padd):
     link = padd.connect()
     link.send_state(PadState(buttons=RIGHT), wait=True)
     pong = link.ping()
-    assert pong.protocol == 1 and p.version_string(pong.payload_version) == "1.3"
+    assert pong.protocol == 1 and p.version_string(pong.payload_version) == "1.4"
     assert pong.reports_sent >= 1 and pong.report_failures == 0 and pong.flags & p.FLAG_PAD_READY
     link.close()
 

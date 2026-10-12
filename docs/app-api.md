@@ -13,7 +13,7 @@ else talks to it here. The Python client is `src/ps5mcp/hub.py`.
 - **Version:** `status` returns `"api": 1`.
 
 Commands that can block run concurrently: `press`, `status`, `watch_change`, `command`, `ping`, `snapshot`,
-`padd_start` and `padd_stop`. The other commands are answered in order on each connection.
+`padd_start`, `padd_stop` and `padd_update`. The other commands are answered in order on each connection.
 
 ## Pad state
 
@@ -70,8 +70,8 @@ free, every client drives it as before.
 - All three reply `granted`, `position` (0 = holder, n = nth in the queue, -1 = neither), `owner` (`client`,
   `reason`, `held_s`, `expires_in_s`, or null) and `queue` (`client`, `reason`, `waiting_s`). `status` has the same
   `owner` and `queue` under `lease`, and `status` events go out when they change.
-- **Leased:** while another connection holds the claim, a non-neutral `set`, `press`, `command`, `padd_start` and
-  `padd_stop` fail with `leased`. Neutral `set`, `release`, `release_all`, `key` and the read-only commands still work.
+- **Leased:** while another connection holds the claim, a non-neutral `set`, `press`, `command`, `padd_start`,
+  `padd_stop` and `padd_update` fail with `leased`. Neutral `set`, `release`, `release_all`, `key` and the read-only commands still work.
 - **Lapses:** closing the connection gives up its claim. So do `idle_s` seconds without a request from the holder's
   connection. The next connection in the queue then gets the claim.
 - **Force release:** the window's Force release agent… button (or `force_release`) takes the claim from a holder that
@@ -88,8 +88,11 @@ free, every client drives it as before.
 | `ping` | | `pong`: uptime, reports sent and failed, neutral events |
 | `padd_start` | `firmware?` (default 13.60) | Pauses the link, runs `ps5mcp padd start` once, then resumes. Returns `status`, `run` (the `results/` dir), `exit` and `output`. |
 | `padd_stop` | | The same flow, with `ps5mcp padd stop`. |
+| `padd_update` | `firmware?` | The same flow, with `ps5mcp padd update`: stops the running padd, then starts `build/padd.elf`. |
 
-- `padd_start` deploys to the console. Nothing calls it on its own, and it never retries.
+- `status` has `padd.bundled`: `version` of `build/padd.elf` from the build report (compare it with `pad.version`),
+  `stale` when the ELF no longer matches that report, and `error` when there is nothing to deploy (run `make`).
+- `padd_start` and `padd_update` deploy to the console. Nothing calls it on its own, and it never retries.
 - The CLI writes the archive exactly as it does without the app.
 
 ## Frames and window

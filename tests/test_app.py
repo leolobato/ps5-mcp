@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import shutil
@@ -115,7 +116,7 @@ def buttons(padd) -> list[int]:
 def test_status_reports_api_link_and_frames(app):
     status = app.client().status()
     assert status["api"] == 1 and status["frames"] > 0 and 0 <= status["frame_age"] < 1
-    assert status["pad"]["connected"] and status["pad"]["version"] == "1.3"
+    assert status["pad"]["connected"] and status["pad"]["version"] == "1.4"
     assert status["pad"]["hello"]["pad_handle"] == 1000 and status["source"].startswith("file:")
     assert status["pad"]["hello"]["user_name"] == "Test Player"
     assert status["title"] == "PS5 MCP · pad connected"
@@ -314,6 +315,28 @@ def test_padd_start_pauses_the_link_for_the_cli(app):
                                                          "--firmware", "13.60"]
     assert wait_for(lambda: client.status()["pad"]["connected"], 5)  # resumed
     assert client.status()["padd"]["last"]["action"] == "start"
+
+
+def test_padd_update_deploys_the_bundled_build(padd, tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "build").mkdir(parents=True)
+    elf = b"\x7fELF padd"
+    (repo / "build/padd.elf").write_bytes(elf)
+    report = {"artifacts": {"padd.elf": {"sha256": hashlib.sha256(elf).hexdigest(), "version": "9.9"}}}
+    (repo / "build/toolchain-report.json").write_text(json.dumps(report))
+    hub = App(padd, None, "--repo", str(repo))
+    try:
+        client = hub.client()
+        assert client.status()["padd"]["bundled"] == {"version": "9.9", "stale": False, "error": None}
+        result = client.call("padd_update", timeout=20)
+        assert result["ok"] and result["action"] == "update" and "slot free" in result["output"]
+        assert (hub.root / "cli-args").read_text().split() == ["padd", "update", "--host", "127.0.0.1",
+                                                             "--firmware", "13.60"]
+        (repo / "build/padd.elf").write_bytes(elf + b"rebuilt")  # make ran payloads but not verify
+        bundled = client.status()["padd"]["bundled"]
+        assert bundled["stale"] and "run make" in bundled["error"]
+    finally:
+        hub.stop()
 
 
 def test_status_events_follow_the_link(app):

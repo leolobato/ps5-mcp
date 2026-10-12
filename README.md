@@ -76,6 +76,8 @@ No `make` target contacts the console.
    local network, and Documents access when prompted.
 3. **Start `padd`** with **Start** or `uv run ps5mcp padd start`, once per console boot. The app answers
    the user-selection dialog automatically. If your DualSense turns off, press its PS button and select your user again.
+   The sidebar shows the running padd version and, when `make` built a newer one, "v1.4 available": **Update** (or
+   `uv run ps5mcp padd update`) stops padd and starts the new build.
 4. **Control the console** from the app window or connect an MCP client (see [MCP clients](#mcp-clients)).
 5. **Stop `padd`** with **Stop** or `uv run ps5mcp padd stop` before turning off the console. Killing it
    through Payload Manager can leave a phantom controller until reboot.
@@ -119,7 +121,7 @@ keeps the server code it started with; restart it after updating this checkout.
 
 The window shows live video, audio, and connection status. The sidebar has these controls:
 
-- **padd:** Start and Stop.
+- **padd:** Start, Update (stop, then start the build in `build/padd.elf`), and Stop.
 - **Console:** Home, close the running game/app, Release all input (**⌘.**), and Force release agent… to take the
   console from an agent that claimed it and will not let go (the next agent in the queue gets it).
 - **Launch:** pick an installed game/app and launch it (**⌘L**). The list comes from PS5 Web File Manager and is cached
@@ -239,7 +241,7 @@ uv run ps5mcp pad uninstall PPSA06654       # uninstall a title (padd 1.3)
 uv run ps5mcp install game.pkg             # install a package (or an .elf payload; --run starts it)
 uv run ps5mcp push build/title /data/homebrew/FAKE00001   # copy a folder to the console (zftpd)
 uv run ps5mcp pull /data/playden/logs ./logs/              # copy a folder from the console (--no-start, --force)
-uv run ps5mcp padd status                  # payload version, uptime, and counters
+uv run ps5mcp padd status                  # payload version (running and bundled), uptime, and counters
 uv run ps5mcp latency                      # measure input-to-frame latency
 ```
 

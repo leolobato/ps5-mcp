@@ -4,6 +4,7 @@
 - soak:    stream harmless input for N minutes, then check for stuck buttons.
 - killtest: a client holds buttons and is SIGKILLed; padd must release them.
 - stop:    SHUTDOWN, wait for `exit_requested`, archive the full log.
+- update:  stop whatever padd runs, then start this build (the app's Update button).
 Nothing here relaunches padd on its own.
 """
 
@@ -112,12 +113,26 @@ def preflight(host: str) -> None:
         raise SystemExit(f"padd start needs Payload Manager (8084) and PS5 Web File Manager (8888): {exc}") from exc
 
 
-def start(host: str, firmware: str | None, timeout: float = 20) -> int:
-    elf = ROOT / "build/padd.elf"
-    raw = elf.read_bytes()
+def bundled() -> dict:
+    """The padd build that start deploys: its version from the build report, and whether the ELF still matches it."""
+    try:
+        report = json.loads((ROOT / "build/toolchain-report.json").read_text())["artifacts"]["padd.elf"]
+        raw = (ROOT / "build/padd.elf").read_bytes()
+    except (OSError, KeyError, ValueError):
+        return {"version": None, "error": "no padd build; run make"}
+    return {"version": report.get("version"), "sha256": report["sha256"], "stale": digest(raw) != report["sha256"]}
+
+
+def _build() -> tuple[bytes, dict]:
+    raw = (ROOT / "build/padd.elf").read_bytes()
     report = json.loads((ROOT / "build/toolchain-report.json").read_text())
-    if report["artifacts"].get(elf.name, {}).get("sha256") != digest(raw):
+    if report["artifacts"].get("padd.elf", {}).get("sha256") != digest(raw):
         raise SystemExit("Build report is stale; run make first")
+    return raw, report
+
+
+def start(host: str, firmware: str | None, timeout: float = 20) -> int:
+    raw, report = _build()
     preflight(host)
     if _port_open(host):
         raise SystemExit(f"Something already listens on {host}:{p.PORT}; padd is probably running. "
@@ -185,6 +200,22 @@ def start(host: str, firmware: str | None, timeout: float = 20) -> int:
     return 0 if evidence["status"] == "running" else 1
 
 
+def update(host: str, firmware: str | None, timeout: float = 10) -> int:
+    """Stop the running padd, if any, then start this build. Checks first, so a failed check leaves padd running."""
+    _build()
+    preflight(host)
+    print(f"deploying padd v{bundled()['version'] or '?'} to {host}")
+    if _port_open(host):
+        stop(host)  # "unverified" (log unreadable) is fine here: only the port matters
+        deadline = time.monotonic() + timeout
+        while _port_open(host):
+            if time.monotonic() > deadline:
+                print(f"failed: padd at {host}:{p.PORT} is still listening after stop; not starting another")
+                return 1
+            time.sleep(0.5)
+    return start(host, firmware)
+
+
 def auto_assign(link: PadLink, run: Path | None = None, timeout: float = 6.0) -> bool:
     """Answer the assignment dialog for the new pad if (and only if) it is on screen."""
     from . import assign
@@ -208,7 +239,7 @@ def status(host: str) -> int:
         return 1
     pong = link.ping()
     link.close()
-    print(json.dumps({"hello": link.hello.__dict__, "pong": pong.__dict__}, indent=2))
+    print(json.dumps({"hello": link.hello.__dict__, "pong": pong.__dict__, "bundled": bundled()}, indent=2))
     return 0
 
 

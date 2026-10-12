@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 from datetime import UTC, datetime
@@ -11,6 +12,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 PAYLOADS = ("padd.elf",)
+
+
+def padd_version(source: Path = ROOT / "payload/padd.c") -> str:
+    """The version padd reports in HELLO, as "major.minor"; the app compares it with the running padd."""
+    pattern = r"^#define PADD_VERSION 0x([0-9a-fA-F]{2})([0-9a-fA-F]{2})\b"
+    match = re.search(pattern, source.read_text(), re.MULTILINE)
+    if not match:
+        raise SystemExit(f"No PADD_VERSION in {source}")
+    return f"{int(match[1], 16)}.{int(match[2], 16)}"
 
 
 def output(*args):
@@ -36,6 +46,8 @@ def main():
             raise SystemExit(f"Unexpected format for {name}:\n{headers}")
         artifacts[name] = {"sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                            "bytes": path.stat().st_size, "format": "elf64-x86-64"}
+        if name == "padd.elf":
+            artifacts[name]["version"] = padd_version()
         print(f"Verified {name}: {artifacts[name]['sha256']}")
     report = {"recorded_at": datetime.now(UTC).isoformat(), "host": platform.platform(),
               "sdk": lock["ps5_payload_sdk"], "llvm": llvm, "hardware_validated": False,

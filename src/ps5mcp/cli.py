@@ -170,10 +170,10 @@ def _host(args) -> str:
 
 def _padd(args) -> int:
     from . import padd_runner
-    if args.action in ("start", "stop", "status") and (app := _running_app()):
+    if args.action in ("start", "stop", "update", "status") and (app := _running_app()):
         return _padd_via_app(app, args)
-    if args.action == "start":
-        return padd_runner.start(_host(args), args.firmware)
+    if args.action in ("start", "update"):
+        return getattr(padd_runner, args.action)(_host(args), args.firmware)
     if args.action == "soak":
         return padd_runner.soak(_host(args), args.minutes)
     if args.action == "collect":
@@ -184,13 +184,13 @@ def _padd(args) -> int:
 
 
 def _padd_via_app(app, args) -> int:
-    """The app holds padd's link: it pauses it and runs this same CLI for start/stop."""
+    """The app holds padd's link: it pauses it and runs this same CLI for start/stop/update."""
     import json
     try:
         if args.action == "status":
             status = app.call("status", wait=1.0)
-            print(json.dumps({"pad": status["pad"], "pong": app.ping() if status["pad"]["connected"] else None},
-                             indent=2))
+            print(json.dumps({"pad": status["pad"], "pong": app.ping() if status["pad"]["connected"] else None,
+                              "bundled": status["padd"].get("bundled")}, indent=2))
             return 0 if status["pad"]["connected"] else 1
         result = app.request(f"padd_{args.action}", firmware=args.firmware, timeout=180)[0]
     except Exception as exc:  # noqa: BLE001 - shown to the user as is
@@ -302,10 +302,11 @@ def main(argv: list[str] | None = None) -> int:
     snap.add_argument("--max-width", type=int)
     snap.set_defaults(func=_snapshot)
 
-    padd = sub.add_parser("padd", help="padd payload lifecycle (start DEPLOYS to the console; nothing relaunches). "
-                          "start/stop/status go through the PS5 app when it runs; soak and killtest need padd to "
+    padd = sub.add_parser("padd", help="padd payload lifecycle (start DEPLOYS to the console; update stops the running "
+                          "padd and starts this build; nothing relaunches). start/stop/update/status go through the PS5 "
+                          "app when it runs; soak and killtest need padd to "
                           "themselves, so quit the app first")
-    padd.add_argument("action", choices=("start", "status", "soak", "killtest", "stop", "collect"))
+    padd.add_argument("action", choices=("start", "status", "soak", "killtest", "stop", "update", "collect"))
     padd.add_argument("--host", help="console IP address (default: PS5_HOST)")
     padd.add_argument("--firmware", default="13.60", help="user-reported firmware; not independently verified")
     padd.add_argument("--minutes", type=float, default=10)

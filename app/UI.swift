@@ -83,6 +83,8 @@ final class Sidebar: NSStackView {
         addArrangedSubview(grid)
         section("padd")
         full(row([button("paddStart", "Start", "play.fill", #selector(AppDelegate.startPadd), target),
+                  button("paddUpdate", "Update", "arrow.triangle.2.circlepath", #selector(AppDelegate.updatePadd),
+                         target),
                   button("paddStop", "Stop", "stop.fill", #selector(AppDelegate.stopPadd), target)]))
 
         section("Console")
@@ -614,14 +616,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         } else {
             sidebar.set("Link", link.error ?? "connecting", color: .systemRed)
         }
+        let bundled = hub.padd.bundled
         if let hello = link.hello {
-            sidebar.set("padd", "v\(hello.versionString)")
+            if let number = bundled.number, number != hello.payloadVersion {
+                sidebar.set("padd", "v\(hello.versionString) · v\(bundled.version!) available", color: .systemOrange)
+            } else {
+                sidebar.set("padd", "v\(hello.versionString)" + (bundled.error == nil ? " · up to date" : ""))
+            }
             sidebar.set("Pad", hello.padReady ? "handle \(hello.padHandle)" : "NOT ready (\(hello.addStatus))",
                         color: hello.padReady ? .labelColor : .systemRed)
             let userID = String(format: "0x%08X", UInt32(bitPattern: hello.userID))
             sidebar.set("User", hello.userName.map { "\($0) · \(userID)" } ?? userID)
         } else {
-            for field in ["padd", "Pad", "User"] { sidebar.set(field, "–") }
+            for field in ["Pad", "User"] { sidebar.set(field, "–") }
+            sidebar.set("padd", bundled.version.map { "– · v\($0) to start" } ?? "–")
         }
         if link.connected, uptimeSeconds() - pongAt > 2 {
             pongAt = uptimeSeconds()
@@ -659,6 +667,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         let fileManagerBusy = titlesLoading || installing != nil  // Web File Manager runs one task at a time
         sidebar.buttons["paddStart"]?.isEnabled = canRun && !link.connected && !fileManagerBusy
         sidebar.buttons["paddStop"]?.isEnabled = canRun && !fileManagerBusy
+        sidebar.buttons["paddUpdate"]?.isEnabled = canRun && !fileManagerBusy && bundled.error == nil
+        sidebar.buttons["paddUpdate"]?.toolTip = bundled.error
+            ?? "Stop padd and start build/padd.elf (v\(bundled.version ?? "?")) from \(hub.config.repo ?? "the checkout")"
         sidebar.buttons["install"]?.isEnabled = installing == nil && busy == nil && !titlesLoading
             && !hub.padd.cli.isEmpty
         sidebar.buttons["uninstall"]?.isEnabled = link.connected && uninstallSheet == nil
@@ -759,6 +770,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         else { return }
         hub.notice = "Starting padd…"
         background { _ = try self.hub.padd.run("start", firmware: nil) }
+    }
+
+    @objc func updatePadd() {
+        let bundled = hub.padd.bundled.version ?? "?"
+        let running = hub.controller.status().hello.map { "padd v\($0.versionString)" } ?? "padd, if it runs,"
+        guard confirm("Update padd on \(hub.host) to v\(bundled)?",
+                      "This stops \(running) (input is released and the virtual pad removed), then uploads build/padd.elf "
+                      + "through Payload Manager and starts it once; both runs are archived under results/. If the PS5 "
+                      + "asks \"Who's using this controller?\", the virtual pad answers it, and that turns your DualSense "
+                      + "off: press its PS button and pick the same user.", "Update")
+        else { return }
+        hub.notice = "Updating padd…"
+        background { _ = try self.hub.padd.run("update", firmware: nil) }
     }
 
     @objc func stopPadd() {
