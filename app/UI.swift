@@ -667,9 +667,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         let fileManagerBusy = titlesLoading || installing != nil  // Web File Manager runs one task at a time
         sidebar.buttons["paddStart"]?.isEnabled = canRun && !link.connected && !fileManagerBusy
         sidebar.buttons["paddStop"]?.isEnabled = canRun && !fileManagerBusy
-        sidebar.buttons["paddUpdate"]?.isEnabled = canRun && !fileManagerBusy && bundled.error == nil
+        // Only a running padd with another version than the build needs it; with padd down, Start deploys the build.
+        let outdated = bundled.error == nil && link.hello.map { $0.payloadVersion != bundled.number } == true
+        sidebar.buttons["paddUpdate"]?.isEnabled = canRun && !fileManagerBusy && outdated
+        let build = "build/padd.elf (v\(bundled.version ?? "?"))"
         sidebar.buttons["paddUpdate"]?.toolTip = bundled.error
-            ?? "Stop padd and start build/padd.elf (v\(bundled.version ?? "?")) from \(hub.config.repo ?? "the checkout")"
+            ?? (link.hello == nil ? "padd is not running; Start deploys \(build)"
+                : outdated ? "Stop padd and start \(build) from \(hub.config.repo ?? "the checkout")"
+                : "padd is up to date with \(build)")
         sidebar.buttons["install"]?.isEnabled = installing == nil && busy == nil && !titlesLoading
             && !hub.padd.cli.isEmpty
         sidebar.buttons["uninstall"]?.isEnabled = link.connected && uninstallSheet == nil

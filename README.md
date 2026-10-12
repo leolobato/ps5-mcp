@@ -121,7 +121,7 @@ keeps the server code it started with; restart it after updating this checkout.
 
 The window shows live video, audio, and connection status. The sidebar has these controls:
 
-- **padd:** Start, Update (stop, then start the build in `build/padd.elf`), and Stop.
+- **padd:** Start, Update (stop, then start the build in `build/padd.elf`; enabled only when padd runs another version), and Stop.
 - **Console:** Home, close the running game/app, Release all input (**⌘.**), and Force release agent… to take the
   console from an agent that claimed it and will not let go (the next agent in the queue gets it).
 - **Launch:** pick an installed game/app and launch it (**⌘L**). The list comes from PS5 Web File Manager and is cached
