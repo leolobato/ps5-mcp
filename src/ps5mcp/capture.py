@@ -221,21 +221,51 @@ class NativeApp:
         status = self.status()
         return status["frame_age"] if status and status["frame_age"] >= 0 else None
 
+    @staticmethod
+    def _check_host(status: dict, host: str | None) -> str | None:
+        """Fail closed if a requested console does not match the app's live target."""
+        pad = status.get("pad")
+        target = pad.get("host") if isinstance(pad, dict) else None
+        if not isinstance(target, str) or not target:
+            target = None
+        if host and target != host:
+            actual = repr(target) if target else "an unknown console"
+            raise CaptureError(f"PS5 app is targeting {actual}, but requested console is {host!r}. "
+                               "Quit the app or change its console address in Settings before retrying.")
+        return target
+
+    def target_host(self, host: str | None = None) -> str:
+        """The running app's console, validated against `host` or PS5_HOST when supplied.
+
+        Settings can change the console while the app runs. Network operations outside the app must read this
+        live target rather than independently defaulting to PS5_HOST.
+        """
+        status = self.status()
+        if status is None:
+            raise CaptureError("PS5 app is not running; cannot determine its console address")
+        target = self._check_host(status, host or os.environ.get("PS5_HOST"))
+        if not target:
+            raise CaptureError("The PS5 app has no console address; set it in Settings or launch with PS5_HOST")
+        return target
+
     def start(self, video: str | None = None, audio: str | None = DEFAULT_AUDIO, timeout: float = 10,
               visible: bool = False, host: str | None = None) -> int:
-        """Launch the app unless it runs. PS5MCP_VIDEO=file:PATH or synthetic runs it without the card.
+        """Launch the app unless it runs on the requested host; refuse a mismatched running app.
+
+        PS5MCP_VIDEO=file:PATH or synthetic runs it without the card.
 
         With the card it is launched through `open`, so macOS asks for camera/microphone permission for the app
         itself rather than for the terminal that started it.
         """
+        host = host or os.environ.get("PS5_HOST")
         if (status := self.status()) is not None:
+            self._check_host(status, host)
             if visible:
                 self.request("show")
             return status["pid"]
         if not self.binary.exists():
             raise CaptureError(f"{self.binary} missing; run make")
         video = video or os.environ.get("PS5MCP_VIDEO", DEFAULT_VIDEO)
-        host = host or os.environ.get("PS5_HOST")
         if video.startswith("file:") or video == "synthetic":
             audio = None
         args = ["--state-dir", str(self.root), "--video", video, "--audio", audio or "none"]
@@ -257,8 +287,10 @@ class NativeApp:
             if process is not None and process.poll() is not None:
                 raise CaptureError(f"PS5 app exited with {process.returncode}; see {self.log}")
             status = self.status()
-            if status and status["frames"] > 0:
-                return status["pid"]
+            if status:
+                self._check_host(status, host)
+                if status["frames"] > 0:
+                    return status["pid"]
             time.sleep(0.2)
         if process is None:
             # Launched through `open`: it may be waiting on the camera permission prompt. It is the user's app now.

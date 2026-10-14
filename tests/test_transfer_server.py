@@ -29,7 +29,7 @@ async def test_launch_is_blocked_until_title_upload_checks_finish(tmp_path, monk
     monkeypatch.setattr(server, "runtime", server.Runtime())
     monkeypatch.setattr(server, "_check_claim", claim)
     monkeypatch.setattr(server, "_command", command)
-    monkeypatch.setattr(server.capture, "console_host", lambda host: "127.0.0.1")
+    monkeypatch.setattr(server.runtime, "target_host", lambda: "127.0.0.1")
     monkeypatch.setattr(transfer, "push", uploading)
     upload = asyncio.create_task(server.mcp.call_tool("push", {
         "local_path": str(title), "remote_path": "/title"}))
