@@ -104,6 +104,7 @@ free, every client drives it as before.
 |---|---|---|
 | `status` | `wait?` (seconds to wait for the padd link) | `pid`, `frames`, `frame_age`, `visible`, `now` (uptime clock = Python `time.monotonic`), `source`, `clients`, `pad` (link, hello, counters, `human_has_control`, `agent_layers`, `paused`), `title`, `notice`, `padd`, `auto_assign` |
 | `snapshot` | | Writes `<state>/latest.jpg` now and returns `path` (it is also rewritten at 5 fps). |
+| `capture_restart` | `video` (device ID/name, `file:PATH`, `synthetic`, or empty to disable), `audio?` (device ID/name or `none`) | Restarts capture without closing API clients. Blocked by another client's lease or an active video recording. Does not save preferences; Settings saves selected device IDs. |
 | `watch_change` | `threshold` (6), `timeout_s` (2) | Two replies: `armed_at`, then `changed_at` and `diff`, or `ok: false` on timeout. |
 | `show` / `hide` | | Shows or hides the window. |
 | `quit` | | Releases input, drops the padd link (padd keeps running) and exits. |
@@ -123,6 +124,9 @@ dialog is visible. The match uses the title template at (712, 168), within 24 px
 
 - The console address is `--host`, else `PS5_HOST`, else the address saved in Settings (UserDefaults key
   `consoleHost`). Saving in Settings also switches the running app to it.
+- Capture devices use the saved `captureVideoID` and `captureAudioID` preferences unless overridden by
+  `--video`/`--audio`. Device IDs are preferred; names remain supported for command-line launches.
+  No video is selected by default. Missing devices leave the app/API running with `source: "unavailable"`.
 - `--video file:PATH` (it re-reads the image when it changes) and `--video synthetic` run without the capture card.
   They are for development and tests.
 - `PS5 --dialog-score IMAGE` prints the auto-assign match score and exits.

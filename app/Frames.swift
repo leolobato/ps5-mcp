@@ -24,7 +24,9 @@ final class FrameSink: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate,
     AVCaptureAudioDataOutputSampleBufferDelegate {
     private let ci = CIContext(options: [.useSoftwareRenderer: false])
     private let lock = NSLock()
+    private let writeLock = NSLock() // held while encoding latest.jpg, so frames keep flowing under `lock`
     private var latest: CVPixelBuffer?
+    private var active = true
     private var lastWrite = 0.0
     private let path: String
     private let interval: Double
@@ -62,6 +64,7 @@ final class FrameSink: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate,
     func push(_ buffer: CVPixelBuffer, at time: CMTime = CMClockGetTime(CMClockGetHostTimeClock())) {
         let now = uptimeSeconds()
         lock.lock()
+        guard active else { lock.unlock(); return }
         latest = buffer
         frames += 1
         lastFrameAt = now
@@ -102,6 +105,9 @@ final class FrameSink: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate,
 
     @discardableResult
     private func write(_ buffer: CVPixelBuffer) -> Bool {
+        writeLock.lock(); defer { writeLock.unlock() }
+        lock.lock(); let active = self.active; lock.unlock()
+        guard active else { return false }
         let image = CIImage(cvPixelBuffer: buffer)
         guard let cg = ci.createCGImage(image, from: image.extent) else { return false }
         let tmp = path + ".\(UUID().uuidString).tmp"  // the frame queue and the control socket may write at once
@@ -112,6 +118,16 @@ final class FrameSink: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate,
         CGImageDestinationAddImage(dest, cg, [kCGImageDestinationLossyCompressionQuality: 0.9] as CFDictionary)
         guard CGImageDestinationFinalize(dest) else { return false }
         return rename(tmp, path) == 0
+    }
+
+    /// Wait for any in-flight snapshot write before the next source clears/replaces latest.jpg.
+    func invalidate() {
+        writeLock.lock(); defer { writeLock.unlock() }
+        lock.lock(); defer { lock.unlock() }
+        active = false
+        latest = nil
+        watchCallback = nil
+        reference = nil
     }
 
     private func luma(_ buffer: CVPixelBuffer) -> [UInt8] {
@@ -177,24 +193,50 @@ protocol FrameSource: AnyObject {
     func setMuted(_ muted: Bool)
 }
 
+/// Keeps the hub usable when capture setup fails, without producing fake console frames.
+final class UnavailableSource: FrameSource {
+    let name = "unavailable"
+    func start() {}
+    func stop() {}
+    func setMuted(_ muted: Bool) {}
+}
+
 /// The capture card. Camera and microphone permission belong to this app bundle.
+enum CaptureDevices {
+    static var video: [AVCaptureDevice] {
+        AVCaptureDevice.DiscoverySession(deviceTypes: [.external, .builtInWideAngleCamera],
+                                        mediaType: .video, position: .unspecified).devices
+    }
+    static var audio: [AVCaptureDevice] {
+        AVCaptureDevice.DiscoverySession(deviceTypes: [.microphone, .external],
+                                        mediaType: .audio, position: .unspecified).devices
+    }
+    static func find(_ selection: String, in devices: [AVCaptureDevice]) -> AVCaptureDevice? {
+        devices.first { $0.uniqueID == selection } ?? devices.first { $0.localizedName == selection }
+    }
+}
+
 final class CameraSource: FrameSource {
     let session = AVCaptureSession()
     let name: String
     private let queue = DispatchQueue(label: "frames", qos: .userInteractive)
     private let audioQueue = DispatchQueue(label: "audio", qos: .userInteractive)
     private let audioPreview = AVCaptureAudioPreviewOutput()
+    private let sessionQueue = DispatchQueue(label: "capture-session")
+    private var stopped = false // sessionQueue only; guards pending permission callbacks after switching devices
+    private var hasAudio = false
+    private var observers: [NSObjectProtocol] = []
+    var onError: ((String) -> Void)?
 
     init(video: String, audio: String?, sink: FrameSink) throws {
-        name = "camera:\(video)"
-        let discovery = AVCaptureDevice.DiscoverySession(
-            deviceTypes: [.external, .builtInWideAngleCamera], mediaType: nil, position: .unspecified)
-        guard let device = discovery.devices.first(where: { $0.localizedName == video && $0.hasMediaType(.video) })
+        guard let device = CaptureDevices.find(video, in: CaptureDevices.video)
         else {
             throw NSError(domain: "ps5-app", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "video device '\(video)' not found"])
         }
+        name = "camera:\(device.localizedName)"
         session.beginConfiguration()
+        defer { session.commitConfiguration() }
         session.addInput(try AVCaptureDeviceInput(device: device))
         // Setting the format after adding the input keeps the card's native 1080p60 (the session yields to it).
         if let best = device.formats.max(by: { a, b in
@@ -213,32 +255,60 @@ final class CameraSource: FrameSource {
         session.addOutput(output)
 
         if let audio {
-            let audioDiscovery = AVCaptureDevice.DiscoverySession(
-                deviceTypes: [.microphone, .external], mediaType: .audio, position: .unspecified)
-            if let mic = audioDiscovery.devices.first(where: { $0.localizedName == audio }) {
+            if let mic = CaptureDevices.find(audio, in: CaptureDevices.audio) {
                 session.addInput(try AVCaptureDeviceInput(device: mic))
+                hasAudio = true
                 audioPreview.volume = 1.0
                 session.addOutput(audioPreview)
                 let audioOutput = AVCaptureAudioDataOutput()  // for the video recorder
                 audioOutput.setSampleBufferDelegate(sink, queue: audioQueue)
                 if session.canAddOutput(audioOutput) { session.addOutput(audioOutput) }
             } else {
-                say("audio device '\(audio)' not found; continuing without audio")
+                throw BadInput("audio device '\(audio)' not found; choose an available input or No audio in Settings")
             }
         }
-        session.commitConfiguration()
+        observers.append(NotificationCenter.default.addObserver(forName: .AVCaptureDeviceWasDisconnected,
+                                                                 object: nil, queue: .main) { [weak self] note in
+            guard let self, let removed = note.object as? AVCaptureDevice,
+                  self.session.inputs.compactMap({ $0 as? AVCaptureDeviceInput }).contains(where: {
+                      $0.device.uniqueID == removed.uniqueID
+                  }) else { return }
+            self.onError?("\(removed.localizedName) disconnected. Reconnect it and use Apply & Restart Capture in Settings.")
+        })
+        observers.append(NotificationCenter.default.addObserver(forName: .AVCaptureSessionRuntimeError,
+                                                                 object: session, queue: .main) { [weak self] note in
+            let reason = (note.userInfo?[AVCaptureSessionErrorKey] as? NSError)?.localizedDescription ?? "Capture stopped."
+            self?.onError?(reason + " Use Apply & Restart Capture in Settings.")
+        })
     }
+
+    deinit { observers.forEach { NotificationCenter.default.removeObserver($0) } }
 
     /// Asks for camera/microphone permission first (the prompt belongs to this app), then starts the session.
     func start() {
         AVCaptureDevice.requestAccess(for: .video) { granted in
-            if !granted { say("camera permission denied: System Settings > Privacy & Security > Camera > PS5") }
-            AVCaptureDevice.requestAccess(for: .audio) { _ in
-                if granted { self.queue.async { self.session.startRunning() } }
+            guard granted else {
+                DispatchQueue.main.async { self.onError?("Allow camera access in System Settings > Privacy & Security > Camera, then restart capture.") }
+                return
             }
+            let start = {
+                self.sessionQueue.async { if !self.stopped { self.session.startRunning() } }
+            }
+            if self.hasAudio {
+                AVCaptureDevice.requestAccess(for: .audio) { granted in
+                    if !granted {
+                        DispatchQueue.main.async { self.onError?("Microphone access denied. Allow it in System Settings or select No audio.") }
+                    }
+                    start()
+                }
+            } else { start() }
         }
     }
-    func stop() { session.stopRunning() }
+    func stop() {
+        sessionQueue.sync { stopped = true; session.stopRunning() }
+        queue.sync {} // Drain callbacks before the hub clears the previous source's frame.
+        audioQueue.sync {}
+    }
     func setMuted(_ muted: Bool) { audioPreview.volume = muted ? 0 : 1 }
 }
 
@@ -291,7 +361,7 @@ class TimedSource: FrameSource {
         self.timer = timer
     }
 
-    func stop() { timer?.cancel() }
+    func stop() { timer?.cancel(); queue.sync {} }
     func setMuted(_ muted: Bool) {}
     func nextFrame() -> CVPixelBuffer? { nil }
 }

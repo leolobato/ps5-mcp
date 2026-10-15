@@ -13,8 +13,8 @@ import Darwin
 
 struct Config {
     var stateDir = ProcessInfo.processInfo.environment["PS5MCP_STATE"] ?? NSHomeDirectory() + "/.local/state/ps5-mcp"
-    var video = "eEver USB Video Device"
-    var audio: String? = "eEver USB Audio Device"
+    var video = UserDefaults.standard.string(forKey: captureVideoKey) ?? ""
+    var audio: String? = UserDefaults.standard.string(forKey: captureAudioKey)
     var headless = false
     var snapshotFPS = 5.0
     /// --host, else PS5_HOST, else the address saved in Settings. No default: see missingHost.

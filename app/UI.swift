@@ -315,34 +315,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildMenu()
         hub.ui = self
-        do {
-            try hub.start()
-        } catch {
-            say("capture failed: \(error.localizedDescription)")
-            exit(2)
-        }
+        hub.start()
         keys = KeyInput(source: "window", controller: hub.controller) { [weak self] in self?.hub.keyCommand($0) }
         video = VideoView(frame: NSRect(x: 0, y: 0, width: 1280, height: 720))
         video.keys = keys
         video.wantsLayer = true
         video.layer = CALayer()
         video.layer?.backgroundColor = NSColor.black.cgColor
-        if let camera = hub.source as? CameraSource {
-            let preview = AVCaptureVideoPreviewLayer(session: camera.session)
-            preview.videoGravity = .resizeAspect
-            preview.backgroundColor = NSColor.black.cgColor
-            previewLayer = preview
-        } else {
-            let layer = CALayer()
-            layer.backgroundColor = NSColor.black.cgColor
-            layer.contentsGravity = .resizeAspect
-            previewLayer = layer
-            imageLayer = layer
-        }
-        previewLayer.frame = video.bounds
-        previewLayer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
-        previewLayer.isHidden = videoHidden
-        video.layer?.addSublayer(previewLayer)
+        attachCapturePreview()
         hiddenVideoLabel.textColor = .secondaryLabelColor
         hiddenVideoLabel.translatesAutoresizingMaskIntoConstraints = false
         hiddenVideoLabel.isHidden = !videoHidden
@@ -394,10 +374,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         restoreFrame()
         setVisible(!hub.config.headless)
         Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in self?.refresh() }
-        if imageLayer != nil {
-            Timer.scheduledTimer(withTimeInterval: 1.0 / 15, repeats: true) { [weak self] _ in self?.drawFrame() }
-        }
+        Timer.scheduledTimer(withTimeInterval: 1.0 / 15, repeats: true) { [weak self] _ in self?.drawFrame() }
         say("ready")
+    }
+
+    private func attachCapturePreview() {
+        imageLayer = nil
+        if let camera = hub.source as? CameraSource {
+            let preview = AVCaptureVideoPreviewLayer(session: camera.session)
+            preview.videoGravity = .resizeAspect
+            preview.backgroundColor = NSColor.black.cgColor
+            previewLayer = preview
+        } else {
+            let layer = CALayer()
+            layer.backgroundColor = NSColor.black.cgColor
+            layer.contentsGravity = .resizeAspect
+            previewLayer = layer
+            imageLayer = layer
+        }
+        previewLayer.frame = video.bounds
+        previewLayer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
+        previewLayer.isHidden = videoHidden
+        video.layer?.addSublayer(previewLayer)
+    }
+
+    func restartCapture(video: String, audio: String?) throws {
+        guard videoRecorder == nil, !videoSaving else {
+            throw BadInput("Stop and save the video recording before changing capture devices.")
+        }
+        hub.source.stop()
+        (previewLayer as? AVCaptureVideoPreviewLayer)?.session = nil
+        previewLayer.removeFromSuperlayer()
+        hub.configureCapture(video: video, audio: audio)
+        attachCapturePreview()
+        hub.source.setMuted(audioMuted || !hub.visible)
+        hub.source.start()
+        hub.statusChanged()
     }
 
     private func buildMenu() {
@@ -546,7 +558,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
     }
 
     private func drawFrame() {
-        guard !videoHidden, window.isVisible, let image = hub.sink.latestImage() else { return }
+        guard imageLayer != nil, !videoHidden, window.isVisible, let image = hub.sink.latestImage() else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         imageLayer?.contents = image
@@ -608,6 +620,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
 
     func refresh() {
         guard let window, let sidebar else { return }
+        settings?.refreshCaptureStatus()
         let link = hub.controller.status()
         window.title = link.title
         let busy = hub.padd.busy

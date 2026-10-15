@@ -73,7 +73,10 @@ No `make` target contacts the console.
    The CLI commands also take `--host`. In the app, set the address in **Settings** (**⌘,**). The app saves it
    and reconnects to it at once. When the app starts, `--host` and `PS5_HOST` win over the saved address.
 2. **Open the app:** `uv run ps5mcp view` or `open --env PS5_HOST=$PS5_HOST "build/PS5 MCP.app"`. Allow camera, microphone,
-   local network, and Documents access when prompted.
+   local network, and Documents access when prompted. In **Settings** (**⌘,**), select your video and audio devices
+   (or **No audio**) and click **Apply & Restart Capture**. Device selections are saved by ID; no capture hardware
+   is selected by default. **Refresh Devices** updates the list after plugging in a card. You can restart capture
+   without disconnecting MCP clients; stop and save any video recording first.
 3. **Start `padd`** with **Start** or `uv run ps5mcp padd start`, once per console boot. The app answers
    the user-selection dialog automatically. If your DualSense turns off, press its PS button and select your user again.
    The sidebar shows the running padd version and, when `make` built a newer one, "v1.4 available": **Update** (or
@@ -247,9 +250,15 @@ uv run ps5mcp latency                      # measure input-to-frame latency
 
 For development without a capture card, use `--video synthetic` or `--video file:PATH` when launching the app,
 or set `PS5MCP_VIDEO` for the server. Close QuickTime/OBS before capturing: only one process can own the card.
+Explicit `--video`/`--audio` arguments override saved devices for that launch. Python launchers also accept
+`PS5MCP_VIDEO`/`PS5MCP_AUDIO`; `--audio none` or `PS5MCP_AUDIO=none` disables audio. If a device is missing, the app
+stays open: reconnect it or choose another in Settings, then apply the selection. Changing capture devices does
+not require restarting the MCP server processes managed by your MCP clients.
 
-The ffmpeg fallback is available with `uv run ps5mcp capture start --backend ffmpeg`, followed by
+The ffmpeg fallback requires an explicit device: `uv run ps5mcp capture start --backend ffmpeg --video "DEVICE NAME"`, followed by
 `uv run ps5mcp view --backend ffmpeg`. Run it from a regular terminal with camera and microphone permission.
+Use `uv run ps5mcp devices` to list devices and `--audio "DEVICE NAME"` to enable audio. Its legacy format defaults
+are 1080p, 60 fps, and `uyvy422`; cards that do not support that mode require adjusting the FFmpeg capture settings.
 
 ## Hardware runs
 

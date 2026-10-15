@@ -30,14 +30,18 @@ def _capture(args) -> int:
     backend = _backend(args)
     name = type(backend).__name__
     if args.action == "start":
-        pid = backend.start(video=args.video, audio=None if args.no_audio else args.audio)
+        options = {"video": args.video}
+        if args.no_audio or args.audio is not None:
+            options["audio"] = None if args.no_audio else args.audio
+        pid = backend.start(**options)
         print(f"{name} running (pid {pid})")
     elif args.action == "stop":
         stopped = [type(b).__name__ for b in (capture.NativeApp(), capture.Daemon()) if b.stop()]
         print(f"stopped {', '.join(stopped)}" if stopped else "not running")
     else:
         pid, age = backend.pid(), backend.frame_age()
-        print(f"{name} running pid {pid}, frame age {age:.2f}s" if pid else f"{name} not running")
+        frame_status = f"frame age {age:.2f}s" if age is not None else "no frames yet"
+        print(f"{name} running pid {pid}, {frame_status}" if pid else f"{name} not running")
         return 0 if pid else 1
     return 0
 
@@ -295,8 +299,8 @@ def main(argv: list[str] | None = None) -> int:
 
     cap = sub.add_parser("capture", help="manage the daemon that owns the capture card")
     cap.add_argument("action", choices=("start", "stop", "status"))
-    cap.add_argument("--video", default=capture.DEFAULT_VIDEO)
-    cap.add_argument("--audio", default=capture.DEFAULT_AUDIO)
+    cap.add_argument("--video", help="capture device (default: saved native setting or PS5MCP_VIDEO)")
+    cap.add_argument("--audio", help="audio device (default: saved native setting or PS5MCP_AUDIO)")
     cap.add_argument("--no-audio", action="store_true")
     cap.add_argument("--backend", choices=("native", "ffmpeg"))
     cap.set_defaults(func=_capture)

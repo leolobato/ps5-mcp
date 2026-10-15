@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import contextlib
 import hashlib
 import json
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -122,11 +124,98 @@ def test_status_reports_api_link_and_frames(app):
     assert status["title"] == "PS5 MCP · pad connected"
 
 
+@pytest.mark.parametrize("video_flag", ["--video", "-captureVideoID"])
+def test_missing_capture_card_keeps_app_and_api_running(padd, video_flag):
+    with tempfile.TemporaryDirectory(prefix="a", dir="/tmp") as directory:
+        root = Path(directory)
+        with (root / "app.log").open("w+") as log:
+            process = subprocess.Popen(
+                [str(APP), "--state-dir", directory, video_flag, "missing-test-capture-card",
+                 "--audio", "none", "--headless", "--host", "127.0.0.1", "--port", str(padd.port)],
+                stdout=log, stderr=subprocess.STDOUT)
+            try:
+                native = capture.NativeApp(root)
+                assert wait_for(lambda: native.status() or process.poll() is not None)
+                log.seek(0)
+                assert process.poll() is None, log.read()
+                status = native.status()
+                assert status["frames"] == 0
+                assert "missing-test-capture-card" in status["notice"]
+                assert "Reconnect" in status["notice"]
+                assert wait_for(lambda: native.status()["pad"]["connected"])
+            finally:
+                if process.poll() is None:
+                    process.terminate()
+                    process.wait(5)
+
+
 def test_legacy_capture_socket_still_works(app):
     native = capture.NativeApp(app.root)
     assert native.pid() == app.process.pid and native.frame_age() < 1
     out = capture.snapshot(app.root / "snap.jpg", daemon=native)
     assert Image.open(out).size == (1920, 1080)
+
+
+def test_capture_restart_keeps_clients_connected_and_discards_old_frames(app):
+    client = app.client("capture-switch")
+    pid = client.status()["pid"]
+    client.call("capture_restart", video="missing-test-capture-card", audio="none")
+    status = client.status()
+    assert status["pid"] == pid and status["source"] == "unavailable"
+    assert status["frames"] == 0 and status["frame_age"] == -1
+    assert "missing-test-capture-card" in status["notice"]
+    assert not capture.NativeApp(app.root).request("snapshot")[0]["ok"]
+    assert not (app.root / "latest.jpg").exists()
+    client.call("capture_restart", video=f"file:{app.frame}", audio="none")
+    assert wait_for(lambda: client.status()["frames"] > 0)
+    assert client.status()["pid"] == pid
+    client.press(PadState(buttons=CROSS), 40)
+    assert buttons(app.padd)[-2:] == [CROSS, 0]
+    client.call("capture_restart", video="", audio="none")
+    status = client.status()
+    assert status["source"] == "unavailable" and status["frames"] == 0
+    assert "Choose a capture device in Settings" in status["notice"]
+
+
+def test_explicit_capture_source_overrides_saved_device(padd):
+    app = App(padd, None, "-captureVideoID", "missing-saved-device", "-captureAudioID", "missing-saved-audio")
+    try:
+        assert app.client().status()["source"].startswith("file:")
+        assert app.client().status()["frames"] > 0
+    finally:
+        app.stop()
+
+
+def test_capture_restart_does_not_restore_old_inflight_snapshots(app):
+    client = app.client()
+    snapshots = app.client()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as pool:
+        for _ in range(3):
+            client.call("capture_restart", video=f"file:{app.frame}", audio="none")
+            assert wait_for(lambda: client.status()["frames"] > 0)
+            writes = [pool.submit(snapshots.request, "snapshot") for _ in range(50)]
+            client.call("capture_restart", video="", audio="none")
+            for write in writes:
+                write.result()
+            assert not (app.root / "latest.jpg").exists()
+            assert client.status()["frames"] == 0
+
+
+def test_old_capture_watch_timeout_does_not_cancel_new_watch(app):
+    with socket.socket(socket.AF_UNIX) as old, socket.socket(socket.AF_UNIX) as new:
+        for conn in (old, new):
+            conn.settimeout(5)
+            conn.connect(str(app.root / "capture.sock"))
+        old.sendall(b'{"cmd":"watch_change","timeout_s":1}\n')
+        with old.makefile("r") as old_replies, new.makefile("r") as new_replies:
+            assert "armed_at" in json.loads(old_replies.readline())
+            app.client().call("capture_restart", video=f"file:{app.frame}", audio="none")
+            assert wait_for(lambda: app.client().status()["frames"] > 0)
+            new.sendall(b'{"cmd":"watch_change","timeout_s":3}\n')
+            assert "armed_at" in json.loads(new_replies.readline())
+            assert json.loads(old_replies.readline())["error"] == "timeout"
+            put_frame(app.frame, Image.new("RGB", (1920, 1080), (255, 255, 255)))
+            assert json.loads(new_replies.readline())["changed_at"] > 0
 
 
 def test_set_reaches_pad_and_neutral_releases(app):

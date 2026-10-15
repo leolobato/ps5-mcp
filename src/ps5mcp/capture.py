@@ -19,13 +19,13 @@ import subprocess
 import tempfile
 import time
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 
-DEFAULT_VIDEO = "eEver USB Video Device"
-DEFAULT_AUDIO = "eEver USB Audio Device"
-# The eEver card advertises exactly one mode; ffmpeg rejects anything else.
+# Legacy FFmpeg capture mode; some cards need these format settings adjusted.
+# Native capture negotiates supported device formats.
 DEFAULT_SIZE = "1920x1080"
-DEFAULT_FPS = "60.000240"
+DEFAULT_FPS = "60"
 DEFAULT_PIXEL_FORMAT = "uyvy422"
 STREAM_PORT = 23230
 SNAPSHOT_FPS = 5
@@ -37,6 +37,16 @@ _DEVICE_LINE = re.compile(r"\[(\d+)\] (.+)$")
 
 class CaptureError(RuntimeError):
     pass
+
+
+class _AudioPreference(Enum):
+    SAVED = "saved"
+
+
+def _audio_override(audio: str | None | _AudioPreference) -> str | None | _AudioPreference:
+    if audio is _AudioPreference.SAVED:
+        return os.environ.get("PS5MCP_AUDIO", _AudioPreference.SAVED)
+    return audio
 
 
 def console_host(host: str | None = None) -> str:
@@ -80,13 +90,21 @@ def list_devices() -> Devices:
     return parse_device_list(result.stderr)
 
 
-def _input_args(video: str, audio: str | None) -> list[str]:
+def _input_args(video: str | None, audio: str | None) -> list[str]:
+    video = video if video is not None else os.environ.get("PS5MCP_VIDEO")
+    if not video:
+        raise CaptureError("FFmpeg capture requires an explicit video device; pass --video or set PS5MCP_VIDEO "
+                           "(use ps5mcp devices to list devices)")
     return ["-f", "avfoundation", "-framerate", DEFAULT_FPS, "-video_size", DEFAULT_SIZE,
             "-pixel_format", DEFAULT_PIXEL_FORMAT, "-i", f"{video}:{audio or 'none'}"]
 
 
-def daemon_command(latest: Path, video: str = DEFAULT_VIDEO, audio: str | None = DEFAULT_AUDIO,
+def daemon_command(latest: Path, video: str | None = None,
+                   audio: str | None | _AudioPreference = _AudioPreference.SAVED,
                    port: int = STREAM_PORT) -> list[str]:
+    audio = _audio_override(audio)
+    if audio is _AudioPreference.SAVED or audio == "none":
+        audio = None
     stream_maps = ["-map", "0:v"] + (["-map", "0:a"] if audio else [])
     audio_codec = ["-c:a", "aac", "-b:a", "160k"] if audio else []
     return [
@@ -135,8 +153,8 @@ class Daemon:
         except FileNotFoundError:
             return None
 
-    def start(self, video: str = DEFAULT_VIDEO, audio: str | None = DEFAULT_AUDIO,
-              timeout: float = 10) -> int:
+    def start(self, video: str | None = None,
+              audio: str | None | _AudioPreference = _AudioPreference.SAVED, timeout: float = 10) -> int:
         if (pid := self.pid()) is not None:
             return pid
         self.latest.unlink(missing_ok=True)
@@ -221,12 +239,14 @@ class NativeApp:
         status = self.status()
         return status["frame_age"] if status and status["frame_age"] >= 0 else None
 
-    def start(self, video: str | None = None, audio: str | None = DEFAULT_AUDIO, timeout: float = 10,
+    def start(self, video: str | None = None,
+              audio: str | None | _AudioPreference = _AudioPreference.SAVED, timeout: float = 10,
               visible: bool = False, host: str | None = None) -> int:
         """Launch the app unless it runs. PS5MCP_VIDEO=file:PATH or synthetic runs it without the card.
 
         With the card it is launched through `open`, so macOS asks for camera/microphone permission for the app
-        itself rather than for the terminal that started it.
+        itself rather than for the terminal that started it. Omitted video/audio selections
+        use the app's saved settings; explicit audio=None disables audio.
         """
         if (status := self.status()) is not None:
             if visible:
@@ -234,17 +254,23 @@ class NativeApp:
             return status["pid"]
         if not self.binary.exists():
             raise CaptureError(f"{self.binary} missing; run make")
-        video = video or os.environ.get("PS5MCP_VIDEO", DEFAULT_VIDEO)
+        video = video if video is not None else os.environ.get("PS5MCP_VIDEO")
+        audio = _audio_override(audio)
         host = host or os.environ.get("PS5_HOST")
-        if video.startswith("file:") or video == "synthetic":
+        test_source = video is not None and (video.startswith("file:") or video == "synthetic")
+        if test_source:
             audio = None
-        args = ["--state-dir", str(self.root), "--video", video, "--audio", audio or "none"]
+        args = ["--state-dir", str(self.root)]
+        if video is not None:
+            args += ["--video", video]
+        if audio is not _AudioPreference.SAVED:
+            args += ["--audio", audio or "none"]
         if host:  # without it the app shows that the console address is missing
             args += ["--host", host]
         if not visible:
             args.append("--headless")
         bundle = self.binary.parents[2]
-        if video.startswith("file:") or video == "synthetic" or bundle.suffix != ".app":
+        if test_source or bundle.suffix != ".app":
             with self.log.open("ab") as log:
                 process = subprocess.Popen([str(self.binary), *args], stdin=subprocess.DEVNULL, stdout=log,
                                            stderr=log, start_new_session=True)
@@ -257,7 +283,7 @@ class NativeApp:
             if process is not None and process.poll() is not None:
                 raise CaptureError(f"PS5 app exited with {process.returncode}; see {self.log}")
             status = self.status()
-            if status and status["frames"] > 0:
+            if status and (status["frames"] > 0 or status.get("source") == "unavailable"):
                 return status["pid"]
             time.sleep(0.2)
         if process is None:
@@ -311,7 +337,7 @@ def backend(root: Path | None = None) -> Daemon | NativeApp:
     return native
 
 
-def grab_direct(destination: Path, video: str = DEFAULT_VIDEO, timeout: float = 10) -> None:
+def grab_direct(destination: Path, video: str | None = None, timeout: float = 10) -> None:
     """Open the device for one frame. Fails if the daemon (or anything else) holds it."""
     # The first frames after opening can be dark while the card locks the signal.
     command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", *_input_args(video, None),

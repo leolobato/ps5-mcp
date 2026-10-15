@@ -207,11 +207,23 @@ extension Hub {
             reply(conn, request, status())
         case "snapshot":
             reply(conn, request, ["ok": sink.writeNow(), "path": stateDir + "/latest.jpg"])
+        case "capture_restart":
+            guard let video = request["video"] as? String else { throw BadInput("missing video") }
+            let audio = request["audio"] as? String
+            try lease.check(conn: conn.id)
+            DispatchQueue.main.async {
+                do {
+                    guard let ui = self.ui else { throw BadInput("capture UI is not ready") }
+                    try ui.restartCapture(video: video, audio: audio == "none" ? nil : audio)
+                    self.reply(conn, request, ["ok": true])
+                } catch { self.fail(conn, request, error) }
+            }
         case "show", "hide":
             DispatchQueue.main.async { self.ui?.setVisible(cmd == "show") }
             reply(conn, request, ["ok": true])
         case "watch_change":
             // Arms change detection; answers twice: once armed, then when the frame changes or after `timeout_s`.
+            let sink = self.sink // A timeout belongs to the source that was armed, even across capture restarts.
             let threshold = request["threshold"] as? Double ?? 6.0
             let timeout = request["timeout_s"] as? Double ?? 2.0
             let done = DispatchSemaphore(value: 0)

@@ -7,15 +7,30 @@ protocol HubUI: AnyObject {
     func setVisible(_ visible: Bool)
     func refresh()
     func willQuit()
+    func restartCapture(video: String, audio: String?) throws
 }
 
 final class Hub {
     let config: Config
-    let sink: FrameSink
+    private var currentSink: FrameSink
+    var sink: FrameSink {
+        lock.lock(); defer { lock.unlock() }; return currentSink
+    }
+    private(set) var captureVideo = ""
+    private(set) var captureAudio: String?
+    private var captureIssueText: String?
+    private(set) var captureIssue: String? {
+        get { lock.lock(); defer { lock.unlock() }; return captureIssueText }
+        set { lock.lock(); captureIssueText = newValue; lock.unlock() }
+    }
     let controller: PadController
     let padd: PaddRunner
     let lease = Lease()
-    var source: FrameSource!
+    private var currentSource: FrameSource?
+    var source: FrameSource! {
+        get { lock.lock(); defer { lock.unlock() }; return currentSource }
+        set { lock.lock(); currentSource = newValue; lock.unlock() }
+    }
     weak var ui: HubUI?
     private(set) var assigner: Assigner?
     private(set) var visible = false
@@ -36,7 +51,7 @@ final class Hub {
 
     init(config: Config) {
         self.config = config
-        sink = FrameSink(path: config.stateDir + "/latest.jpg", fps: config.snapshotFPS)
+        currentSink = FrameSink(path: config.stateDir + "/latest.jpg", fps: config.snapshotFPS)
         controller = PadController(host: config.host, port: config.port)
         padd = PaddRunner(config: config)
         padd.hub = self
@@ -62,17 +77,47 @@ final class Hub {
 
     /// Creates the frame source, the API and the padd link. The UI starts the source once the preview layer is
     /// attached: starting a capture session while a preview layer joins it crashes AVFoundation.
-    func start() throws {
-        switch config.video {
+    func start() {
+        configureCapture(video: config.video, audio: config.audio)
+        serveApi()
+        controller.start()
+    }
+
+    /// Called on the main thread after the previous source and preview have been stopped and detached.
+    func configureCapture(video: String, audio: String?) {
+        captureVideo = video
+        captureAudio = audio
+        captureIssue = nil
+        sink.invalidate()
+        lock.lock()
+        currentSink = FrameSink(path: stateDir + "/latest.jpg", fps: config.snapshotFPS)
+        lock.unlock()
+        try? FileManager.default.removeItem(atPath: stateDir + "/latest.jpg")
+        switch video {
+        case "":
+            source = UnavailableSource()
+            captureIssue = "Choose a capture device in Settings (⌘,)."
         case "synthetic":
             source = SyntheticSource(sink: sink)
         case let video where video.hasPrefix("file:"):
             source = FileSource(path: String(video.dropFirst(5)), sink: sink)
         default:
-            source = try CameraSource(video: config.video, audio: config.audio, sink: sink)
+            do {
+                source = try CameraSource(video: video, audio: audio, sink: sink)
+            } catch {
+                source = UnavailableSource()
+                // The UI is still being built; publish the notice on its first refresh.
+                captureIssue = "Capture unavailable: \(error.localizedDescription). Reconnect the capture card, then use Apply & Restart Capture in Settings."
+            }
         }
-        serveApi()
-        controller.start()
+        if let camera = source as? CameraSource {
+            camera.onError = { [weak self, weak camera] message in
+                guard let self, let camera, self.source === camera else { return }
+                self.captureIssue = message
+                self.statusChanged()
+            }
+        }
+        if let captureIssue { say(captureIssue) }
     }
 
     // MARK: clients
@@ -120,7 +165,7 @@ final class Hub {
     func setVisible(_ visible: Bool) { lock.lock(); self.visible = visible; lock.unlock() }
 
     var notice: String? {
-        get { lock.lock(); defer { lock.unlock() }; return noticeText }
+        get { lock.lock(); defer { lock.unlock() }; return noticeText ?? captureIssueText }
         set {
             lock.lock(); noticeText = newValue; lock.unlock()
             if let newValue { say(newValue) }
@@ -164,7 +209,8 @@ final class Hub {
     func status() -> [String: Any] {
         let link = controller.status()
         lock.lock()
-        let shown = visible, clients = connections.count, note = noticeText
+        let shown = visible, clients = connections.count, note = noticeText ?? captureIssueText
+        let sink = currentSink, source = currentSource
         lock.unlock()
         return ["ok": true, "api": apiVersion, "version": AppVersion.short, "build": AppVersion.build, "pid": Int(getpid()), "frames": sink.frames, "frame_age": sink.frameAge,
                 "visible": shown, "now": uptimeSeconds(), "source": source?.name ?? "none", "clients": clients,
