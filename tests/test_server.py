@@ -248,3 +248,10 @@ async def test_looking_keeps_a_claim_alive(hub):
     await server.mcp.call_tool("snapshot", {"max_width": 320})
     info = json.loads(text(await server.mcp.call_tool("status", {})))
     assert info["claim"]["owner"]["expires_in_s"] >= 9
+
+
+async def test_ps_button_and_type_text_explain_the_remote_play_requirement(runtime):
+    for tool, args in (("ps_button", {}), ("type_text", {"text": "hello"}), ("close_keyboard", {})):
+        assert "need Remote Play" in text(await server.mcp.call_tool(tool, args))
+    assert "hold_ms" in text(await server.mcp.call_tool("ps_button", {"hold_ms": 5000}))
+    assert reports(runtime)[-1] == 0

@@ -43,6 +43,21 @@ final class Lease {
     /// Called (off the lock) whenever the owner or the queue changes.
     var onChange: (() -> Void)?
 
+    /// Capture recovery may serve its initiating owner, but cannot take over a later claim.
+    func recoveryAuthorization() -> () throws -> Void {
+        lock.lock(); let original = owner?.conn; lock.unlock()
+        return { [self] in
+            lock.lock()
+            let changed = expire(uptimeSeconds())
+            let current = owner?.conn
+            lock.unlock()
+            if changed { onChange?() }
+            if let current, current != original {
+                throw ApiError(code: "leased", message: "The console has been claimed by another connection. Reconnect Remote Play after that claim is released.")
+            }
+        }
+    }
+
     /// Claims the console for `conn`, or joins (or keeps its place in) the queue. Returns `view(conn)`.
     func claim(conn: Int, client: String, reason: String, idle: Double) -> [String: Any] {
         let now = uptimeSeconds()

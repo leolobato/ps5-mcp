@@ -91,6 +91,12 @@ final class Sidebar: NSStackView {
         let close = button("closeApp", "Close game/app", "xmark.circle", #selector(AppDelegate.closeApp), target)
         close.toolTip = "Close the game or app that is running now"
         full(row([button("home", "Home", "house", #selector(AppDelegate.home), target), close]))
+        let ps = button("psButton", "PS", "playstation.logo", #selector(AppDelegate.psButton), target)
+        ps.toolTip = "Press the PS button through Remote Play: the control center (P). ⌥-click holds it, which goes home."
+        ps.setAccessibilityLabel("PS button")
+        let type = button("typeText", "Type…", "keyboard", #selector(AppDelegate.typeText), target)
+        type.toolTip = "Type into the PS5 text field whose keyboard is open (Remote Play)"
+        full(row([ps, type]))
         let release = button("releaseAll", "Release all input", "hand.raised", #selector(AppDelegate.releaseAll), target)
         release.toolTip = "Release every held button, stick and trigger (⌘.)"
         full(release)
@@ -175,6 +181,7 @@ final class Sidebar: NSStackView {
             ("Tab", "Options"),
             ("T", "Touchpad"),
             ("H", "Home screen"),
+            ("P", "PS button (Remote Play)"),
         ] {
             let keyLabel = NSTextField(labelWithString: key)
             keyLabel.font = .monospacedSystemFont(ofSize: 11, weight: .medium)
@@ -301,6 +308,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
     private var videoRecorder: VideoRecorder?
     /// From Stop until the video is saved or discarded (the save sheet included).
     private var videoSaving = false
+    private var afterVideoSaved: [() -> Void] = []
     private var installing: Process?
     private var uninstallSheet: UninstallSheet?
     private let playbackLock = NSLock()
@@ -398,10 +406,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         video.layer?.addSublayer(previewLayer)
     }
 
-    func restartCapture(video: String, audio: String?) throws {
+    /// Validate before removing credentials or otherwise committing to a capture change.
+    /// Both validation and restart run synchronously on the main thread.
+    func validateCaptureChange() throws {
         guard videoRecorder == nil, !videoSaving else {
             throw BadInput("Stop and save the video recording before changing capture devices.")
         }
+    }
+
+    func restartCapture(video: String, audio: String?) throws {
+        try validateCaptureChange()
         hub.source.stop()
         (previewLayer as? AVCaptureVideoPreviewLayer)?.session = nil
         previewLayer.removeFromSuperlayer()
@@ -558,7 +572,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
     }
 
     private func drawFrame() {
-        guard imageLayer != nil, !videoHidden, window.isVisible, let image = hub.sink.latestImage() else { return }
+        guard imageLayer != nil, !videoHidden, window.isVisible else { return }
+        let image = hub.sink.latestImage()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         imageLayer?.contents = image
@@ -677,7 +692,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
             sidebar.set("In use by", "nobody")
         }
         sidebar.buttons["forceRelease"]?.isEnabled = lease["owner"] is [String: Any]
-        sidebar.notice.stringValue = hub.notice ?? ""
+        sidebar.notice.stringValue = hub.notice ?? (hub.source as? RemotePlaySource)?.status.summary ?? ""
         let canRun = busy == nil && hub.padd.json["available"] as? Bool == true
         let fileManagerBusy = titlesLoading || installing != nil  // Web File Manager runs one task at a time
         sidebar.buttons["paddStart"]?.isEnabled = canRun && !link.connected && !fileManagerBusy
@@ -697,6 +712,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         sidebar.setButton("install", title: installing == nil ? "Install…" : "Installing…",
                           symbol: "square.and.arrow.down")
         for id in ["home", "closeApp", "releaseAll"] { sidebar.buttons[id]?.isEnabled = link.connected }
+        let remote = (hub.source as? RemotePlaySource)?.status
+        let live = remote.map { $0.phase == .streaming && $0.videoReady } ?? false
+        sidebar.buttons["psButton"]?.isEnabled = live
+        sidebar.buttons["typeText"]?.isEnabled = live && remote?.keyboardOpen == true && typeSheet == nil
         sidebar.buttons["launch"]?.isEnabled = link.connected && selectedTitle != nil
         sidebar.buttons["reloadTitles"]?.isEnabled = !titlesLoading && busy == nil && installing == nil
         sidebar.titles.isEnabled = !titleList.isEmpty
@@ -828,6 +847,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
 
     @objc func home() {
         background { _ = try self.hub.command("home", "", link: self.hub.controller.currentLink()) }
+    }
+
+    private var typeSheet: NSAlert?
+
+    @objc func psButton() {
+        let hold = NSEvent.modifierFlags.contains(.option) ? 1000 : 100
+        let epoch = hub.controller.inputEpoch
+        background {
+            do { try self.hub.pressPSButton(holdMS: hold, epoch: epoch, human: true) }
+            catch { throw BadInput("PS button: \(remotePlayInputMessage(error))") }
+        }
+    }
+
+    /// The PS5 hands its keyboard to Remote Play ("Use the keyboard on your Remote Play device"): type here.
+    @objc func typeText() {
+        guard typeSheet == nil else { return }
+        let alert = NSAlert()
+        alert.messageText = "Type on the PS5"
+        alert.informativeText = "Send replaces the text field's content and closes the keyboard. Hand Back shows the "
+            + "PS5's own keyboard, for the controller."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+        field.placeholderString = "Text for the PS5"
+        field.setAccessibilityLabel("Text for the PS5")
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Send")
+        alert.addButton(withTitle: "Hand Back")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        typeSheet = alert
+        refresh()
+        alert.beginSheetModal(for: window) { response in
+            self.typeSheet = nil
+            let text = field.stringValue
+            let epoch = self.hub.controller.inputEpoch
+            switch response {
+            case .alertFirstButtonReturn:
+                guard text.utf8.count <= Int(RP_KEYBOARD_TEXT_MAX), !text.utf8.contains(0) else {
+                    self.hub.notice = "Text is too long for the PS5 keyboard (\(RP_KEYBOARD_TEXT_MAX) bytes at most)."
+                    return
+                }
+                self.background {
+                    do {
+                        let (result, submitted) = try self.hub.setRemoteText(text, submit: true, timeout: 3,
+                                                                             epoch: epoch, human: true)
+                        if !submitted { self.hub.notice = "The PS5 did not confirm the text (\(result)); it was not submitted." }
+                    } catch { throw BadInput("Type: \(remotePlayInputMessage(error))") }
+                }
+            case .alertSecondButtonReturn:
+                self.background {
+                    do { try self.hub.closeRemoteKeyboard(accept: false, epoch: epoch, human: true) }
+                    catch { throw BadInput("Hand back: \(remotePlayInputMessage(error))") }
+                }
+            default:
+                self.window.makeFirstResponder(self.video)
+                self.refresh()
+            }
+        }
     }
 
     @objc func closeApp() {
@@ -1149,6 +1225,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
             var outcome = "Played \(name)."
             do {
                 for (state, seconds) in states {
+                    if self.stopPlayback { throw CancellationError() }
                     try self.hub.controller.set(client: "play", state)
                     deadline += seconds
                     while uptimeSeconds() < deadline {
@@ -1249,6 +1326,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         }
     }
 
+    /// A reconnect starts a new clock. Save the old timeline before accepting a new recording.
+    func remotePlayStreamLost(completion: (() -> Void)? = nil) {
+        stopPlayback = true
+        hub.controller.release(client: "play")
+        if let completion { afterVideoSaved.append(completion) }
+        if videoSaving { return }
+        guard let recorder = videoRecorder else {
+            let ready = afterVideoSaved
+            afterVideoSaved.removeAll()
+            ready.forEach { $0() }
+            return
+        }
+        stopVideo(recorder) { [weak self] reason in
+            guard let self else { return }
+            if let reason { self.videoSaved("Remote Play recording stopped: \(reason)"); return }
+            // Keep the finished file at its unique state-directory path; never overwrite another recording.
+            self.videoSaved("Remote Play disconnected. Recording saved to \(recorder.url.path)")
+        }
+    }
+
     private func stopVideo(_ recorder: VideoRecorder, _ done: @escaping (String?) -> Void) {
         hub.sink.record(nil)
         videoRecorder = nil
@@ -1261,6 +1358,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         videoSaving = false
         hub.notice = notice
         refresh()
+        let ready = afterVideoSaved
+        afterVideoSaved.removeAll()
+        ready.forEach { $0() }
     }
 
     /// Moves the finished file into place; returns the notice to show.

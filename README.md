@@ -4,7 +4,7 @@
 
 # PS5 MCP
 
-See and control a jailbroken PS5 from an MCP agent or your keyboard, with live HDMI video and audio.
+See and control a jailbroken PS5 from an MCP agent or your keyboard, with live video and audio.
 **macOS only for now,** Windows and Linux support is planned.
 
 <p align="center">
@@ -57,7 +57,7 @@ when they first need it. Without zftpd, `push` is slower and `pull` copies singl
 ## Setup
 
 ```sh
-brew install llvm@18 ffmpeg mpv uv xcodegen
+brew install llvm@18 ffmpeg mpv uv xcodegen cmake ninja pkg-config
 make bootstrap      # pinned SDK and Python environment
 make check          # lint, tests, payloads, and the macOS release app
 ```
@@ -163,13 +163,15 @@ Quit with **⌘Q** or `uv run ps5mcp capture stop`.
 | Capture and status | `snapshot`, `status`, `show_viewer` |
 | Controller input | `press`, `hold`, `stick`, `trigger`, `touchpad`, `sequence`, `release_all` |
 | Console apps | `home`, `close_app`, `launch`, `list_apps`, `install`, `uninstall_apps` |
+| Remote Play only | `ps_button`, `type_text`, `close_keyboard` |
 | File transfer | `push`, `pull` |
 | Visual automation | `save_template`, `list_templates`, `wait_for`, `wait_for_change` |
 | Recording | `record_start`, `record_stop`, `list_recordings`, `play_recording` |
 | Sharing | `claim_console`, `release_console` |
 
 Input tools can return a frame with `snapshot_after_ms`. `home` suspends the game like the PS button;
-use `press("circle")` to back out of system screens. A game takes input only from the controller that launched it,
+use `press("circle")` to back out of system screens. With Remote Play as the video source, `ps_button` presses the
+real PS button (control center) and `type_text` fills the text field whose on-screen keyboard is open. A game takes input only from the controller that launched it,
 so launch games with `launch` to control them through the MCP.
 
 ### Sharing the console
@@ -259,6 +261,14 @@ The ffmpeg fallback requires an explicit device: `uv run ps5mcp capture start --
 `uv run ps5mcp view --backend ffmpeg`. Run it from a regular terminal with camera and microphone permission.
 Use `uv run ps5mcp devices` to list devices and `--audio "DEVICE NAME"` to enable audio. Its legacy format defaults
 are 1080p, 60 fps, and `uyvy422`; cards that do not support that mode require adjusting the FFmpeg capture settings.
+
+## Remote Play (in development)
+
+The native app also has a LAN Remote Play source and a TV-assisted offline-account setup wizard.
+It replaces capture-card video/audio while `padd` continues controlling the console. Live 1080p video/audio and automatic recovery are verified on the existing 13.60 test account;
+full replacement acceptance remains pending; see [setup, validation status, and recovery](docs/remote-play.md).
+Chiaki-ng is pinned as a submodule and built statically for the app. PS5 MCP now uses AGPL-3.0-only;
+[dependency notices](third-party/README.md) retain their upstream licenses.
 
 ## Hardware runs
 

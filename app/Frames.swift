@@ -27,6 +27,7 @@ final class FrameSink: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate,
     private let writeLock = NSLock() // held while encoding latest.jpg, so frames keep flowing under `lock`
     private var latest: CVPixelBuffer?
     private var active = true
+    private var timeline: UInt64 = 0
     private var lastWrite = 0.0
     private let path: String
     private let interval: Double
@@ -49,15 +50,36 @@ final class FrameSink: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate,
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer,
                        from connection: AVCaptureConnection) {
         if output is AVCaptureAudioDataOutput {
-            lock.lock()
-            if audioFormat == nil { audioFormat = CMSampleBufferGetFormatDescription(sampleBuffer) }
-            let recorder = recorder
-            lock.unlock()
-            recorder?.append(audio: sampleBuffer)
+            push(audio: sampleBuffer)
             return
         }
         guard let buffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         push(buffer, at: CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
+    }
+
+    /// Audio from any source, independently of speaker mute.
+    func push(audio sample: CMSampleBuffer) {
+        lock.lock()
+        guard active else { lock.unlock(); return }
+        if audioFormat == nil { audioFormat = CMSampleBufferGetFormatDescription(sample) }
+        let recorder = recorder
+        lock.unlock()
+        recorder?.append(audio: sample)
+    }
+
+    /// End a disconnected stream's timeline without retiring the source.
+    func clear() {
+        writeLock.lock(); defer { writeLock.unlock() }
+        lock.lock(); defer { lock.unlock() }
+        guard active else { return } // an old source must not unlink its replacement's snapshot
+        timeline &+= 1
+        latest = nil
+        lastFrameAt = 0
+        lastWrite = 0
+        audioFormat = nil
+        recorder = nil
+        reference = nil
+        try? FileManager.default.removeItem(atPath: path)
     }
 
     /// `time` is on the capture clock; the camera-free sources use the host clock.
@@ -70,13 +92,13 @@ final class FrameSink: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate,
         lastFrameAt = now
         let callback = watchCallback
         let recorder = recorder
+        let timeline = timeline
+        let shouldWrite = now - lastWrite >= interval
+        if shouldWrite { lastWrite = now }
         lock.unlock()
         recorder?.append(buffer, at: time)
-        if callback != nil { checkChange(buffer, at: now) }
-        if now - lastWrite >= interval {
-            lastWrite = now
-            write(buffer)
-        }
+        if callback != nil { checkChange(buffer, at: now, timeline: timeline) }
+        if shouldWrite { write(buffer, timeline: timeline) }
     }
 
     /// Frames (and audio) go to `recorder` from the next one on; nil stops feeding it.
@@ -99,15 +121,18 @@ final class FrameSink: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate,
 
     @discardableResult
     func writeNow() -> Bool {
-        guard let buffer = latestBuffer() else { return false }
-        return write(buffer)
+        lock.lock()
+        let buffer = latest, timeline = timeline
+        lock.unlock()
+        guard let buffer else { return false }
+        return write(buffer, timeline: timeline)
     }
 
     @discardableResult
-    private func write(_ buffer: CVPixelBuffer) -> Bool {
+    private func write(_ buffer: CVPixelBuffer, timeline: UInt64) -> Bool {
         writeLock.lock(); defer { writeLock.unlock() }
-        lock.lock(); let active = self.active; lock.unlock()
-        guard active else { return false }
+        lock.lock(); let current = active && self.timeline == timeline; lock.unlock()
+        guard current else { return false }
         let image = CIImage(cvPixelBuffer: buffer)
         guard let cg = ci.createCGImage(image, from: image.extent) else { return false }
         let tmp = path + ".\(UUID().uuidString).tmp"  // the frame queue and the control socket may write at once
@@ -125,6 +150,7 @@ final class FrameSink: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate,
         writeLock.lock(); defer { writeLock.unlock() }
         lock.lock(); defer { lock.unlock() }
         active = false
+        timeline &+= 1
         latest = nil
         watchCallback = nil
         reference = nil
@@ -148,11 +174,11 @@ final class FrameSink: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate,
         return out
     }
 
-    private func checkChange(_ buffer: CVPixelBuffer, at now: Double) {
+    private func checkChange(_ buffer: CVPixelBuffer, at now: Double, timeline: UInt64) {
         let current = luma(buffer)
         lock.lock()
         defer { lock.unlock() }
-        guard let callback = watchCallback else { return }
+        guard active, self.timeline == timeline, let callback = watchCallback else { return }
         guard let reference else {
             self.reference = current
             return

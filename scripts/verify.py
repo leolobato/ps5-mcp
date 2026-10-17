@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-PAYLOADS = ("padd.elf",)
+PAYLOADS = ("padd.elf", "remoteplay-setup.elf", "remoteplay-admit.elf")
 
 
 def padd_version(source: Path = ROOT / "payload/padd.c") -> str:

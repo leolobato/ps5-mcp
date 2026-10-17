@@ -164,6 +164,17 @@ class AppClient:
         timeout = wait + COMMAND_TIMEOUT_S + self.timeout
         return self.call("command", op=op, arg=arg, wait=wait, timeout=timeout)["status"]
 
+    # -- Remote Play controller (PS button, on-screen keyboard; everything else goes through padd) ------
+    def ps_button(self, hold_ms: int = 100) -> None:
+        self.call("rp_button", button="ps", hold_ms=hold_ms, timeout=hold_ms / 1000 + 5 + self.timeout)
+
+    def keyboard_text(self, text: str, submit: bool = False, timeout_s: float = 3.0) -> dict:
+        """Replace the open PS5 text field's text; `result` is confirmed, differs, closed or timeout."""
+        return self.call("rp_text", text=text, submit=submit, timeout_s=timeout_s, timeout=timeout_s + 5 + self.timeout)
+
+    def keyboard_close(self, accept: bool) -> None:
+        self.call("rp_keyboard_close", accept=accept, timeout=5 + self.timeout)
+
     def status(self) -> dict:
         return self.call("status")
 

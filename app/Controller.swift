@@ -54,6 +54,8 @@ final class PadController {
     private var dirty = true
     private var paused = false
     private var stopped = false
+    private var inputBlock: String?
+    private var inputGeneration: UInt64 = 0
     private var connecting = false
     private var lastMerged = PadState.neutral
     /// The console address; `setHost` changes it and the link reconnects there.
@@ -68,6 +70,9 @@ final class PadController {
     var onState: ((PadState, Double) -> Void)?
     /// Run on its own thread after every (re)connect (auto-assign).
     var onConnected: ((PadLink) -> Void)?
+    /// Called (never with the lock held) when held agent input is cancelled: a key goes down, `releaseAll`, or
+    /// Remote Play stops delivering video. Agent input outside padd (the Remote Play PS button) releases here.
+    var onAgentInputCancelled: (() -> Void)?
 
     init(host: String, port: UInt16, keepalive: Double = 0.1) {
         target = host
@@ -92,8 +97,43 @@ final class PadController {
 
     // MARK: inputs
 
-    func set(client: String, _ state: PadState) throws {
+    /// Remote Play loss releases existing layers and prevents queued presses from starting blind.
+    func setInputBlock(_ reason: String?) {
         cond.lock()
+        inputBlock = reason
+        if reason != nil { inputGeneration &+= 1; keys.removeAll(); agents.removeAll(); changed() }
+        cond.unlock()
+        if reason != nil { onAgentInputCancelled?() }
+        onStatus?()
+    }
+
+    /// The checks a non-neutral `set` makes, for input that bypasses padd (Remote Play PS button, keyboard).
+    /// `human` input (the window) is never refused because keys are held: those keys are the same person's.
+    func authorizeAgentInput(epoch: UInt64, human: Bool = false) throws {
+        cond.lock(); defer { cond.unlock() }
+        if epoch != inputGeneration {
+            throw PadError.failed("Remote Play lost video while input was waiting; pending input was cancelled.")
+        }
+        if let inputBlock { throw PadError.failed(inputBlock) }
+        if !human && !keys.isEmpty { throw PadError.humanHasControl }
+    }
+
+    var inputEpoch: UInt64 { cond.lock(); defer { cond.unlock() }; return inputGeneration }
+
+    func checkInputEpoch(_ epoch: UInt64) throws {
+        cond.lock(); defer { cond.unlock() }
+        if epoch != inputGeneration {
+            throw PadError.failed("Remote Play lost video during this input request; pending input was cancelled.")
+        }
+    }
+
+    func set(client: String, _ state: PadState, epoch: UInt64? = nil) throws {
+        cond.lock()
+        if let epoch, epoch != inputGeneration, !state.isNeutral {
+            cond.unlock()
+            throw PadError.failed("Remote Play lost video while input was waiting; pending input was cancelled.")
+        }
+        if let inputBlock, !state.isNeutral { cond.unlock(); throw PadError.failed(inputBlock) }
         if !keys.isEmpty && !state.isNeutral { cond.unlock(); throw PadError.humanHasControl }
         if state.isNeutral { agents.removeValue(forKey: client) } else { agents[client] = state }
         changed()
@@ -104,7 +144,7 @@ final class PadController {
     func key(_ id: String, _ state: PadState?) {
         cond.lock()
         let wasHuman = !keys.isEmpty
-        if let state {
+        if let state, inputBlock == nil {
             keys[id] = state
             agents.removeAll()  // a human taking over cancels any agent hold
         } else {
@@ -113,11 +153,14 @@ final class PadController {
         let isHuman = !keys.isEmpty
         changed()
         cond.unlock()
+        if isHuman { onAgentInputCancelled?() }
         if wasHuman != isHuman { onStatus?() }
     }
 
-    func release(client: String) {
+    func release(client: String, epoch: UInt64? = nil) {
         cond.lock()
+        // A cancelled request must not release a new hold created after recovery.
+        if let epoch, epoch != inputGeneration { cond.unlock(); return }
         agents.removeValue(forKey: client)
         changed()
         cond.unlock()
@@ -130,6 +173,7 @@ final class PadController {
         agents.removeAll()
         changed()
         cond.unlock()
+        onAgentInputCancelled?()
         if wasHuman { onStatus?() }
     }
 
@@ -314,7 +358,7 @@ let defaultKeymap: [String: KeyAction] = {
         "[": b("square"), "]": b("triangle"), "q": b("l1"), "e": b("r1"), "z": .pad(l2), "c": .pad(r2),
         "w": axis { $0.ly = 0 }, "s": axis { $0.ly = 255 }, "a": axis { $0.lx = 0 }, "d": axis { $0.lx = 255 },
         "i": axis { $0.ry = 0 }, "k": axis { $0.ry = 255 }, "j": axis { $0.rx = 0 }, "l": axis { $0.rx = 255 },
-        "tab": b("options"), "t": b("touchpad"), "h": .command("home"),
+        "tab": b("options"), "t": b("touchpad"), "h": .command("home"), "p": .command("ps"),
     ]
 }()
 

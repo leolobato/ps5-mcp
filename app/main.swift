@@ -4,7 +4,7 @@
 // - Owns the only padd connection (TCP 9305); keyboard and every API client feed one merged pad state.
 // - Local API on <state>/capture.sock (docs/app-api.md); the MCP server is a thin client of it.
 //
-// Usage: PS5 [--state-dir DIR] [--video NAME|file:PATH|synthetic] [--audio NAME|none] [--headless]
+// Usage: PS5 [--state-dir DIR] [--video NAME|remoteplay|file:PATH|synthetic] [--audio NAME|none] [--headless]
 //            [--host H] [--port N] [--no-auto-assign] [--padd-cli EXE] [--snapshot-fps N]
 //        PS5 --dialog-score IMAGE   (prints the assignment-dialog match score and exits)
 
@@ -25,6 +25,8 @@ struct Config {
     var firmware = "13.60"
     var homeMethod = ProcessInfo.processInfo.environment["PS5MCP_HOME_METHOD"] ?? "suspend"
     var autoAssign = ProcessInfo.processInfo.environment["PS5MCP_AUTO_ASSIGN"] != "0"
+    /// Remote Play asks the console for its on-screen keyboard (MCP type_text). PS5MCP_RP_KEYBOARD=0 turns it off.
+    var remotePlayKeyboard = ProcessInfo.processInfo.environment["PS5MCP_RP_KEYBOARD"] != "0"
     /// Baked into Info.plist by the Makefile: the repo (for the padd CLI and its archive) and uv.
     var repo = Bundle.main.object(forInfoDictionaryKey: "PS5MCPRepo") as? String
     var uv = Bundle.main.object(forInfoDictionaryKey: "PS5MCPUV") as? String
@@ -50,6 +52,7 @@ struct Config {
             case "--dialog-score": dialogScore = value; i += 1
             case "--headless": headless = true
             case "--no-auto-assign": autoAssign = false
+            case "--no-remoteplay-keyboard": remotePlayKeyboard = false
             default: break
             }
             i += 1

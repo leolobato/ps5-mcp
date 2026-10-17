@@ -101,7 +101,8 @@ mcp = MCPServer(
     instructions=(
         "Controls a PS5 through a virtual DualSense and sees it through an HDMI capture card. "
         "Call snapshot() to look before acting. Buttons: " + ", ".join(p.BUTTONS) + ". "
-        "Cross confirms, circle goes back. The PS button cannot be pressed; use home() instead. "
+        "Cross confirms, circle goes back. The pad cannot send the PS button: use home() to go home, or, when "
+        "Remote Play is the video source, ps_button() (control center) and type_text() for text fields. "
         "If a tool says a human has control, wait and retry. "
         "The console is shared with other agents: call claim_console(reason) before a task so nobody interrupts "
         "you, and release_console() when done. If a tool says the PS5 is in use, call claim_console(reason, "
@@ -373,7 +374,7 @@ async def _command(op: str, arg: str = "") -> int:
 @mcp.tool(structured_output=False)
 @_errors
 async def home(method: str = HOME_METHOD, snapshot_after_ms: int | None = 1500):
-    """Go to the PS5 home screen (stands in for the PS button, which the pad cannot send).
+    """Go to the PS5 home screen (stands in for the PS button, which the pad cannot send; see ps_button()).
 
     method: "suspend" (suspend the running game, as the PS button does), "system" or "shellcore".
     From system screens such as Settings, press circle instead.
@@ -382,6 +383,57 @@ async def home(method: str = HOME_METHOD, snapshot_after_ms: int | None = 1500):
         raise ValueError(f"method must be one of {', '.join(p.HOME_METHODS)}")
     status = await _command("home", method)
     return await _result(f"home ({method}): status {status & 0xFFFFFFFF:#x}", snapshot_after_ms)
+
+
+@mcp.tool(structured_output=False)
+@_errors
+async def ps_button(hold_ms: int = 100, snapshot_after_ms: int | None = 1000):
+    """Press the PS button through Remote Play's controller (only while Remote Play is the video source).
+
+    A tap opens the control center; holding about a second goes to the home screen. hold_ms: 1..2000. The control
+    center includes Power: never choose Restart or Turn Off unless the user asked for it.
+    """
+    if not 0 < hold_ms <= 2000:
+        raise ValueError("hold_ms must be 1..2000")
+    app = await _app()
+    await asyncio.to_thread(app.ps_button, hold_ms)
+    return await _result(f"pressed PS for {hold_ms} ms", snapshot_after_ms)
+
+
+KEYBOARD_RESULTS = {
+    "confirmed": "the PS5 shows the text",
+    "differs": "the PS5 changed the text (for example a length limit); check the snapshot",
+    "closed": "the keyboard closed before the PS5 answered",
+    "timeout": "the PS5 did not answer; check the snapshot",
+}
+
+
+@mcp.tool(structured_output=False)
+@_errors
+async def type_text(text: str, submit: bool = False, snapshot_after_ms: int | None = 500):
+    """Fill the PS5 text field whose on-screen keyboard is open (only while Remote Play is the video source).
+
+    Select a text field first (cross on it) so the keyboard shows. The text replaces the field's content; it is not
+    appended. submit=True closes the keyboard and keeps the text once the PS5 shows it. Up to 1024 UTF-8 bytes.
+    The PS5 shows "Use the keyboard on your Remote Play device" instead of its own keyboard while this is possible;
+    close_keyboard() hands the field back to its normal keyboard.
+    """
+    app = await _app()
+    reply = await asyncio.to_thread(app.keyboard_text, text, submit)
+    message = f"typed {len(text)} characters: {KEYBOARD_RESULTS.get(reply['result'], reply['result'])}"
+    if submit:
+        message += "; submitted" if reply["submitted"] else "; not submitted"
+    return await _result(message, snapshot_after_ms)
+
+
+@mcp.tool(structured_output=False)
+@_errors
+async def close_keyboard(accept: bool = False, snapshot_after_ms: int | None = 500):
+    """Finish Remote Play text entry: accept=True keeps the text and closes the keyboard; False keeps the text and
+    shows the PS5's own on-screen keyboard again (for press(), or a controller)."""
+    app = await _app()
+    await asyncio.to_thread(app.keyboard_close, accept)
+    return await _result("keyboard closed" if accept else "keyboard handed back to the PS5", snapshot_after_ms)
 
 
 @mcp.tool(structured_output=False)
@@ -563,6 +615,8 @@ async def status() -> dict:
             info["payload"]["pong"] = await asyncio.to_thread(app.ping)
     info["capture"] = {"backend": "NativeApp", "running": True, "source": hub["source"],
                        "frame_age_s": hub["frame_age"] if hub["frame_age"] >= 0 else None}
+    if hub.get("remote_play"):
+        info["capture"]["remote_play"] = hub["remote_play"]  # state, readiness, keyboard.open for type_text
     info["app"] = {"version": hub.get("version"), "build": hub.get("build"), "server_version": version("ps5-mcp"),
                    "pid": hub["pid"], "clients": hub["clients"], "agents_holding": link["agent_layers"],
                    "visible": hub["visible"], "notice": hub["notice"], "padd": hub["padd"]}

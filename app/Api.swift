@@ -7,6 +7,8 @@ import Foundation
 
 let apiVersion = 1
 let maxHoldMS = 10_000
+/// A PS-button tap opens the control center, about a second goes home; longer holds have no use.
+let maxRemoteHoldMS = 2_000
 /// The PS5 drops a press that follows a release too closely, so every press ends with this much neutral.
 let releaseGapSeconds = 0.06
 
@@ -113,9 +115,10 @@ final class Connection {
     func wants(_ name: String) -> Bool { lock.lock(); defer { lock.unlock() }; return events.contains(name) }
 }
 
-struct ApiError: Error {
+struct ApiError: Error, CustomStringConvertible {
     let code: String
     let message: String
+    var description: String { message }
 }
 
 extension Hub {
@@ -166,6 +169,7 @@ extension Hub {
         switch error {
         case let error as ApiError: (code, message) = (error.code, error.message)
         case PadError.humanHasControl: (code, message) = ("human_has_control", "\(error)")
+        case let error as RemotePlayInputError: (code, message) = ("remote_play", error.message)
         case let error as BadInput: (code, message) = ("bad_request", error.description)
         default: (code, message) = ("pad_error", "\(error)")
         }
@@ -174,7 +178,8 @@ extension Hub {
 
     /// Quick commands run in order on the connection's thread; blocking ones run concurrently.
     private func handle(_ cmd: String, _ request: [String: Any], _ conn: Connection) {
-        let blocking: Set<String> = ["press", "status", "watch_change", "command", "ping", "padd_start", "padd_stop", "padd_update", "snapshot"]
+        let blocking: Set<String> = ["press", "status", "watch_change", "command", "ping", "padd_start", "padd_stop", "padd_update", "snapshot",
+                                     "rp_button", "rp_text", "rp_keyboard_close"]
         lease.touch(conn: conn.id)
         let work = {
             do {
@@ -240,24 +245,27 @@ extension Hub {
             reply(conn, request, ["ok": true])
             DispatchQueue.main.async { self.quit() }
         case "set":
+            let epoch = controller.inputEpoch
             let state = try state(request)
             if !state.isNeutral {
                 try lease.check(conn: conn.id)
                 _ = try requireLink(request, default: 0)
             }
-            try controller.set(client: conn.layer(request["client"] as? String), state)
+            try controller.set(client: conn.layer(request["client"] as? String), state, epoch: epoch)
             reply(conn, request, ["ok": true])
         case "press":
+            let epoch = controller.inputEpoch
             let state = try state(request)
             let holdMS = request["hold_ms"] as? Int ?? 80
             guard holdMS > 0 && holdMS <= maxHoldMS else { throw BadInput("duration must be 1..\(maxHoldMS) ms") }
             try lease.check(conn: conn.id)
             _ = try requireLink(request, default: 2)
             let layer = conn.layer(request["client"] as? String)
-            try controller.set(client: layer, state)
+            try controller.set(client: layer, state, epoch: epoch)
             Thread.sleep(forTimeInterval: Double(holdMS) / 1000)
-            controller.release(client: layer)
+            controller.release(client: layer, epoch: epoch)
             Thread.sleep(forTimeInterval: releaseGapSeconds)
+            try controller.checkInputEpoch(epoch)
             reply(conn, request, ["ok": true])
         case "release":
             controller.release(client: conn.layer(request["client"] as? String))
@@ -281,6 +289,32 @@ extension Hub {
             try lease.check(conn: conn.id)
             let status = try command(op, arg, link: requireLink(request, default: 2))
             reply(conn, request, ["ok": true, "status": Int(status)])
+        case "rp_button":
+            // Remote Play's controller, not padd: no padd link needed.
+            let epoch = controller.inputEpoch
+            guard request["button"] as? String == "ps" else { throw BadInput("button must be ps") }
+            let holdMS = request["hold_ms"] as? Int ?? 100
+            guard holdMS > 0 && holdMS <= maxRemoteHoldMS else { throw BadInput("hold_ms must be 1..\(maxRemoteHoldMS)") }
+            try lease.check(conn: conn.id)
+            try pressPSButton(holdMS: holdMS, epoch: epoch)
+            reply(conn, request, ["ok": true])
+        case "rp_text":
+            let epoch = controller.inputEpoch
+            guard let text = request["text"] as? String else { throw BadInput("missing text") }
+            guard text.utf8.count <= Int(RP_KEYBOARD_TEXT_MAX), !text.utf8.contains(0) else {
+                throw BadInput("text must be at most \(RP_KEYBOARD_TEXT_MAX) UTF-8 bytes, without NUL")
+            }
+            let timeout = request["timeout_s"] as? Double ?? 3
+            guard timeout > 0 && timeout <= 10 else { throw BadInput("timeout_s must be in (0, 10]") }
+            try lease.check(conn: conn.id)
+            let (result, submitted) = try setRemoteText(text, submit: request["submit"] as? Bool ?? false,
+                                                        timeout: timeout, epoch: epoch)
+            reply(conn, request, ["ok": true, "result": "\(result)", "submitted": submitted])
+        case "rp_keyboard_close":
+            let epoch = controller.inputEpoch
+            try lease.check(conn: conn.id)
+            try closeRemoteKeyboard(accept: request["accept"] as? Bool ?? false, epoch: epoch)
+            reply(conn, request, ["ok": true])
         case "ping":
             let pong = try requireLink(request, default: 2).ping()
             reply(conn, request, ["ok": true, "pong": pong.json])

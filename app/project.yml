@@ -15,12 +15,20 @@ targets:
       - path: .
         includes:
           - "*.swift"
+          - "*.c"
+          - "*.h"
       - path: Assets.xcassets
         buildPhase: resources
       - path: ../src/ps5mcp/assets/assign-dialog.png
         buildPhase: resources
       # padd.elf and its build report, staged by the Makefile (empty when the payload was not built).
       - path: ../build/bundle/padd
+        type: folder
+        buildPhase: resources
+      - path: ../build/bundle/remoteplay
+        type: folder
+        buildPhase: resources
+      - path: ../build/bundle/Licenses
         type: folder
         buildPhase: resources
     settings:
@@ -31,6 +39,10 @@ targets:
         MARKETING_VERSION: "0.0.0"
         CURRENT_PROJECT_VERSION: "0"
         SWIFT_VERSION: "5.0"
+        SWIFT_OBJC_BRIDGING_HEADER: RemotePlayBridge.h
+        HEADER_SEARCH_PATHS: "$(inherited) $(SRCROOT)/../.deps/remoteplay/$(CURRENT_ARCH)/install/include"
+        LIBRARY_SEARCH_PATHS: "$(inherited) $(SRCROOT)/../.deps/remoteplay/$(CURRENT_ARCH)/install/lib"
+        OTHER_LDFLAGS: "$(inherited) -lchiaki -lprotobuf-nanopb -ljerasure -lgf_complete -lopus -ljson-c -lminiupnpc -levent -lcurl -lssl -lcrypto -framework CoreServices -framework SystemConfiguration"
         INFOPLIST_FILE: Info.plist
         GENERATE_INFOPLIST_FILE: NO
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

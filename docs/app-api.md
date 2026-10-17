@@ -104,7 +104,7 @@ free, every client drives it as before.
 |---|---|---|
 | `status` | `wait?` (seconds to wait for the padd link) | `pid`, `frames`, `frame_age`, `visible`, `now` (uptime clock = Python `time.monotonic`), `source`, `clients`, `pad` (link, hello, counters, `human_has_control`, `agent_layers`, `paused`), `title`, `notice`, `padd`, `auto_assign` |
 | `snapshot` | | Writes `<state>/latest.jpg` now and returns `path` (it is also rewritten at 5 fps). |
-| `capture_restart` | `video` (device ID/name, `file:PATH`, `synthetic`, or empty to disable), `audio?` (device ID/name or `none`) | Restarts capture without closing API clients. Blocked by another client's lease or an active video recording. Does not save preferences; Settings saves selected device IDs. |
+| `capture_restart` | `video` (device ID/name, `file:PATH`, `synthetic`, `remoteplay`, or empty to disable), `audio?` (device ID/name or `none`) | Restarts capture without closing API clients. Blocked by another client's lease or an active video recording. Does not save preferences; Settings saves selected device IDs. |
 | `watch_change` | `threshold` (6), `timeout_s` (2) | Two replies: `armed_at`, then `changed_at` and `diff`, or `ok: false` on timeout. |
 | `show` / `hide` | | Shows or hides the window. |
 | `quit` | | Releases input, drops the padd link (padd keeps running) and exits. |
@@ -119,7 +119,7 @@ dialog is visible. The match uses the title template at (712, 168), within 24 px
 
 ## Launch options
 
-`"PS5 MCP" [--state-dir DIR] [--video NAME|file:PATH|synthetic] [--audio NAME|none] [--headless] [--host H] [--port N]
+`"PS5 MCP" [--state-dir DIR] [--video NAME|file:PATH|synthetic|remoteplay] [--audio NAME|none] [--headless] [--host H] [--port N]
 [--no-auto-assign] [--padd-cli EXE] [--snapshot-fps N]`
 
 - The console address is `--host`, else `PS5_HOST`, else the address saved in Settings (UserDefaults key
@@ -132,3 +132,47 @@ dialog is visible. The match uses the title template at (712, 168), within 24 px
 - `PS5 --dialog-score IMAGE` prints the auto-assign match score and exits.
 - `capture.NativeApp.start` launches the app. With the card it uses `open`, so macOS asks for camera and
   microphone permission for the app itself.
+
+## Remote Play diagnostics
+
+With `video: "remoteplay"`, audio comes from the Remote Play session. `status.remote_play`
+contains `state`, `error`, `reconnects`, `video_ready`, `audio_ready`, `width`, `height`,
+`generation`, `admission`, and `keyboard` (`enabled`, `open`). With no saved pairing it reports `setup_needed` with
+both media flags false; it is null for other sources. States also include `connecting`,
+`applying_admission`, `waiting_for_video`, `streaming`, `reconnecting`, `unavailable`,
+and `stopped`. Only decoded video makes the source `streaming`; setup verification
+additionally requires audio. Readiness resets when the session changes.
+
+`admission` is `not_attempted`, `applying`, `verified`, or `failed`. The supported
+console may need a temporary compatibility fix after reboot. The app verifies the
+helper's authenticated, request-correlated result before retrying the stream. A
+failed operation stays unavailable until an explicit reconnect; no automatic account
+preparation occurs. Payload Manager must be available. No account ID, pairing PIN,
+session key, or helper token is returned.
+
+Headless clients must use the app's Settings wizard to prepare/pair first. Registration
+is not an API-triggered account mutation. Missing credentials leave the API available,
+without capture-device fallback. Non-neutral input fails while Remote Play has no video;
+release remains available. See [Remote Play](remote-play.md) for validation limits.
+
+### Remote Play controller: PS button and on-screen keyboard
+
+The pad cannot send the PS button ([PS button](ps-button.md)). Remote Play has its own controller, so while it is
+the video source the app exposes two inputs that padd cannot give. All other input still goes through padd.
+
+| cmd | fields | effect |
+|---|---|---|
+| `rp_button` | `button` (`ps`), `hold_ms` (1..2000, default 100) | Holds the PS button on the Remote Play controller, releases it, waits the release gap, then replies. |
+| `rp_text` | `text` (≤ 1024 UTF-8 bytes, no NUL), `submit?` (default false), `timeout_s?` (0..10, default 3) | Replaces the text of the PS5 field whose on-screen keyboard is open. Replies `result`: `confirmed` (the console echoed the same text), `differs`, `closed`, or `timeout`; and `submitted`. With `submit`, the keyboard is accepted only after `confirmed`. |
+| `rp_keyboard_close` | `accept?` (default false) | Accept keeps the text and closes the keyboard. Otherwise the text stays and the PS5 shows its own on-screen keyboard again, for padd or a controller. |
+
+- The same rules as padd input apply: the lease is checked first (`leased`); a held key fails with
+  `human_has_control`; nothing is sent until Remote Play is `streaming` with fresh video. A different source fails
+  with `not_remote_play`, other refusals with `remote_play`. These commands do not need the padd link.
+- A held PS button is released when the hold is cancelled: a key goes down, `release_all`, or video is lost.
+- `rp_text` needs an open keyboard: select a text field on the PS5 first. A field that was already open before the
+  session connected is not reported; reopen it. The typed text and the field's content are never logged or returned.
+- While the keyboard handshake is on, an opened text field shows "Use the keyboard on your Remote Play device"
+  instead of the PS5 keyboard, so padd and the DualSense cannot type until `rp_keyboard_close` hands it back.
+- The app asks the console for its keyboard at every connect (Chiaki's keyboard handshake). `PS5MCP_RP_KEYBOARD=0`
+  or `--no-remoteplay-keyboard` turns that off; `rp_text` then fails.

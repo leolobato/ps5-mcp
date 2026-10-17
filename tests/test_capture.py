@@ -227,3 +227,23 @@ def test_native_test_source_waits_until_frames_are_ready(native_launch, monkeypa
 def test_ffmpeg_requests_generic_capture_rate(tmp_path):
     command = capture.daemon_command(tmp_path / "latest.jpg", video="USB Capture Video", audio=None)
     assert command[command.index("-framerate") + 1] == "60"
+
+
+def test_remoteplay_start_returns_diagnostics_before_first_frame(native_launch, monkeypatch):
+    app, launches = native_launch
+    replies = [None]
+    connecting = {"pid": 1234, "frames": 0, "frame_age": -1, "source": "remoteplay",
+                  "remote_play": {"state": "connecting"}}
+    monkeypatch.setattr(app, "status", lambda: replies.pop() if replies else connecting)
+    assert app.start(video="remoteplay", timeout=0.01) == 1234
+    args = launches[0]
+    assert args[args.index("--video") + 1] == "remoteplay"
+
+
+@pytest.mark.parametrize("entrypoint", ["command", "snapshot"])
+def test_remoteplay_cannot_fall_back_to_ffmpeg_camera(tmp_path, entrypoint):
+    with pytest.raises(capture.CaptureError, match="Remote Play.*native app"):
+        if entrypoint == "command":
+            capture.daemon_command(tmp_path / "latest.jpg", video="remoteplay")
+        else:
+            capture.grab_direct(tmp_path / "frame.jpg", video="remoteplay")

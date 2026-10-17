@@ -1,0 +1,3 @@
+[submodule "third-party/chiaki-ng"]
+	path = third-party/chiaki-ng
+	url = https://github.com/chiaki-ng/chiaki-ng.git

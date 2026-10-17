@@ -33,11 +33,17 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
     private let videoDevice = NSPopUpButton()
     private let audioDevice = NSPopUpButton()
     private let captureNote = NSTextField(wrappingLabelWithString: "")
+    private let remotePlayNote = NSTextField(wrappingLabelWithString: "")
+    private let setupRemotePlay = NSButton(title: "Set Up…", target: nil, action: nil)
+    private let reconnectRemotePlay = NSButton(title: "Reconnect", target: nil, action: nil)
+    private let connectionNote = NSTextField(wrappingLabelWithString: "")
+    private let forgetRemotePlay = NSButton(title: "Forget…", target: nil, action: nil)
+    private var remotePlaySetupWindow: RemotePlaySetupWindow?
 
     init(hub: Hub, onSaved: @escaping () -> Void) {
         self.hub = hub
         self.onSaved = onSaved
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 360), styleMask: [.titled, .closable],
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 440), styleMask: [.titled, .closable],
                           backing: .buffered, defer: false)
         super.init()
         window.title = "Settings"
@@ -62,6 +68,13 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
         let apply = NSButton(title: "Apply & Restart Capture", target: self, action: #selector(applyCapture))
         let captureButtons = NSStackView(views: [refresh, apply])
         captureButtons.spacing = 8
+        videoDevice.target = self
+        videoDevice.action = #selector(sourceChanged)
+        setupRemotePlay.target = self; setupRemotePlay.action = #selector(setUpRemotePlay)
+        forgetRemotePlay.target = self; forgetRemotePlay.action = #selector(forgetPairing)
+        reconnectRemotePlay.target = self; reconnectRemotePlay.action = #selector(reconnect)
+        let remotePlayButtons = NSStackView(views: [setupRemotePlay, reconnectRemotePlay, forgetRemotePlay])
+        remotePlayButtons.spacing = 8
 
         folder.pathStyle = .popUp
         folder.isEditable = false
@@ -70,7 +83,7 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
         let folderRow = NSStackView(views: [folder, choose])
         folderRow.spacing = 8
 
-        for text in [note, captureNote] {
+        for text in [note, captureNote, remotePlayNote, connectionNote] {
             text.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
             text.textColor = .secondaryLabelColor
             text.preferredMaxLayoutWidth = 380
@@ -84,10 +97,13 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
             [label("PS5 IP address:"), addressRow],
             [empty, note],
             [separator(), empty],
-            [label("Video device:"), videoDevice],
+            [label("Video source:"), videoDevice],
             [label("Audio device:"), audioDevice],
             [empty, captureNote],
             [empty, captureButtons],
+            [label("Remote Play:"), remotePlayButtons],
+            [empty, remotePlayNote],
+            [label("Connection:"), connectionNote],
             [separator(), empty],
             [label("Save snapshots to:"), folderRow],
         ])
@@ -97,13 +113,14 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
         grid.column(at: 0).xPlacement = .trailing
         grid.column(at: 1).xPlacement = .fill
         grid.column(at: 1).width = 380
-        for row in [2, 7] {
+        for row in [2, 10] {
             grid.row(at: row).mergeCells(in: NSRange(location: 0, length: 2))
             grid.cell(atColumnIndex: 0, rowIndex: row).xPlacement = .fill
             grid.row(at: row).topPadding = 6
             grid.row(at: row).bottomPadding = 6
         }
         grid.cell(for: captureButtons)?.xPlacement = .leading
+        grid.cell(for: remotePlayButtons)?.xPlacement = .leading
 
         grid.translatesAutoresizingMaskIntoConstraints = false
         let content = NSView()
@@ -152,8 +169,12 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
     }
 
     private func fillDevices(video: String?, audio: String?) {
-        fill(videoDevice, devices: CaptureDevices.video, selection: video, empty: "Choose a video device…")
-        fill(audioDevice, devices: CaptureDevices.audio, selection: audio, empty: "No audio")
+        fill(videoDevice, devices: CaptureDevices.video, selection: video == "remoteplay" ? nil : video, empty: "Choose a video device…")
+        videoDevice.addItem(withTitle: "Remote Play (network)")
+        videoDevice.lastItem?.representedObject = "remoteplay"
+        if video == "remoteplay" { videoDevice.select(videoDevice.lastItem) }
+        fill(audioDevice, devices: CaptureDevices.audio, selection: audio == "remoteplay" ? nil : audio, empty: "No audio")
+        sourceChanged()
     }
 
     @objc private func refreshDevices() {
@@ -167,11 +188,111 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
         captureNote.stringValue = hub.captureIssue?.replacingOccurrences(of: " in Settings (⌘,)", with: "")
             .replacingOccurrences(of: " in Settings", with: "")
             ?? "Selections are saved for future launches. Restarting capture keeps connected MCP clients running."
+        refreshRemotePlayStatus()
+        remotePlaySetupWindow?.refreshVerification()
+    }
+
+    private func refreshRemotePlayStatus() {
+        setupRemotePlay.isEnabled = !hub.host.isEmpty
+        let remote = hub.source as? RemotePlaySource
+        connectionNote.stringValue = remote?.status.summary ?? (hub.captureVideo == "remoteplay" ? (hub.captureIssue ?? "Set up Remote Play.") : "Remote Play is not the active capture source.")
+        reconnectRemotePlay.isEnabled = remote != nil && ![.connecting, .applyingAdmission, .waitingForVideo].contains(remote!.status.phase)
+        do {
+            if let record = try hub.remotePlayCredentials.load(host: hub.host) {
+                remotePlayNote.stringValue = "Paired with \(record.nickname) at \(hub.host). Pairing is saved in Keychain."
+                forgetRemotePlay.isEnabled = true
+            } else {
+                remotePlayNote.stringValue = "Not paired for \(hub.host.isEmpty ? "this console" : hub.host). Set Up supports local offline users and an existing Base64 account ID."
+                forgetRemotePlay.isEnabled = false
+            }
+        } catch {
+            remotePlayNote.stringValue = error.localizedDescription
+            forgetRemotePlay.isEnabled = true
+        }
+    }
+
+    @objc private func reconnect() {
+        do {
+            guard hub.captureVideo == "remoteplay", let ui = hub.ui else { return }
+            if let owner = hub.lease.json["owner"] as? [String: Any] {
+                throw RemotePlaySetupError("The console is claimed by \(owner["client"] as? String ?? "another client"). Wait for its claim to be released.")
+            }
+            try ui.restartCapture(video: "remoteplay", audio: "remoteplay")
+        } catch { connectionNote.stringValue = error.localizedDescription }
+    }
+
+    @objc private func sourceChanged() {
+        let remotePlay = videoDevice.selectedItem?.representedObject as? String == "remoteplay"
+        if remotePlay {
+            if !audioDevice.itemArray.contains(where: { $0.representedObject as? String == "remoteplay" }) {
+                audioDevice.addItem(withTitle: "Remote Play audio")
+                audioDevice.lastItem?.representedObject = "remoteplay"
+            }
+            if let item = audioDevice.itemArray.first(where: { $0.representedObject as? String == "remoteplay" }) {
+                audioDevice.select(item)
+            }
+        } else if let index = audioDevice.itemArray.firstIndex(where: { $0.representedObject as? String == "remoteplay" }) {
+            audioDevice.removeItem(at: index)
+        }
+        audioDevice.isEnabled = !remotePlay
+        audioDevice.toolTip = audioDevice.isEnabled ? nil : "Remote Play supplies both video and audio."
+    }
+
+    @objc private func setUpRemotePlay() {
+        do {
+            if let existing = remotePlaySetupWindow, existing.window.isVisible {
+                existing.show(); return
+            }
+            let setup = try RemotePlaySetupWindow(hub: hub) { [weak self] in
+                guard let self else { return }
+                self.fillDevices(video: self.hub.captureVideo, audio: self.hub.captureAudio)
+                self.refreshCaptureStatus()
+            }
+            remotePlaySetupWindow = setup
+            setup.show()
+        } catch {
+            let alert = NSAlert(); alert.messageText = "Could not open Remote Play setup"
+            alert.informativeText = error.localizedDescription; alert.beginSheetModal(for: window)
+        }
+    }
+
+    @objc private func forgetPairing() {
+        let host = hub.host
+        let video = hub.captureVideo
+        let alert = NSAlert()
+        alert.messageText = "Forget Remote Play pairing?"
+        alert.informativeText = "Remove the saved Keychain registration for \(host). You will need a new Link Device PIN to pair again. Console account values are unchanged."
+        alert.addButton(withTitle: "Forget Pairing"); alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .alertFirstButtonReturn else { return }
+            do {
+                guard self.hub.host == host, self.hub.captureVideo == video else {
+                    throw RemotePlaySetupError("The console address or capture source changed. Review Settings before forgetting pairing.")
+                }
+                if let owner = self.hub.lease.json["owner"] as? [String: Any] {
+                    throw RemotePlaySetupError("The PS5 is claimed by \(owner["client"] as? String ?? "another client"). Wait for its claim to be released before forgetting pairing.")
+                }
+                // A recording (including its pending save) must finish before removing
+                // credentials; otherwise restart would fail and leave the old stream live.
+                let captureUI = self.hub.ui
+                if video == "remoteplay" {
+                    guard let captureUI else { throw RemotePlaySetupError("Capture is not ready. Pairing has been kept.") }
+                    try captureUI.validateCaptureChange()
+                }
+                try self.hub.remotePlayCredentials.forget(host: host)
+                if video == "remoteplay" {
+                    try captureUI?.restartCapture(video: "remoteplay", audio: "remoteplay")
+                }
+                self.refreshCaptureStatus()
+            } catch {
+                self.remotePlayNote.stringValue = (error as? BadInput)?.description ?? error.localizedDescription
+            }
+        }
     }
 
     @objc private func applyCapture() {
         let video = videoDevice.selectedItem?.representedObject as? String ?? ""
-        let audio = audioDevice.selectedItem?.representedObject as? String ?? ""
+        let audio = video == "remoteplay" ? "remoteplay" : audioDevice.selectedItem?.representedObject as? String ?? ""
         do {
             guard let ui = hub.ui else { throw BadInput("Capture is not ready.") }
             try ui.restartCapture(video: video, audio: audio.isEmpty ? nil : audio)

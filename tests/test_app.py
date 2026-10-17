@@ -58,7 +58,7 @@ def put_frame(path: Path, image: Image.Image | Path) -> None:
 
 
 class App:
-    def __init__(self, padd: Padd, frame: Image.Image | Path | None = None, *args: str):
+    def __init__(self, padd: Padd, frame: Image.Image | Path | None = None, *args: str, binary: Path = APP):
         self.padd = padd
         self.root = Path(tempfile.mkdtemp(prefix="a", dir="/tmp"))  # AF_UNIX paths are limited to ~104 bytes
         self.frame = self.root / "frame.png"
@@ -68,7 +68,7 @@ class App:
         cli.chmod(0o755)
         self.log = self.root / "app.log"
         self.process = subprocess.Popen(
-            [str(APP), "--state-dir", str(self.root), "--video", f"file:{self.frame}", "--audio", "none",
+            [str(binary), "--state-dir", str(self.root), "--video", f"file:{self.frame}", "--audio", "none",
              "--headless", "--host", "127.0.0.1", "--port", str(padd.port), "--padd-cli", str(cli), *args],
             stdout=self.log.open("ab"), stderr=subprocess.STDOUT,
             env={**os.environ, "FAKE_PADD_PORT": str(padd.port), "PS5MCP_STATE": str(self.root)})
@@ -400,8 +400,11 @@ def test_padd_start_pauses_the_link_for_the_cli(app):
     result = client.call("padd_start", firmware="13.60", timeout=20)
     assert result["status"] == "running" and result["run"] == "results/20990101T000000Z-padd"
     assert "slot free: hello 1000" in result["output"]
-    assert (app.root / "cli-args").read_text().split() == ["padd", "start", "--host", "127.0.0.1",
-                                                         "--firmware", "13.60"]
+    expected = ["padd", "start", "--host", "127.0.0.1", "--firmware", "13.60"]
+    bundled = client.status()["padd"]["bundled"]
+    if bundled["path"] is not None:
+        expected += ["--elf", bundled["path"]]
+    assert (app.root / "cli-args").read_text().strip() == " ".join(expected)
     assert wait_for(lambda: client.status()["pad"]["connected"], 5)  # resumed
     assert client.status()["padd"]["last"]["action"] == "start"
 
@@ -413,7 +416,11 @@ def test_padd_update_deploys_the_bundled_build(padd, tmp_path):
     (repo / "build/padd.elf").write_bytes(elf)
     report = {"artifacts": {"padd.elf": {"sha256": hashlib.sha256(elf).hexdigest(), "version": "9.9"}}}
     (repo / "build/toolchain-report.json").write_text(json.dumps(report))
-    hub = App(padd, None, "--repo", str(repo))
+    # Isolate checkout fallback from the real payload included by `make all`.
+    app_bundle = tmp_path / "PS5 MCP.app"
+    shutil.copytree(APP.parents[2], app_bundle)
+    shutil.rmtree(app_bundle / "Contents/Resources/padd", ignore_errors=True)
+    hub = App(padd, None, "--repo", str(repo), binary=app_bundle / "Contents/MacOS/PS5 MCP")
     try:
         client = hub.client()
         assert client.status()["padd"]["bundled"] == {"version": "9.9", "stale": False, "error": None, "source": "checkout",
@@ -583,3 +590,112 @@ def test_user_name_failure_does_not_block_app_connection(tmp_path):
             app.stop()
     finally:
         daemon.stop()
+
+
+def test_remoteplay_unpaired_keeps_api_and_rejects_blind_input(app):
+    client = app.client()
+    client.call("capture_restart", video="remoteplay")
+    status = client.call("status")
+    assert status["source"] == "unavailable"
+    assert status["camera"] == "not needed"
+    assert status["remote_play"]["state"] == "setup_needed"
+    assert status["remote_play"]["video_ready"] is False
+    assert status["remote_play"]["audio_ready"] is False
+    assert status["remote_play"]["admission"] == "not_attempted"
+    with pytest.raises(AppError, match="Remote Play"):
+        client.set(PadState(buttons=CROSS))
+    client.call("release_all")
+    client.call("capture_restart", video="synthetic")
+    wait_for(lambda: client.call("status")["frames"] > 0)
+    client.set(PadState(buttons=CROSS))
+    client.call("release_all")
+
+
+def test_remoteplay_loss_fails_an_inflight_press(app):
+    pressing, control = app.client("pressing"), app.client("control")
+    with concurrent.futures.ThreadPoolExecutor() as pool:
+        pending = pool.submit(pressing.press, PadState(buttons=CROSS), 500)
+        assert wait_for(lambda: control.status()["pad"]["agent_layers"] == 1, 2)
+        control.call("capture_restart", video="remoteplay")
+        with pytest.raises((AppError, PadError), match="Remote Play"):
+            pending.result(timeout=3)
+        assert control.status()["pad"]["agent_layers"] == 0
+
+
+def test_cancelled_press_cannot_release_new_input_after_recovery(app):
+    client = app.client("same-layer")
+    with concurrent.futures.ThreadPoolExecutor() as pool:
+        pending = pool.submit(client.press, PadState(buttons=CROSS), 1000)
+        assert wait_for(lambda: client.status()["pad"]["agent_layers"] == 1, 2)
+        client.call("capture_restart", video="remoteplay")
+        client.call("capture_restart", video="synthetic")
+        client.set(PadState(buttons=L1))
+        assert wait_for(lambda: buttons(app.padd)[-1] == L1, 2)
+        with pytest.raises((AppError, PadError), match="Remote Play"):
+            pending.result(timeout=3)
+        assert client.status()["pad"]["agent_layers"] == 1
+        assert buttons(app.padd)[-1] == L1
+        client.release()
+
+
+def test_remoteplay_input_validates_before_anything_is_sent(app):
+    client = app.client()
+    for fields in ({"button": "cross"}, {"button": "ps", "hold_ms": 0}, {"button": "ps", "hold_ms": 2001}):
+        with pytest.raises(AppError) as error:
+            client.call("rp_button", **fields)
+        assert error.value.code == "bad_request"
+    for fields in ({}, {"text": "a" * 1025}, {"text": "a\0b"}, {"text": "a", "timeout_s": 0}):
+        with pytest.raises(AppError) as error:
+            client.call("rp_text", **fields)
+        assert error.value.code == "bad_request"
+    assert buttons(app.padd)[-1] == 0
+
+
+def test_remoteplay_input_needs_remote_play_but_not_padd(app):
+    client = app.client()
+    for call in (lambda: client.ps_button(50), lambda: client.keyboard_text("hi"), lambda: client.keyboard_close(True)):
+        with pytest.raises(AppError) as error:
+            call()
+        assert error.value.code == "not_remote_play" and "Remote Play" in str(error.value)
+    app.padd.stop()  # Remote Play input never waits for the padd link.
+    assert wait_for(lambda: not client.status()["pad"]["connected"], 5)
+    with pytest.raises(AppError) as error:
+        client.ps_button(50)
+    assert error.value.code == "not_remote_play"
+
+
+def test_remoteplay_input_respects_claims_and_keyboard(app):
+    owner, other = app.client("owner"), app.client("other")
+    owner.claim("testing")
+    with pytest.raises(ConsoleInUse):
+        other.ps_button(50)
+    with pytest.raises(ConsoleInUse):
+        other.keyboard_text("hi")
+    owner.unclaim()
+    other.key("up", True)
+    try:
+        with pytest.raises(HumanHasControl):
+            owner.ps_button(50)
+        with pytest.raises(HumanHasControl):
+            owner.keyboard_text("hi")
+    finally:
+        other.key("up", False)
+
+
+def test_remoteplay_input_is_blocked_without_live_video(app):
+    client = app.client()
+    client.call("capture_restart", video="remoteplay")
+    with pytest.raises(AppError, match="Remote Play"):
+        client.ps_button(50)
+    with pytest.raises(AppError, match="Remote Play"):
+        client.keyboard_text("hi")
+    status = client.call("status")["remote_play"]
+    assert status["keyboard"] == {"enabled": False, "open": False}
+
+
+def test_p_key_is_the_remote_play_ps_button(app):
+    client = app.client()
+    client.key("p", True)
+    client.key("p", False)
+    assert wait_for(lambda: "PS button" in (client.status()["notice"] or ""), 3)
+    assert "Remote Play" in client.status()["notice"]

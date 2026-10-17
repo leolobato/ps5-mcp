@@ -4,5 +4,57 @@
     "url": "https://github.com/ps5-payload-dev/sdk/releases/download/v0.43/ps5-payload-sdk.zip",
     "sha256": "a9cc9929f21b2b2c5d5b309f3bab4997067c45281c0622cf4838b1aecba66fcb"
   },
-  "llvm_version": "18.1.8"
+  "llvm_version": "18.1.8",
+  "remoteplay": {
+    "chiaki_revision": "c8bea2642d0e95402f373af55584a3b98cd89417",
+    "submodules": [
+      "third-party/nanopb",
+      "third-party/jerasure",
+      "third-party/gf-complete",
+      "third-party/curl"
+    ],
+    "sources": {
+      "openssl": {
+        "version": "3.5.9",
+        "url": "https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz",
+        "sha256": "603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a",
+        "source_dir": "openssl-3.5.9"
+      },
+      "opus": {
+        "version": "1.5.2",
+        "url": "https://downloads.xiph.org/releases/opus/opus-1.5.2.tar.gz",
+        "sha256": "65c1d2f78b9f2fb20082c38cbe47c951ad5839345876e46941612ee87f9a7ce1",
+        "source_dir": "opus-1.5.2"
+      },
+      "json-c": {
+        "version": "0.18",
+        "url": "https://s3.amazonaws.com/json-c_releases/releases/json-c-0.18.tar.gz",
+        "sha256": "876ab046479166b869afc6896d288183bbc0e5843f141200c677b3e8dfb11724",
+        "source_dir": "json-c-0.18"
+      },
+      "miniupnpc": {
+        "version": "2.3.3",
+        "url": "https://miniupnp.tuxfamily.org/files/miniupnpc-2.3.3.tar.gz",
+        "sha256": "d52a0afa614ad6c088cc9ddff1ae7d29c8c595ac5fdd321170a05f41e634bd1a",
+        "source_dir": "miniupnpc-2.3.3"
+      },
+      "libevent": {
+        "version": "2.1.12-stable",
+        "url": "https://github.com/libevent/libevent/releases/download/release-2.1.12-stable/libevent-2.1.12-stable.tar.gz",
+        "sha256": "92e6de1be9ec176428fd2367677e61ceffc2ee1cb119035037a27d346b0403bb",
+        "source_dir": "libevent-2.1.12-stable"
+      },
+      "protoc": {
+        "version": "29.3",
+        "url": "https://github.com/protocolbuffers/protobuf/releases/download/v29.3/protoc-29.3-osx-universal_binary.zip",
+        "sha256": "57e0423af36b491ba4d043c4a5b5346ce73464c397911b9ecb7ddf9b573896da"
+      },
+      "protobuf-python": {
+        "version": "5.29.3",
+        "url": "https://files.pythonhosted.org/packages/fd/b2/ab07b09e0f6d143dfb839693aa05765257bceaa13d03bf1a696b78323e7a/protobuf-5.29.3-py3-none-any.whl",
+        "sha256": "0a18ed4a24198528f2333802eb075e59dea9d679ab7a6c5efb017a59004d849f",
+        "license": "BSD-3-Clause"
+      }
+    }
+  }
 }

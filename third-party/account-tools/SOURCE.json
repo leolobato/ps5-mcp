@@ -1,0 +1,14 @@
+{
+  "repository": "https://github.com/MangoScango/ps5-account-tools",
+  "commit": "8d648caef776d3b35af3faad36bc534b9127fe3c",
+  "sha256": {
+    "LICENSE": "605e9047a563c5c8396ffb18232aa4304ec56586aee537c45064c6fb425e44ad",
+    "README.md": "bd2cda785f240d21ef431132bb87b4fa8e0c0f2be85c9adcb8d4bcef71db07ff",
+    "src/npsignin.c": "e84e4841c4665b74f2ac24f37fa458bb2347a5859fafeb23a276126260f812e3",
+    "src/offact.c": "a475927feb714f48cadb466347852d5e2c9c7db07ab523a269b3fe5e778d60e2",
+    "src/offact.h": "0451763a777660e8c584db146716321589798296831899c457bb14b3ffec047f",
+    "src/sys_lite.c": "ec710620324765e9ba739501370e78cd1c291b29b42d9aff3ce41cd334865eb2",
+    "src/np_templates/auth_dat.h": "9fd5d1bac31037ad7e8ecc43cd90899825c3ea50b5df96d8b658382b30944fa3",
+    "src/np_templates/config_dat.h": "e27a9ff5a8f4cf8a40db88aa92d02486b3c4c509b94ad8dbf0d20c90689ceec7"
+  }
+}
