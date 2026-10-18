@@ -104,6 +104,9 @@ final class Sidebar: NSStackView {
                           #selector(AppDelegate.forceRelease), target)
         kick.toolTip = "Take the console from the agent that claimed it and pass it to the next one in the queue"
         full(kick)
+        let claims = button("claimDetails", "Claim and queue…", "person.2", #selector(AppDelegate.showClaims), target)
+        claims.toolTip = "Who holds the PS5, their full reason and process, and who is waiting"
+        full(claims)
 
         section("Launch")
         for popup in [titles, recordings] {
@@ -464,6 +467,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
             ("Home", #selector(home), ""),
             ("Release All Input", #selector(releaseAll), "."),
             ("Force Release Agent…", #selector(forceRelease), ""),
+            ("Claim and Queue…", #selector(showClaims), ""),
             ("-", nil, ""),
             ("Record Button Presses", #selector(toggleRecording), "r"),
             ("Play Recording", #selector(togglePlayback), ""),
@@ -692,6 +696,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
             sidebar.set("In use by", "nobody")
         }
         sidebar.buttons["forceRelease"]?.isEnabled = lease["owner"] is [String: Any]
+        sidebar.buttons["claimDetails"]?.isEnabled = lease["owner"] is [String: Any] || queued > 0
         sidebar.notice.stringValue = hub.notice ?? (hub.source as? RemotePlaySource)?.status.summary ?? ""
         let canRun = busy == nil && hub.padd.json["available"] as? Bool == true
         let fileManagerBusy = titlesLoading || installing != nil  // Web File Manager runs one task at a time
@@ -757,6 +762,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         case #selector(home): return enabled("home")
         case #selector(releaseAll): return enabled("releaseAll")
         case #selector(forceRelease): return enabled("forceRelease")
+        case #selector(showClaims): return enabled("claimDetails")
         case #selector(toggleRecording):
             menuItem.title = hub.recorder == nil ? "Record Button Presses" : "Stop Recording Button Presses…"
             return enabled("record")
@@ -1393,6 +1399,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         }
         hub.notice = "Force-released \(evicted)."
         refresh()
+    }
+
+    /// The holder's full reason and process, and the queue in order. Refresh shows the state as it is then.
+    @objc func showClaims() {
+        func duration(_ seconds: Double) -> String {
+            let s = Int(seconds)
+            return s < 60 ? "\(s) s" : s < 3600 ? "\(s / 60) min \(s % 60) s" : "\(s / 3600) h \(s % 3600 / 60) min"
+        }
+        func section(_ entry: Lease.Entry, _ heading: String, _ timing: String) -> String {
+            "\(heading): \(entry.client)\n  reason: \(entry.reason.isEmpty ? "(none given)" : entry.reason)\n  \(timing)\n"
+                + agentDescription(pid: hub.clientPID(conn: entry.conn)).split(separator: "\n")
+                    .map { "  " + $0 }.joined(separator: "\n")
+        }
+        let (owner, queue, now) = hub.lease.entries()
+        var parts: [String] = []
+        if let owner {
+            parts.append(section(owner, "Holding the PS5", "held for \(duration(now - owner.since)), "
+                + "lapses in \(duration(max(0, owner.idle - (now - owner.active)))) without a request"))
+        } else {
+            parts.append("Nobody holds the PS5.")
+        }
+        parts.append(queue.isEmpty ? "Queue: empty" : "Queue (\(queue.count)):")
+        for (index, entry) in queue.enumerated() {
+            parts.append(section(entry, "#\(index + 1)", "waiting for \(duration(now - entry.since))"))
+        }
+        let text = NSTextView(frame: NSRect(x: 0, y: 0, width: 560, height: 320))
+        text.isEditable = false
+        text.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        text.string = parts.joined(separator: "\n\n")
+        text.setAccessibilityLabel("Claim and queue details")
+        let scroll = NSScrollView(frame: text.frame)
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .bezelBorder
+        scroll.documentView = text
+        text.autoresizingMask = [.width]
+        let alert = NSAlert()
+        alert.messageText = "Claim and queue"
+        alert.informativeText = "Agents claim the PS5 with claim_console; the others wait in this order."
+        alert.accessoryView = scroll
+        alert.addButton(withTitle: "Close")
+        alert.addButton(withTitle: "Refresh")
+        alert.addButton(withTitle: "Copy")
+        alert.beginSheetModal(for: window) { response in
+            switch response {
+            case .alertSecondButtonReturn: DispatchQueue.main.async { self.showClaims() }
+            case .alertThirdButtonReturn:
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text.string, forType: .string)
+                self.window.makeFirstResponder(self.video)
+            default: self.window.makeFirstResponder(self.video)
+            }
+        }
     }
 
     @objc func releaseAll() {

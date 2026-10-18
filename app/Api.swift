@@ -69,6 +69,8 @@ func askRunningApp(_ path: String, _ line: String) -> String? {
 final class Connection {
     let fd: Int32
     let id: Int
+    /// The process on the other end of the socket (the window's claim details show who it is).
+    let peerPID: pid_t?
     private let writeLock = NSLock()
     private let lock = NSLock()
     private var layers = Set<String>()
@@ -78,6 +80,9 @@ final class Connection {
     init(fd: Int32, id: Int) {
         self.fd = fd
         self.id = id
+        var pid: pid_t = 0
+        var length = socklen_t(MemoryLayout<pid_t>.size)
+        peerPID = getsockopt(fd, SOL_LOCAL, LOCAL_PEERPID, &pid, &length) == 0 && pid > 0 ? pid : nil
         var one: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
     }

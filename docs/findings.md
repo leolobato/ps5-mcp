@@ -453,3 +453,13 @@ While the handshake is on, an opened text field shows "Use the keyboard on your 
 PS5 keyboard, so padd and the DualSense cannot type until the app hands it back. The window's **Type…** and the
 MCP `close_keyboard` do that. Whether a PS press on the Remote Play controller changes which controller a running
 game follows was not measured.
+
+## 2026-10-18 — Remote Play service restarted overnight
+
+After about 33 hours of uptime (padd still running, no console reboot), Remote Play refused every session with
+application reason `0x80108b15` (Chiaki quit reason 5, `RP_CRASH`). The read-only admission check showed SceRemotePlay
+with a new pid (1319, was 60 at boot) and an unpatched context: the system had restarted the service, and the
+admission patch went with the old process. Discovery still answered `200 Ok`. Why the service died is unknown:
+the patched daemon itself or memory pressure from other agents' large game tests that night are both possible, and
+no console log was captured. The app retried every 2 s without explaining; it now stops and asks for a restart.
+Whether toggling Remote Play in the PS5 settings clears the state without a reboot is untested.

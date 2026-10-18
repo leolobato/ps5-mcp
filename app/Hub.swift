@@ -270,6 +270,9 @@ final class Hub {
 
     var clientCount: Int { lock.lock(); defer { lock.unlock() }; return connections.count }
 
+    /// The process behind API connection `conn`, while it is connected.
+    func clientPID(conn: Int) -> pid_t? { lock.lock(); defer { lock.unlock() }; return connections[conn]?.peerPID }
+
     func status() -> [String: Any] {
         let link = controller.status()
         lock.lock()

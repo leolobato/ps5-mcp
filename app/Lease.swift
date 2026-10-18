@@ -156,6 +156,17 @@ final class Lease {
         return out
     }
 
+    /// The holder and the queue in order (with their connections), for the window's claim details.
+    func entries() -> (owner: Entry?, queue: [Entry], now: Double) {
+        let now = uptimeSeconds()
+        lock.lock()
+        let changed = expire(now)
+        let out = (owner, queue, now)
+        lock.unlock()
+        if changed { onChange?() }
+        return out
+    }
+
     /// For `status`: the holder and the queue.
     var json: [String: Any] {
         let now = uptimeSeconds()

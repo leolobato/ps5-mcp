@@ -37,6 +37,8 @@ final class RemotePlaySource: FrameSource {
     private let admission: RemotePlayAdmissionServicing
     private var admissionAttempted = false
     private let enableKeyboard: Bool
+    /// Chiaki's quit reason for the console's "Remote Play crashed" refusal (application reason 0x80108b15).
+    static let remotePlayCrashedReason = 5
     /// On-screen keyboard state of the current timeline; `keyboardEvents` counts console answers.
     private let keyboard = NSCondition()
     private var keyboardOpen = false
@@ -172,6 +174,13 @@ final class RemotePlaySource: FrameSource {
                             self.admissionAttempted = true
                             self.disconnect("Preparing Remote Play for this PS5 session…", retry: true, applyAdmission: true)
                         }
+                        return
+                    }
+                    if reason == Self.remotePlayCrashedReason {
+                        // The PS5 answers 0x80108b15 after its Remote Play service died (seen overnight on 13.60):
+                        // retrying cannot help, and the restarted service has lost the admission patch.
+                        self.disconnect("The PS5 reports that its Remote Play service crashed. Restart the PS5, "
+                                        + "reload the jailbreak and Payload Manager, then reconnect.", retry: false)
                         return
                     }
                     self.disconnect("Remote Play disconnected (\(reason)). Reconnecting…", retry: true)

@@ -180,7 +180,8 @@ Several agents can use the console. An agent calls `claim_console(reason)` so th
 buttons, run console commands, or install until it calls `release_console()`. Another agent that calls
 `claim_console` joins a queue. With `wait_s`, the call returns when the console is free for that agent.
 A claim ends when its session closes, or after 10 minutes without a tool call. The sidebar shows the agent that has
-the console and the number of agents in the queue. The keyboard and the window's buttons always work. The CLI (`ps5mcp pad`, `ps5mcp padd`) is blocked like any agent.
+the console and the number of agents in the queue; **Claim and queue…** shows the holder's full reason, its
+process and agent (folder, session, command), and everyone waiting. The keyboard and the window's buttons always work. The CLI (`ps5mcp pad`, `ps5mcp padd`) is blocked like any agent.
 
 ### File transfer
 

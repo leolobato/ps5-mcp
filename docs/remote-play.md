@@ -84,7 +84,9 @@ must be available. The app checks the correlated response and waits for native
 session shutdown and recording finalization before retrying; upload success alone
 is insufficient. Admission does not prepare accounts or write account registry values.
 Stop/source changes cancel local work and invalidate callbacks. Unsupported contexts
-require explicit attention. Restore or a console reboot removes the temporary patch;
+require explicit attention. If the console's Remote Play service dies, the PS5 restarts
+it without the patch and refuses sessions with `0x80108b15` ("crashed"); the app then
+stops retrying and asks for a console restart (seen once overnight, cause unknown). Restore or a console reboot removes the temporary patch;
 repeated apply is a no-op, and Forget only removes pairing credentials.
 
 ## Builds and licenses

@@ -190,7 +190,7 @@ def test_remoteplay_recovery(recovery_binary, tmp_path, case):
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.parametrize("scenario", ["timeline", "admission", "admission-failure", "admission-stop", "input"])
+@pytest.mark.parametrize("scenario", ["timeline", "admission", "admission-failure", "admission-stop", "input", "crashed"])
 def test_source_reconnect_waits_for_timeline_finalization(tmp_path, scenario):
     """Compile the complete production source with a controlled session/media backend."""
     harness = tmp_path / "SourceHarness.swift"
@@ -271,6 +271,15 @@ func waitFor(_ condition: ()->Bool) {
         let admission = RemotePlayAdmission()
         let source=RemotePlaySource(host:"127.0.0.1",credentials:RemotePlayCredentials(),sink:FrameSink(), admission: admission)
         let scenario = CommandLine.arguments[1]
+        if scenario == "crashed" {
+            source.start(); waitFor { RemotePlaySession.started == 1 }
+            RemotePlaySession.instance(0).onEvent(.disconnected(reason: 5))
+            waitFor { source.json["state"] as? String == "unavailable" }
+            precondition((source.json["error"] as? String ?? "").contains("Restart the PS5"))
+            runFor(2.5)
+            precondition(RemotePlaySession.started == 1 && admission.calls == 0, "retried a crashed Remote Play service")
+            source.stop(); print("crashed service stops retrying"); return
+        }
         if scenario == "input" {
             func refuses(_ text: String, _ body: () throws -> Void) {
                 do { try body(); preconditionFailure("accepted input: \(text)") }
