@@ -465,3 +465,10 @@ no console log was captured. The app retried every 2 s without explaining; it no
 The user then found **Enable Remote Play turned off** in the PS5 settings (who or what turned it off is unknown).
 Turning it back on did not help: two attempts right after still got `0x80108b15`. So the code covers both a disabled
 setting and the dead service, and a console restart is the remaining step.
+
+After the user rebooted the console (with Enable Remote Play back on) and reloaded the jailbreak, the main app streamed
+1080p video and audio on its first attempt with admission `not_attempted`. The read-only check showed a **stock**
+SceRemotePlay (pid 60): no patch was needed. Every earlier stock test was refused with `0x80108b12`, and earlier notes
+record global Remote Play as off with the per-user switch on. Lead, from this one observation: the property-7 refusal
+may depend on the global **Enable Remote Play** setting, which would make the patch unnecessary when it is on. Confirm
+across another reboot before changing the admission flow or the setup instructions.
