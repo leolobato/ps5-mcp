@@ -177,9 +177,10 @@ final class RemotePlaySource: FrameSource {
                         return
                     }
                     if reason == Self.remotePlayCrashedReason {
-                        // The PS5 answers 0x80108b15 after its Remote Play service died (seen overnight on 13.60):
-                        // retrying cannot help, and the restarted service has lost the admission patch.
-                        self.disconnect("The PS5 reports that its Remote Play service crashed. Restart the PS5, "
+                        // 0x80108b15: seen after the service restarted overnight on 13.60, with Remote Play turned
+                        // off in Settings. Retrying cannot help; a restarted service has lost the admission patch.
+                        self.disconnect("The PS5 refused Remote Play (service crashed or turned off). Check Settings → "
+                                        + "System → Remote Play → Enable Remote Play; if it is on, restart the PS5, "
                                         + "reload the jailbreak and Payload Manager, then reconnect.", retry: false)
                         return
                     }

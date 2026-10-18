@@ -462,4 +462,6 @@ with a new pid (1319, was 60 at boot) and an unpatched context: the system had r
 admission patch went with the old process. Discovery still answered `200 Ok`. Why the service died is unknown:
 the patched daemon itself or memory pressure from other agents' large game tests that night are both possible, and
 no console log was captured. The app retried every 2 s without explaining; it now stops and asks for a restart.
-Whether toggling Remote Play in the PS5 settings clears the state without a reboot is untested.
+The user then found **Enable Remote Play turned off** in the PS5 settings (who or what turned it off is unknown).
+Turning it back on did not help: two attempts right after still got `0x80108b15`. So the code covers both a disabled
+setting and the dead service, and a console restart is the remaining step.

@@ -275,7 +275,7 @@ func waitFor(_ condition: ()->Bool) {
             source.start(); waitFor { RemotePlaySession.started == 1 }
             RemotePlaySession.instance(0).onEvent(.disconnected(reason: 5))
             waitFor { source.json["state"] as? String == "unavailable" }
-            precondition((source.json["error"] as? String ?? "").contains("Restart the PS5"))
+            precondition((source.json["error"] as? String ?? "").contains("restart the PS5"))
             runFor(2.5)
             precondition(RemotePlaySession.started == 1 && admission.calls == 0, "retried a crashed Remote Play service")
             source.stop(); print("crashed service stops retrying"); return
