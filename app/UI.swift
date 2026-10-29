@@ -291,6 +291,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
     private var audioMuted = UserDefaults.standard.bool(forKey: "audioMuted")
     private var previewLayer: CALayer!
     private let hiddenVideoLabel = NSTextField(labelWithString: "Video hidden")
+    /// Over the last picture while frames stop (the console's screen dropped the HDMI signal): it is not frozen.
+    private let noSignalLabel = NSTextField(labelWithString: "")
     private var imageLayer: CALayer?
     private var pong: Pong?
     private var pongAt = 0.0
@@ -341,6 +343,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         NSLayoutConstraint.activate([
             hiddenVideoLabel.centerXAnchor.constraint(equalTo: video.centerXAnchor),
             hiddenVideoLabel.centerYAnchor.constraint(equalTo: video.centerYAnchor),
+        ])
+        noSignalLabel.textColor = .white
+        noSignalLabel.font = .systemFont(ofSize: NSFont.systemFontSize + 2, weight: .medium)
+        noSignalLabel.wantsLayer = true
+        noSignalLabel.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.7).cgColor
+        noSignalLabel.layer?.cornerRadius = 6
+        noSignalLabel.layer?.zPosition = 1  // above the capture preview layer, added again on every capture restart
+        noSignalLabel.translatesAutoresizingMaskIntoConstraints = false
+        noSignalLabel.isHidden = true
+        video.addSubview(noSignalLabel)
+        NSLayoutConstraint.activate([
+            noSignalLabel.centerXAnchor.constraint(equalTo: video.centerXAnchor),
+            noSignalLabel.topAnchor.constraint(equalTo: video.topAnchor, constant: 16),
         ])
         hub.source.setMuted(hub.config.headless || audioMuted)
         hub.source.start()
@@ -681,6 +696,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         }
         let age = hub.sink.frameAge
         let camera = hub.cameraPermission
+        noSignalLabel.isHidden = videoHidden || age <= 2
+        noSignalLabel.stringValue = hub.source is CameraSource
+            ? String(format: "  No HDMI signal for %.0f s · it returns when the console leaves this screen  ", age)
+            : String(format: "  No video for %.0f s  ", age)
         sidebar.set("Frame age", camera == "denied" ? "no camera permission" : age < 0 ? "no frames"
                     : String(format: "%.0f ms", age * 1000),
                     color: age < 0 || age > 2 ? .systemRed : .labelColor)

@@ -53,7 +53,7 @@ def test_snapshot_refuses_stale_daemon_frame(tmp_path, monkeypatch):
     daemon.latest.write_bytes(b"jpeg")
     old = daemon.latest.stat().st_mtime - 60
     os.utime(daemon.latest, (old, old))
-    with pytest.raises(capture.CaptureError, match="stale"):
+    with pytest.raises(capture.CaptureError, match="No video for"):
         capture.snapshot(tmp_path / "out.jpg", daemon=daemon)
 
 
@@ -247,3 +247,49 @@ def test_remoteplay_cannot_fall_back_to_ffmpeg_camera(tmp_path, entrypoint):
             capture.daemon_command(tmp_path / "latest.jpg", video="remoteplay")
         else:
             capture.grab_direct(tmp_path / "frame.jpg", video="remoteplay")
+
+
+def test_app_binary_prefers_override_then_installed_release(tmp_path, monkeypatch):
+    monkeypatch.setenv("PS5MCP_APP", str(tmp_path / "Other.app"))
+    assert capture.app_binary() == tmp_path / "Other.app/Contents/MacOS/PS5 MCP"
+    monkeypatch.delenv("PS5MCP_APP")
+    installed = tmp_path / "Applications/PS5 MCP.app"
+    monkeypatch.setattr(capture, "INSTALLED_APP", installed)
+    assert capture.app_binary() == capture.NATIVE_BINARY
+    installed.mkdir(parents=True)
+    assert capture.app_binary() == installed / "Contents/MacOS/PS5 MCP"
+
+
+def test_stop_then_start_reopens_a_visible_window(native_launch, monkeypatch):
+    app, launches = native_launch
+    monkeypatch.setattr(app, "status", lambda: {"pid": 1234, "visible": True})
+    monkeypatch.setattr(app, "request", lambda cmd, **kwargs: [{"ok": True}])
+    monkeypatch.setattr(capture.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    assert app.stop() is True
+    replies = iter([None, {"pid": 1234, "frames": 1, "frame_age": 0, "source": "camera"}])
+    monkeypatch.setattr(app, "status", lambda: next(replies))
+    assert app.start() == 1234
+    assert "--headless" not in launches[0]
+    assert not app.reopen_visible.exists()
+
+
+def test_stop_of_a_headless_app_starts_headless_again(native_launch, monkeypatch):
+    app, launches = native_launch
+    monkeypatch.setattr(app, "status", lambda: {"pid": 1234, "visible": False})
+    monkeypatch.setattr(app, "request", lambda cmd, **kwargs: [{"ok": True}])
+    monkeypatch.setattr(capture.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    app.stop()
+    replies = iter([None, {"pid": 1234, "frames": 1, "frame_age": 0, "source": "camera"}])
+    monkeypatch.setattr(app, "status", lambda: next(replies))
+    app.start()
+    assert "--headless" in launches[0]
+
+
+@pytest.mark.parametrize(("age", "lost"), [(12.4, "No video for 12 s"), (None, "No video since the app started")])
+def test_stale_snapshot_says_the_signal_dropped_and_not_to_restart(tmp_path, monkeypatch, age, lost):
+    app = capture.NativeApp(tmp_path)
+    monkeypatch.setattr(app, "pid", lambda: 1234)
+    monkeypatch.setattr(app, "frame_age", lambda: age)
+    with pytest.raises(capture.CaptureError) as error:
+        capture.snapshot(tmp_path / "frame.jpg", daemon=app)
+    assert lost in str(error.value) and "Do not restart" in str(error.value)

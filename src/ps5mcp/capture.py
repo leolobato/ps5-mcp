@@ -198,17 +198,33 @@ class Daemon:
 
 APP_BUNDLE = Path(__file__).resolve().parents[2] / "build/PS5 MCP.app"
 NATIVE_BINARY = APP_BUNDLE / "Contents/MacOS/PS5 MCP"
+INSTALLED_APP = Path("/Applications/PS5 MCP.app")
+# A frame older than MAX_FRAME_AGE with the app up: the console's current screen stopped the HDMI signal (it happens on
+# some game and app pages). The card gets it back when the screen changes; a new app cannot.
+NO_SIGNAL_HINT = ("The console's current screen is not reaching the capture card; the picture returns when the screen "
+                  "changes. Do not restart the PS5 app for this: it cannot bring the signal back. Go back (circle) "
+                  "or wait, then snapshot again.")
+
+
+def app_binary() -> Path:
+    """The app `ps5mcp` and the MCP server launch: PS5MCP_APP, else the release in /Applications, else this checkout's
+    build. The release keeps its signature, and so its macOS permissions and Keychain access, across rebuilds."""
+    if bundle := os.environ.get("PS5MCP_APP"):
+        return Path(bundle) / "Contents/MacOS/PS5 MCP"
+    return (INSTALLED_APP if INSTALLED_APP.exists() else APP_BUNDLE) / "Contents/MacOS/PS5 MCP"
 
 
 class NativeApp:
     """The PS5 app (app/*.swift): capture card, the padd link, keyboard, and the local API on capture.sock."""
 
-    def __init__(self, root: Path | None = None, binary: Path = NATIVE_BINARY):
+    def __init__(self, root: Path | None = None, binary: Path | None = None):
         self.root = root or state_dir()
-        self.binary = binary
+        self.binary = binary or app_binary()
         self.latest = self.root / "latest.jpg"
         self.log = self.root / "ps5-app.log"
         self.socket = self.root / "capture.sock"
+        # Written by stop() when the window was open, so the next start() (capture stop + start) opens it again.
+        self.reopen_visible = self.root / "reopen-visible"
 
     def request(self, cmd: str, timeout: float = 3.0, **fields) -> list[dict]:
         """Send one command; returns every reply line (watch_change answers twice)."""
@@ -248,8 +264,12 @@ class NativeApp:
 
         With the card it is launched through `open`, so macOS asks for camera/microphone permission for the app
         itself rather than for the terminal that started it. Omitted video/audio selections
-        use the app's saved settings; explicit audio=None disables audio.
+        use the app's saved settings; explicit audio=None disables audio. An app stopped with its window open
+        comes back with it open.
         """
+        if self.reopen_visible.exists():
+            self.reopen_visible.unlink(missing_ok=True)
+            visible = True
         if (status := self.status()) is not None:
             if visible:
                 self.request("show")
@@ -292,7 +312,7 @@ class NativeApp:
             # Launched through `open`: it may be waiting on the camera permission prompt. It is the user's app now.
             raise CaptureError("The PS5 app is running but has no frames yet. Allow camera access if macOS asks "
                                "(System Settings > Privacy & Security > Camera > PS5 MCP), and check the HDMI signal. "
-                               f"See {self.log}")
+                               f"If the picture was there before this restart: {NO_SIGNAL_HINT} See {self.log}")
         process.kill()
         raise CaptureError("No frame within timeout. Is another app (QuickTime, OBS, the ffmpeg daemon) holding "
                            f"the card, or was camera permission denied for the PS5 app? See {self.log}")
@@ -301,9 +321,12 @@ class NativeApp:
         self.request("show")
 
     def stop(self, grace: float = 3) -> bool:
-        pid = self.pid()
-        if pid is None:
+        status = self.status()
+        if status is None:
             return False
+        pid = status["pid"]
+        if status.get("visible"):
+            self.reopen_visible.touch()
         try:
             self.request("quit")
         except OSError:
@@ -365,7 +388,8 @@ def snapshot(destination: Path, max_width: int | None = None, daemon: Daemon | N
         if daemon.pid() is not None:
             age = daemon.frame_age()
             if age is None or age > MAX_FRAME_AGE:
-                raise CaptureError(f"Capture daemon is running but its latest frame is stale ({age}s)")
+                lost = f"No video for {age:.0f} s." if age is not None else "No video since the app started."
+                raise CaptureError(f"{lost} {NO_SIGNAL_HINT}")
             daemon.refresh()
             source = Path(scratch) / "frame.jpg"
             shutil.copyfile(daemon.latest, source)

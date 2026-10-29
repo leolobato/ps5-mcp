@@ -87,6 +87,12 @@ No `make` target contacts the console.
 
 The MCP server starts the app when needed, headless by default (`PS5MCP_VIEW=1` shows the window).
 Closing an MCP session leaves the app running; quitting the app releases input and leaves `padd` running.
+The server and the `ps5mcp` CLI start `/Applications/PS5 MCP.app` when it is installed, else `build/PS5 MCP.app`;
+`PS5MCP_APP=<path to the .app>` picks another one. `ps5mcp capture stop` then `start` keeps the window open if it was.
+
+Some console screens stop the HDMI signal to the capture card (seen on a few game and app pages). The window then
+shows "No HDMI signal" over the last picture, and `snapshot` fails with "No video for N s". The picture comes back
+when the console leaves that screen. Restarting the app does not help.
 
 ### MCP clients
 
