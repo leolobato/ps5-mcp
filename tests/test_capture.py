@@ -1,3 +1,5 @@
+import os
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -293,3 +295,12 @@ def test_stale_snapshot_says_the_signal_dropped_and_not_to_restart(tmp_path, mon
     with pytest.raises(capture.CaptureError) as error:
         capture.snapshot(tmp_path / "frame.jpg", daemon=app)
     assert lost in str(error.value) and "Do not restart" in str(error.value)
+
+
+def test_start_long_after_stop_ignores_the_old_window(native_launch):
+    app, launches = native_launch
+    app.reopen_visible.touch()
+    old = time.time() - capture.REOPEN_WINDOW - 1
+    os.utime(app.reopen_visible, (old, old))
+    app.start()
+    assert "--headless" in launches[0] and not app.reopen_visible.exists()

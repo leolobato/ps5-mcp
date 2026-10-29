@@ -11,6 +11,7 @@ When the daemon is not running, `snapshot` opens the device directly for one fra
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import shutil
@@ -199,6 +200,8 @@ class Daemon:
 APP_BUNDLE = Path(__file__).resolve().parents[2] / "build/PS5 MCP.app"
 NATIVE_BINARY = APP_BUNDLE / "Contents/MacOS/PS5 MCP"
 INSTALLED_APP = Path("/Applications/PS5 MCP.app")
+# How long after stop() a start() still reopens the window the stopped app had open.
+REOPEN_WINDOW = 120
 # A frame older than MAX_FRAME_AGE with the app up: the console's current screen stopped the HDMI signal (it happens on
 # some game and app pages). The card gets it back when the screen changes; a new app cannot.
 NO_SIGNAL_HINT = ("The console's current screen is not reaching the capture card; the picture returns when the screen "
@@ -267,9 +270,10 @@ class NativeApp:
         use the app's saved settings; explicit audio=None disables audio. An app stopped with its window open
         comes back with it open.
         """
-        if self.reopen_visible.exists():
-            self.reopen_visible.unlink(missing_ok=True)
-            visible = True
+        with contextlib.suppress(FileNotFoundError):
+            # Only a restart: an app stopped long ago (on purpose) comes back the way the caller asks.
+            visible = visible or time.time() - self.reopen_visible.stat().st_mtime < REOPEN_WINDOW
+            self.reopen_visible.unlink()
         if (status := self.status()) is not None:
             if visible:
                 self.request("show")
