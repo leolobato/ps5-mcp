@@ -461,6 +461,53 @@ async def launch(title_id: str, snapshot_after_ms: int | None = 5000):
 
 @mcp.tool(structured_output=False)
 @_errors
+async def second_controller(connected: bool, user_id: int | None = None, snapshot_after_ms: int | None = 3000):
+    """Connect (true) or disconnect (false) a second virtual controller, for local multiplayer tests (padd 1.7).
+
+    Controller 1 is the foreground user's; controller 2 is the second signed-in user's (the first one that is not the
+    foreground user: a game's player 2). Sign that user (or a guest) in on the console first. Connecting selects
+    controller 2, so every input tool drives it, and the app answers its "Who's using this controller?". Disconnecting
+    sends input back to controller 1. The window's sidebar does the same; status() shows both under
+    payload.controllers.
+
+    user_id: connect controller 2 for that user instead. A user who is not signed in gets the console's sign-in picker
+    with that user selected: press("cross") signs them in (input already goes to controller 2). Users seen signed in
+    before are listed under payload.controllers.signed_out.
+    """
+    if user_id is not None and not (connected and 0 < user_id < 2**31):
+        raise ValueError("user_id needs connected=true and a positive user id")
+    arg = "disconnect" if not connected else f"connect {user_id}" if user_id else "connect"
+    status = await _command("second_pad", arg)
+    if status != 0:
+        return f"controller 2: {p.pads_text('second_pad', status)}"
+    return await _result(await _controllers_text(), snapshot_after_ms)
+
+
+@mcp.tool(structured_output=False)
+@_errors
+async def use_controller(controller: int, snapshot_after_ms: int | None = None):
+    """Send input (press, stick, sequence, ...) to controller 1 or 2 from now on (padd 1.7).
+
+    It is the same choice as the window's "Input to" menu, and it stays for everyone using the app. The other
+    controller is released. Controller 2 must be connected first (second_controller).
+    """
+    if controller not in (1, 2):
+        raise ValueError("controller must be 1 or 2")
+    status = await _command("select_pad", str(controller))
+    if status != 0:
+        return f"controller {controller}: {p.pads_text('select_pad', status)}"
+    return await _result(await _controllers_text(), snapshot_after_ms)
+
+
+async def _controllers_text() -> str:
+    controllers = (await asyncio.to_thread((await _app()).status)).get("controllers") or {}
+    names = ", ".join(f"controller {c['controller']} = {c.get('user_name') or c['user_id']}"
+                      for c in controllers.get("list", []))
+    return f"input goes to controller {controllers.get('active', 1)} ({names})"
+
+
+@mcp.tool(structured_output=False)
+@_errors
 async def list_apps() -> list[str]:
     """Installed title ids (from /user/app on the console, read through PS5 Web File Manager on port 8888)."""
     from .probe_runner import Console
@@ -599,7 +646,9 @@ async def wait_for_change(timeout_ms: int = 3000, threshold: float = 6.0):
 @_errors
 async def status() -> dict:
     """Payload link, payload version and counters, capture state and frame age, and the app's version (app.padd.bundled
-    is the padd version the app deploys)."""
+    is the padd version the app deploys). payload.controllers (padd 1.7): which controller input drives (active) and
+    each connected controller's user (see second_controller). payload.login_users: the foreground user's id, the
+    signed-in users' ids and names, and the one controller 2 is for (second)."""
     app = await _app()
     # Right after startup the link may still be connecting; the app waits up to 1.5 s for it.
     hub = await asyncio.to_thread(app.call, "status", wait=1.5, timeout=5.0)
@@ -610,6 +659,8 @@ async def status() -> dict:
     for key in ("hello", "version"):
         if key in link:
             info["payload"][key] = link[key]
+    info["payload"]["controllers"] = hub.get("controllers")
+    info["payload"]["login_users"] = hub.get("login_users")
     if link["connected"]:
         with contextlib.suppress(PadError):
             info["payload"]["pong"] = await asyncio.to_thread(app.ping)

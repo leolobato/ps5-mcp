@@ -218,12 +218,21 @@ def _pad_via_app(app, args) -> int:
         if args.action == "assign":
             print("the PS5 app answers the assignment dialog by itself after every connect")
             return 0
-        status = app.command(args.action, args.args[0] if args.args else "")
+        op = {"second": "second_pad", "use": "select_pad"}.get(args.action, args.action)
+        status = app.command(op, " ".join(args.args) if args.action == "second" else args.args[0] if args.args else "")
     finally:
         app.close()
-    print(protocol.uninstall_text(status) if args.action == "uninstall"
-          else f"status {status & 0xFFFFFFFF:#010x}" if status < 0 else f"status {status}")
+    print(_status_text(args.action, status))
     return 0 if status == 0 else 1
+
+
+def _status_text(action: str, status: int) -> str:
+    from . import protocol
+    if action == "uninstall":
+        return protocol.uninstall_text(status)
+    if action in ("second", "use"):
+        return protocol.pads_text("second_pad" if action == "second" else "select_pad", status)
+    return f"status {status & 0xFFFFFFFF:#010x}" if status < 0 else f"status {status}"
 
 
 def _install(args) -> int:
@@ -273,10 +282,12 @@ def _pad(args) -> int:
             status = link.command(protocol.Command.CLOSE)
         elif args.action == "uninstall":
             status = link.command(protocol.Command.UNINSTALL, args.args[0])
+        elif args.action in ("second", "use"):
+            op = protocol.Command.SECOND_PAD if args.action == "second" else protocol.Command.SELECT_PAD
+            status = link.command(op, " ".join(args.args) if args.action == "second" else args.args[0] if args.args else "")
         else:
             status = link.command(protocol.Command.LAUNCH, args.args[0])
-        print(protocol.uninstall_text(status) if args.action == "uninstall"
-              else f"status {status & 0xFFFFFFFF:#010x}" if status < 0 else f"status {status}")
+        print(_status_text(args.action, status))
         return 0 if status == 0 else 1
     finally:
         link.close()
@@ -328,8 +339,9 @@ def main(argv: list[str] | None = None) -> int:
     padd.set_defaults(func=_padd)
 
     pad = sub.add_parser("pad", help="one-off input through a running padd (through the PS5 app when it runs)")
-    pad.add_argument("action", choices=("press", "home", "launch", "close", "uninstall", "assign"))
-    pad.add_argument("args", nargs="*", help="buttons for press, title id for launch and uninstall, method for home")
+    pad.add_argument("action", choices=("press", "home", "launch", "close", "uninstall", "assign", "second", "use"))
+    pad.add_argument("args", nargs="*", help="buttons for press, title id for launch and uninstall, method for home, "
+                     "connect [user id]/disconnect for second (controller 2), 1/2 for use (the controller input drives)")
     pad.add_argument("--hold-ms", type=int, default=80)
     pad.add_argument("--host", help="console IP address (default: PS5_HOST)")
     pad.set_defaults(func=_pad)

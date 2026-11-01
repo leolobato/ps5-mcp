@@ -26,6 +26,8 @@ enum pmcp_type {
     PMCP_GET_STATE = 7, /* client -> server: no payload */
     PMCP_COMMAND = 8,   /* client -> server: struct pmcp_command; answered with ACK */
     PMCP_GET_USER = 9,  /* no request payload; reply: struct pmcp_user (requires PMCP_FLAG_USER_NAME) */
+    PMCP_GET_USERS = 10, /* no request payload; reply: struct pmcp_users (requires PMCP_FLAG_USERS) */
+    PMCP_GET_PADS = 11, /* no request payload; reply: struct pmcp_pads (requires PMCP_FLAG_PADS) */
 };
 
 #define PMCP_TOUCH_POINTS 2
@@ -62,6 +64,30 @@ struct pmcp_user {              /* 72 bytes */
     char name[64];              /* NUL-terminated UTF-8 local profile name; empty on failure */
 };
 
+#define PMCP_LOGIN_USERS 4
+
+struct pmcp_login_user {        /* 60 bytes */
+    int32_t user_id;            /* -1: an empty slot */
+    char name[56];              /* NUL-terminated UTF-8 local profile name; empty if the lookup failed */
+};
+
+struct pmcp_users {             /* 248 bytes */
+    int32_t status;             /* 0 ok; >0 errno (ENOSYS: no sign-in list); <0 SCE error */
+    int32_t foreground;         /* the foreground user's id, -1 if unknown */
+    struct pmcp_login_user users[PMCP_LOGIN_USERS]; /* the signed-in users, in the console's order */
+};
+
+#define PMCP_PADS 2
+
+struct pmcp_pads {              /* 20 bytes */
+    uint8_t active;             /* 1 or 2: the pad STATE drives */
+    uint8_t reserved[3];
+    struct {
+        int32_t handle;         /* -1: not connected */
+        int32_t user_id;
+    } pads[PMCP_PADS];          /* pad 1: the foreground user's at start; pad 2: the second user's, on demand */
+};
+
 struct pmcp_pong {              /* 40 bytes */
     uint32_t token;
     uint16_t protocol;
@@ -90,12 +116,19 @@ struct pmcp_command {           /* 4 + 4 + 32 bytes */
 #define PMCP_FLAG_TOUCH_UNMAPPED  0x2   /* touch coordinates are accepted but not delivered */
 #define PMCP_FLAG_USER_NAME       0x4   /* GET_USER supported (padd 1.2+) */
 #define PMCP_FLAG_UNINSTALL       0x8   /* COMMAND op UNINSTALL supported (padd 1.3+) */
+#define PMCP_FLAG_PAD_USER        0x10  /* COMMAND op PAD_USER supported (padd 1.5 only) */
+#define PMCP_FLAG_USERS           0x20  /* GET_USERS supported (padd 1.7+) */
+#define PMCP_FLAG_PADS            0x40  /* two pads: GET_PADS, COMMAND ops SECOND_PAD and SELECT_PAD (padd 1.7+) */
 
 enum pmcp_command_op {
     PMCP_CMD_HOME = 1,          /* return to the home screen; arg = method ("" = default) */
     PMCP_CMD_LAUNCH = 2,        /* launch arg (title id) for the foreground user */
     PMCP_CMD_CLOSE = 3,         /* close the running game or app */
     PMCP_CMD_UNINSTALL = 4,     /* uninstall arg (title id, 4 letters + 5 digits); the removal finishes later */
+    PMCP_CMD_PAD_USER = 5,      /* padd 1.5 only: give its one pad to "foreground", "second" or a user id */
+    PMCP_CMD_SECOND_PAD = 6,    /* arg "connect": add pad 2 for the second signed-in user, "connect <user id>" for
+                                   that user; "disconnect": remove it */
+    PMCP_CMD_SELECT_PAD = 7,    /* arg "1" or "2": the pad STATE drives; the other one goes neutral */
 };
 
 enum pmcp_error {
@@ -110,6 +143,9 @@ enum pmcp_error {
 _Static_assert(sizeof(struct pmcp_state) == 28, "state is 28 bytes");
 _Static_assert(sizeof(struct pmcp_hello) == 20, "hello is 20 bytes");
 _Static_assert(sizeof(struct pmcp_user) == 72, "user is 72 bytes");
+_Static_assert(sizeof(struct pmcp_users) == 248, "users is 248 bytes");
+_Static_assert(sizeof(struct pmcp_users) <= PMCP_MAX_PAYLOAD, "users fits one message");
+_Static_assert(sizeof(struct pmcp_pads) == 20, "pads is 20 bytes");
 _Static_assert(sizeof(struct pmcp_pong) == 40, "pong is 40 bytes");
 _Static_assert(sizeof(struct pmcp_ack) == 8, "ack is 8 bytes");
 _Static_assert(sizeof(struct pmcp_command) == 40, "command is 40 bytes");

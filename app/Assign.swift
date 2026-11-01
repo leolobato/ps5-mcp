@@ -7,6 +7,10 @@
 // Side effect: the PS5 then turns the user's DualSense off. Pressing PS on
 // the DualSense and picking the same user brings it back, and both controllers work.
 //
+// Controller 2 (the second signed-in user's) gets the same dialog, focused on the first profile, which is the
+// foreground user's: Cross there takes the DualSense's user. So the app reads the profile names (Vision), moves Right
+// to the pad's user and presses Cross there; a name it cannot find gets no press.
+//
 // Matching mirrors assign.dialog_score: grayscale at quarter resolution, normalised cross-correlation, title at
 // (712, 168) in a 1920x1080 frame, within 24 px. Python searches the whole frame and rejects a best match outside
 // that window; this searches only the window, which gives the same answer whenever the title is on screen.
@@ -14,6 +18,7 @@
 import CoreImage
 import CoreVideo
 import Foundation
+import Vision
 
 final class Assigner {
     static let dialogAt = (x: 712, y: 168)
@@ -114,17 +119,34 @@ final class Assigner {
         return best
     }
 
-    /// Watch for the dialog for `timeout` s; press Cross once if it shows. Returns true if it answered.
-    func assignIfAsked(frame: () -> CVPixelBuffer?, pressCross: () -> Void, timeout: Double = 6,
+    /// The profile names in the dialog, left to right ("Add User" left out): the text on the name row of the tiles.
+    func users(_ buffer: CVPixelBuffer) -> [String] {
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = false
+        // The name row of a 1920x1080 frame, inside the dialog panel; Vision's y goes up from the bottom.
+        request.regionOfInterest = CGRect(x: 240.0 / 1920, y: 1 - 705.0 / 1080, width: 1440.0 / 1920, height: 70.0 / 1080)
+        guard (try? VNImageRequestHandler(cvPixelBuffer: buffer).perform([request])) != nil else { return [] }
+        return (request.results ?? [])
+            .compactMap { o in o.topCandidates(1).first.map { (name: $0.string, x: o.boundingBox.midX) } }
+            .filter { $0.name.caseInsensitiveCompare("Add User") != .orderedSame }
+            .sorted { $0.x < $1.x }
+            .map(\.name)
+    }
+
+    /// Watch for the dialog for `timeout` s; when it shows, `answer` gets the frame and presses (or returns false to
+    /// leave the dialog alone). Returns true if the dialog was answered.
+    func assignIfAsked(frame: () -> CVPixelBuffer?, answer: (CVPixelBuffer) -> Bool, timeout: Double = 6,
                        interval: Double = 0.5, log: (String) -> Void) -> Bool {
         let deadline = uptimeSeconds() + timeout
         func current() -> Double? { frame().map(score) }
         while true {
-            let found = current()
+            let buffer = frame()
+            let found = buffer.map(score)
             if found == nil { log("auto-assign: no frame") }
-            if let found, found >= Assigner.minScore {
-                log(String(format: "auto-assign: 'Who's using this controller?' visible (score %.3f); pressing Cross", found))
-                pressCross()
+            if let buffer, let found, found >= Assigner.minScore {
+                log(String(format: "auto-assign: 'Who's using this controller?' visible (score %.3f)", found))
+                guard answer(buffer) else { return false }
                 Thread.sleep(forTimeInterval: 1.0)
                 if (current() ?? 0) < Assigner.minScore {
                     log("auto-assign: done; turn the DualSense back on with its PS button if it went off")

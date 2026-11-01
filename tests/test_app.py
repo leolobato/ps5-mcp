@@ -31,6 +31,7 @@ from .test_padd_host import BINARY, Padd, wait_for
 ROOT = Path(__file__).resolve().parents[1]
 APP = capture.NATIVE_BINARY
 DIALOG = ROOT / "tests/fixtures/assignment-dialog.png"
+USERS = ROOT / "tests/fixtures/assignment-dialog-users.jpg"  # Add User, leolobato-jb (focused), User1
 HOME = ROOT / "tests/fixtures/home-assigned.png"
 RIGHT, CROSS, L1 = p.BUTTONS["right"], p.BUTTONS["cross"], p.BUTTONS["l1"]
 
@@ -58,9 +59,12 @@ def put_frame(path: Path, image: Image.Image | Path) -> None:
 
 
 class App:
-    def __init__(self, padd: Padd, frame: Image.Image | Path | None = None, *args: str, binary: Path = APP):
+    def __init__(self, padd: Padd, frame: Image.Image | Path | None = None, *args: str, binary: Path = APP,
+                 files: dict[str, str] | None = None):
         self.padd = padd
         self.root = Path(tempfile.mkdtemp(prefix="a", dir="/tmp"))  # AF_UNIX paths are limited to ~104 bytes
+        for name, content in (files or {}).items():  # state files from an earlier run
+            (self.root / name).write_text(content)
         self.frame = self.root / "frame.png"
         put_frame(self.frame, frame or Image.new("RGB", (1920, 1080), (90, 90, 90)))
         cli = self.root / "fake-cli"
@@ -118,7 +122,7 @@ def buttons(padd) -> list[int]:
 def test_status_reports_api_link_and_frames(app):
     status = app.client().status()
     assert status["api"] == 1 and status["frames"] > 0 and 0 <= status["frame_age"] < 1
-    assert status["pad"]["connected"] and status["pad"]["version"] == "1.4"
+    assert status["pad"]["connected"] and status["pad"]["version"] == "1.8"
     assert status["pad"]["hello"]["pad_handle"] == 1000 and status["source"].startswith("file:")
     assert status["pad"]["hello"]["user_name"] == "Test Player"
     assert status["title"] == "PS5 MCP · pad connected"
@@ -291,7 +295,7 @@ def test_hold_survives_the_watchdog(app):
     app.client("agent").set(PadState(buttons=RIGHT))
     time.sleep(1.5)
     assert buttons(app.padd)[-1] == RIGHT
-    assert {"event": "neutral", "reason": "watchdog"} not in app.padd.events()
+    assert {"event": "neutral", "reason": "watchdog", "pad": 1} not in app.padd.events()
 
 
 def test_press_holds_then_releases_with_gap(app):
@@ -699,3 +703,145 @@ def test_p_key_is_the_remote_play_ps_button(app):
     client.key("p", False)
     assert wait_for(lambda: "PS button" in (client.status()["notice"] or ""), 3)
     assert "Remote Play" in client.status()["notice"]
+
+
+GUEST = 0x22334455
+
+
+def pressed(daemon, handle: int) -> list[int]:
+    return [c["buttons"] for c in daemon.calls("pad_report") if c["handle"] == handle and c["buttons"]]
+
+
+def restart_padd(daemon, tmp_path, env, name: str):
+    trace = tmp_path / f"{name}.jsonl"
+    process = subprocess.Popen([str(BINARY), "--port", str(daemon.port), "--log-dir", str(tmp_path / name)],
+                               env={"PADD_TRACE": str(trace), **env})
+    return process, trace
+
+
+def calls_in(trace) -> list[dict]:
+    return [json.loads(line) for line in trace.read_text().splitlines()] if trace.exists() else []
+
+
+@pytest.mark.skipif(not USERS.exists(), reason="test fixtures not present")
+def test_second_controller_answers_its_dialog_and_comes_back_after_padd_restarts(tmp_path):
+    env = {"PADD_LOGIN_USERS": f"{0x11ECF8B9},{GUEST}", "PADD_USER_NAME": "leolobato-jb", "PADD_GUEST_NAME": "User1"}
+    daemon = Padd(tmp_path, env=env)
+    hub = App(daemon, USERS)
+    restarted = None
+    try:
+        client = hub.client()
+        assert client.status()["controllers"] == {"active": 1, "second": False, "supported": True, "list": [
+            {"controller": 1, "handle": 1000, "user_id": 0x11ECF8B9, "user_name": "leolobato-jb"}], "signed_out": []}
+        # Controller 1's dialog; connect once that Cross is released.
+        assert wait_for(lambda: CROSS in buttons(daemon) and buttons(daemon)[-1] == 0, 4)
+        assert client.command("second_pad", "connect") == 0
+        status = client.status()
+        assert status["controllers"]["active"] == 2 and status["controllers"]["second"]
+        assert status["pad"]["hello"]["user_name"] == "User1" and status["pad"]["hello"]["pad_handle"] == 1001
+        assert json.loads((hub.root / "controllers").read_text()) == {"second": True, "active": 2, "user": GUEST}
+        # Controller 2 answers its own dialog on User1's profile: one Right from the focused first profile, then Cross.
+        assert wait_for(lambda: CROSS in pressed(daemon, 1001), 8)
+        assert pressed(daemon, 1001)[:2] == [RIGHT, CROSS] and pressed(daemon, 1000) == [CROSS]
+        with pytest.raises(AppError, match="connect <user id> or disconnect"):
+            client.command("second_pad", "toggle")
+        # A restarted padd has controller 1 only: the app answers its dialog, then connects controller 2, answers
+        # that one, and leaves input on controller 2 as before.
+        daemon.stop()
+        assert wait_for(lambda: not client.status()["pad"]["connected"])
+        restarted, trace = restart_padd(daemon, tmp_path, env, "second")
+        assert wait_for(lambda: client.status()["controllers"].get("second") and
+                        client.status()["controllers"]["active"] == 2, 12)
+        assert wait_for(lambda: CROSS in [c["buttons"] for c in calls_in(trace)
+                                          if c["call"] == "pad_report" and c["handle"] == 1001], 8)
+        reports_after = [c for c in calls_in(trace) if c["call"] == "pad_report" and c["buttons"]]
+        assert [c["user_id"] for c in calls_in(trace) if c["call"] == "pad_add"] == [0x11ECF8B9, GUEST]
+        assert reports_after[0]["handle"] == 1000 and reports_after[0]["buttons"] == CROSS
+    finally:
+        if restarted:
+            restarted.send_signal(signal.SIGTERM)
+            restarted.wait(5)
+        hub.stop()
+        daemon.stop()
+
+
+def test_input_follows_the_selected_controller_and_disconnect_returns_it(tmp_path):
+    daemon = Padd(tmp_path, env={"PADD_LOGIN_USERS": f"{0x11ECF8B9},{GUEST}"})
+    hub = App(daemon)
+    try:
+        client = hub.client("agent")
+        assert client.command("second_pad", "connect") == 0
+        client.press(PadState(buttons=L1), 40)
+        assert L1 in pressed(daemon, 1001) and L1 not in pressed(daemon, 1000)
+        assert client.command("select_pad", "1") == 0
+        client.press(PadState(buttons=L1), 40)
+        assert L1 in pressed(daemon, 1000)
+        assert json.loads((hub.root / "controllers").read_text()) == {"second": True, "active": 1, "user": GUEST}
+        assert client.command("select_pad", "2") == 0
+        assert client.command("second_pad", "disconnect") == 0
+        status = client.status()
+        assert status["controllers"]["active"] == 1 and not status["controllers"]["second"]
+        assert status["pad"]["hello"]["pad_handle"] == 1000
+        assert client.command("select_pad", "2") == 2  # not connected
+        with pytest.raises(AppError, match="1 or 2"):
+            client.command("select_pad", "3")
+    finally:
+        hub.stop()
+        daemon.stop()
+
+
+def test_second_controller_signs_in_a_known_user(tmp_path):
+    # User1 was seen signed in before (known-users); nobody else is signed in now.
+    daemon = Padd(tmp_path)
+    hub = App(daemon, None, "--no-auto-assign", files={"known-users": json.dumps({str(GUEST): "User1"})})
+    try:
+        client = hub.client()
+        controllers = client.status()["controllers"]
+        assert controllers["signed_out"] == [{"user_id": GUEST, "name": "User1"}]
+        with pytest.raises(AppError, match="not a user id"):
+            client.command("second_pad", "connect abc")
+        assert client.command("second_pad", f"connect {GUEST}") == 0
+        status = client.status()
+        assert daemon.calls("pad_add")[-1]["user_id"] == GUEST and status["controllers"]["active"] == 2
+        assert "sign in User1" in status["notice"]
+        assert json.loads((hub.root / "controllers").read_text()) == {"active": 2, "second": True, "user": GUEST}
+        # Known users only grow: the signed-in foreground user is remembered too.
+        assert json.loads((hub.root / "known-users").read_text()) == {str(GUEST): "User1", str(0x11ECF8B9): "Test Player"}
+    finally:
+        hub.stop()
+        daemon.stop()
+
+
+@pytest.mark.skipif(not USERS.exists(), reason="test fixtures not present")
+def test_second_controller_never_presses_when_its_user_is_not_on_screen(tmp_path):
+    daemon = Padd(tmp_path, env={"PADD_LOGIN_USERS": f"{0x11ECF8B9},{GUEST}", "PADD_GUEST_NAME": "Somebody"})
+    hub = App(daemon, USERS)
+    try:
+        client = hub.client()
+        assert wait_for(lambda: CROSS in buttons(daemon) and buttons(daemon)[-1] == 0, 4)
+        assert client.command("second_pad", "connect") == 0
+        assert wait_for(lambda: "pick Somebody" in (client.status()["notice"] or ""), 8)
+        assert not pressed(daemon, 1001)
+    finally:
+        hub.stop()
+        daemon.stop()
+
+
+def test_status_names_the_foreground_and_second_users(tmp_path):
+    daemon = Padd(tmp_path, env={"PADD_LOGIN_USERS": f"{0x11ECF8B9},{GUEST}", "PADD_GUEST_NAME": "User1"})
+    hub = App(daemon)
+    try:
+        users = hub.client().status()["login_users"]
+        assert users["foreground"] == 0x11ECF8B9 and users["second"] == GUEST
+        assert users["users"] == [{"user_id": 0x11ECF8B9, "name": "Test Player"}, {"user_id": GUEST, "name": "User1"}]
+    finally:
+        hub.stop()
+        daemon.stop()
+
+
+def test_second_controller_without_a_second_user_changes_nothing(app):
+    client = app.client()
+    assert client.command("second_pad", "connect") == 2
+    status = client.status()
+    assert status["controllers"]["active"] == 1 and not status["controllers"]["second"]
+    assert status["pad"]["hello"]["pad_handle"] == 1000 and not (app.root / "controllers").exists()

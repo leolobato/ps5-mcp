@@ -95,7 +95,7 @@ async def test_home_and_launch_commands(runtime):
 
 async def test_status_reports_link_and_counters(runtime):
     info = json.loads(text(await server.mcp.call_tool("status", {})))
-    assert info["payload"]["connected"] and info["payload"]["version"] == "1.4"
+    assert info["payload"]["connected"] and info["payload"]["version"] == "1.8"
     assert info["payload"]["pong"]["report_failures"] == 0
     assert info["capture"]["running"]
     assert info["app"]["version"] == info["app"]["server_version"]  # one version for the app and the MCP server
@@ -255,3 +255,39 @@ async def test_ps_button_and_type_text_explain_the_remote_play_requirement(runti
         assert "need Remote Play" in text(await server.mcp.call_tool(tool, args))
     assert "hold_ms" in text(await server.mcp.call_tool("ps_button", {"hold_ms": 5000}))
     assert reports(runtime)[-1] == 0
+
+
+async def test_second_controller_needs_a_second_user(runtime):
+    result = text(await server.mcp.call_tool("second_controller", {"connected": True, "snapshot_after_ms": None}))
+    assert "no other user is signed in" in result
+    assert "not connected" in text(await server.mcp.call_tool("use_controller", {"controller": 2}))
+    assert "1 or 2" in text(await server.mcp.call_tool("use_controller", {"controller": 3}))
+    info = json.loads(text(await server.mcp.call_tool("status", {})))
+    assert info["payload"]["controllers"]["active"] == 1 and not info["payload"]["controllers"]["second"]
+
+
+async def test_input_follows_the_selected_controller(tmp_path, monkeypatch):
+    guest = 0x22334455
+    daemon = Padd(tmp_path, env={"PADD_LOGIN_USERS": f"{0x11ECF8B9},{guest}", "PADD_GUEST_NAME": "User1"})
+    app = App(daemon)
+    monkeypatch.setenv("PS5MCP_STATE", str(app.root))
+    monkeypatch.setattr(server, "runtime", server.Runtime())
+    server.runtime.start()
+    try:
+        result = text(await server.mcp.call_tool("second_controller", {"connected": True, "snapshot_after_ms": None}))
+        assert "input goes to controller 2" in result and "controller 2 = User1" in result
+        await server.mcp.call_tool("press", {"button": "right", "hold_ms": 30})
+        assert p.BUTTONS["right"] in [c["buttons"] for c in daemon.calls("pad_report") if c["handle"] == 1001]
+        result = text(await server.mcp.call_tool("use_controller", {"controller": 1}))
+        assert "input goes to controller 1" in result
+        await server.mcp.call_tool("press", {"button": "cross", "hold_ms": 30})
+        assert p.BUTTONS["cross"] in [c["buttons"] for c in daemon.calls("pad_report") if c["handle"] == 1000]
+        controllers = json.loads(text(await server.mcp.call_tool("status", {})))["payload"]["controllers"]
+        assert controllers["active"] == 1 and controllers["second"]
+        assert [c["user_name"] for c in controllers["list"]] == ["Test Player", "User1"]
+        assert "input goes to controller 1" in text(
+            await server.mcp.call_tool("second_controller", {"connected": False, "snapshot_after_ms": None}))
+    finally:
+        server.runtime.stop()
+        app.stop()
+        daemon.stop()

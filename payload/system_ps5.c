@@ -12,6 +12,8 @@ int sceUserServiceInitialize(void *params);
 int sceUserServiceGetForegroundUser(int32_t *user_id);
 int sceUserServiceTerminate(void);
 __attribute__((weak)) int sceUserServiceGetUserName(int32_t user_id, char *name, size_t size);
+/* Four ids, -1 for an empty slot (as prospero-win reads it inside a game). */
+__attribute__((weak)) int sceUserServiceGetLoginUserIdList(int32_t *ids);
 /* Not yet proven on 13.60: weak, so an unresolved import becomes ENOSYS instead of a failed load. */
 __attribute__((weak)) int sceSystemServiceNavigateToGoHome(void);
 __attribute__((weak)) int sceLncUtilInitialize(void);
@@ -61,13 +63,31 @@ static int user_service_ready;
 static int launcher_ready;
 static int installer_ready;
 
+static int user_service_init(void) {
+    if (user_service_ready) return 0;
+    int rc = sceUserServiceInitialize(NULL);
+    if (rc) return rc;
+    user_service_ready = 1;
+    return 0;
+}
+
 int system_foreground_user(int32_t *user_id) {
-    if (!user_service_ready) {
-        int rc = sceUserServiceInitialize(NULL);
-        if (rc) return rc;
-        user_service_ready = 1;
-    }
-    return sceUserServiceGetForegroundUser(user_id);
+    int rc = user_service_init();
+    return rc ? rc : sceUserServiceGetForegroundUser(user_id);
+}
+
+int system_login_users(int32_t ids[SYSTEM_LOGIN_USERS]) {
+    for (int i = 0; i < SYSTEM_LOGIN_USERS; i++) ids[i] = -1;
+    if (!sceUserServiceGetLoginUserIdList) return ENOSYS;
+    int rc = user_service_init();
+    if (rc) return rc;
+    /* The list holds four ids; spare room in case this firmware's is longer. */
+    int32_t list[4 * SYSTEM_LOGIN_USERS];
+    for (unsigned i = 0; i < sizeof list / sizeof list[0]; i++) list[i] = -1;
+    rc = sceUserServiceGetLoginUserIdList(list);
+    if (rc) return rc;
+    memcpy(ids, list, SYSTEM_LOGIN_USERS * sizeof ids[0]);
+    return 0;
 }
 
 int system_user_name(int32_t user_id, char *name, size_t size) {

@@ -51,6 +51,16 @@ final class Hub {
     /// One Remote Play input request (PS button, keyboard) at a time; `remoteButtonsHeld` is under `lock`.
     private let remoteInput = NSLock()
     private var remoteButtonsHeld = false
+    /// What the person asked for: controller 2 connected, and which controller input drives. Kept in
+    /// `<state>/controllers` and restored after every reconnect (a restarted padd has only controller 1).
+    private var wantSecond = false
+    private var wantActive = 1
+    private var wantSecondUser: Int32?
+    /// Every profile padd has reported signed in, kept in `<state>/known-users`: controller 2 can sign one of them in
+    /// when nobody else is signed in (padd only lists signed-in users).
+    private var knownUsersNow: [Int32: String] = [:]
+    private var padsNow: Pads?
+    private var loginUsersNow: LoginUsers?
 
     var stateDir: String { config.stateDir }
     var socketPath: String { config.stateDir + "/capture.sock" }
@@ -79,9 +89,17 @@ final class Hub {
         controller.onStatus = { [weak self] in self?.statusChanged() }
         controller.onAgentInputCancelled = { [weak self] in self?.cancelRemoteButtons() }
         lease.onChange = { [weak self] in self?.statusChanged() }
-        if config.autoAssign {
-            controller.onConnected = { [weak self] link in self?.autoAssign(link) }
+        if let data = FileManager.default.contents(atPath: config.stateDir + "/controllers"),
+           let saved = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            wantSecond = saved["second"] as? Bool ?? false
+            wantActive = wantSecond && saved["active"] as? Int == 2 ? 2 : 1
+            wantSecondUser = (saved["user"] as? Int).map { Int32($0) }
         }
+        if let data = FileManager.default.contents(atPath: config.stateDir + "/known-users"),
+           let saved = try? JSONSerialization.jsonObject(with: data) as? [String: String] {
+            for (id, name) in saved { if let id = Int32(id) { knownUsersNow[id] = name } }
+        }
+        controller.onConnected = { [weak self] link in self?.restoreControllers(link) }
     }
 
     /// Creates the frame source, the API and the padd link. The UI starts the source once the preview layer is
@@ -284,7 +302,8 @@ final class Hub {
                 "pad": link.json, "title": link.title, "notice": note ?? NSNull(), "padd": padd.json,
                 "remote_play": (source as? RemotePlaySource)?.json as Any? ?? (captureVideo == "remoteplay"
                     ? RemotePlayStatus(phase: .setupNeeded, issue: note).json : NSNull()),
-                "auto_assign": config.autoAssign && assigner != nil, "camera": cameraPermission, "lease": lease.json]
+                "auto_assign": config.autoAssign && assigner != nil, "camera": cameraPermission, "lease": lease.json,
+                "controllers": controllersJSON, "login_users": loginUsers?.json as Any? ?? NSNull()]
     }
 
     var cameraPermission: String {
@@ -321,8 +340,184 @@ final class Hub {
             }
             guard arg.count == 9 else { throw BadInput("uninstall needs a title id such as PPSA01234") }
             return try link.command(.uninstall, arg, timeout: timeout)
+        case "second_pad":
+            let parts = arg.split(separator: " ").map(String.init)
+            if parts == ["disconnect"] { return try disconnectSecond(link) }
+            guard parts.first == "connect", parts.count <= 2 else {
+                throw BadInput("second_pad needs connect, connect <user id> or disconnect")
+            }
+            if parts.count == 1 { return try connectSecond(link) }
+            guard let user = Int32(parts[1]), user > 0 else { throw BadInput("not a user id: \(parts[1])") }
+            return try connectSecond(link, user: user)
+        case "select_pad":
+            guard let pad = Int(arg), pad == 1 || pad == 2 else { throw BadInput("select_pad needs 1 or 2") }
+            return try selectPad(pad, link: link)
         default:
-            throw BadInput("op must be home, close, launch or uninstall")
+            throw BadInput("op must be home, close, launch, uninstall, second_pad or select_pad")
+        }
+    }
+
+    // MARK: controllers
+    //
+    // padd (1.7) runs controller 1 for the foreground user and, on request, controller 2 for the second signed-in
+    // user. Keyboard, API and MCP input drive the selected one. A new controller shows "Who's using this
+    // controller?", which only that controller can answer, so connecting controller 2 selects it and auto-assign
+    // answers with it.
+
+    /// Both controllers as padd last reported them (nil before padd 1.7 or before the first answer).
+    var pads: Pads? { lock.lock(); defer { lock.unlock() }; return padsNow }
+
+    /// Who is signed in, as padd last reported it (nil before padd 1.7 or before the first answer).
+    var loginUsers: LoginUsers? { lock.lock(); defer { lock.unlock() }; return loginUsersNow }
+
+    /// Asks padd who is signed in and how the controllers are now; the window calls it with its ping, so sign-ins
+    /// and a new foreground user show.
+    func refreshLoginUsers(_ link: PadLink) {
+        let users = try? link.getUsers()
+        let pads = try? link.getPads()
+        lock.lock()
+        loginUsersNow = users
+        padsNow = pads
+        var known = knownUsersNow
+        for user in users?.users ?? [] where !user.name.isEmpty { known[user.id] = user.name }
+        let changed = known != knownUsersNow
+        knownUsersNow = known
+        lock.unlock()
+        if changed, let data = try? JSONSerialization.data(withJSONObject: Dictionary(uniqueKeysWithValues:
+            known.map { (String($0.key), $0.value) }), options: .sortedKeys) {
+            try? data.write(to: URL(fileURLWithPath: stateDir + "/known-users"), options: .atomic)
+        }
+    }
+
+    /// Profiles seen signed in before that are not signed in now: who controller 2 can sign in.
+    var signedOutUsers: [(id: Int32, name: String)] {
+        lock.lock(); defer { lock.unlock() }
+        let signedIn = Set(loginUsersNow?.users.map(\.id) ?? [])
+        return knownUsersNow.filter { !signedIn.contains($0.key) }.map { ($0.key, $0.value) }.sorted { $0.name < $1.name }
+    }
+
+    /// A controller's user name, from the signed-in users.
+    func controllerName(_ pad: Int) -> String? {
+        guard let pads, let users = loginUsers, pad >= 1, pad <= 2, pads.handles[pad - 1] >= 0 else { return nil }
+        let id = pads.userIDs[pad - 1]
+        lock.lock(); let known = knownUsersNow[id]; lock.unlock()
+        return users.users.first { $0.id == id }.map(LoginUsers.label) ?? known
+    }
+
+    private var controllersJSON: [String: Any] {
+        guard let pads else { return ["active": 1, "second": false, "supported": false] }
+        let list: [[String: Any]] = (1...2).filter { pads.handles[$0 - 1] >= 0 }.map {
+            ["controller": $0, "handle": Int(pads.handles[$0 - 1]), "user_id": Int(pads.userIDs[$0 - 1]),
+             "user_name": controllerName($0) as Any? ?? NSNull()]
+        }
+        let known = signedOutUsers.map { ["user_id": Int($0.id), "name": $0.name] }
+        return ["active": pads.active, "second": pads.secondConnected, "supported": true, "list": list,
+                "signed_out": known]
+    }
+
+    private func saveControllers(second: Bool, active: Int) {
+        lock.lock()
+        wantSecond = second
+        wantActive = active
+        if second, let pads = padsNow, pads.secondConnected { wantSecondUser = pads.userIDs[1] }
+        if !second { wantSecondUser = nil }
+        var saved: [String: Any] = ["second": second, "active": active]
+        if let user = wantSecondUser { saved["user"] = Int(user) }
+        lock.unlock()
+        if let data = try? JSONSerialization.data(withJSONObject: saved, options: .sortedKeys) {
+            try? data.write(to: URL(fileURLWithPath: stateDir + "/controllers"), options: .atomic)
+        }
+    }
+
+    private func requirePads(_ link: PadLink) throws {
+        guard link.hello.flags & PMCP.flagPads != 0 else {
+            throw BadInput("this padd has one controller; update padd to 1.7 or later for a second one")
+        }
+    }
+
+    /// Input goes to controller `pad` from now on; padd releases the other one. Returns padd's status (0, or
+    /// ENOENT when controller 2 is not connected).
+    func selectPad(_ pad: Int, link: PadLink) throws -> Int32 {
+        try requirePads(link)
+        controller.release(client: "auto-assign")  // a press in flight would land on the other controller
+        let status = try link.padsCommand(.selectPad, String(pad), timeout: Hub.commandTimeout)
+        refreshLoginUsers(link)
+        if status == 0 {
+            saveControllers(second: pads?.secondConnected ?? (pad == 2), active: pad)
+            say("controller \(pad): \(link.hello.userName ?? "?") · \(link.hello.userID)")
+        }
+        statusChanged()
+        return status
+    }
+
+    /// Adds controller 2 for the second signed-in user (or `user`) and selects it. For a signed-in user auto-assign
+    /// answers its dialog; a signed-out user gets the console's sign-in picker, which the person confirms with Cross.
+    /// Returns padd's status (ENOENT: nobody else is signed in; nothing changes).
+    func connectSecond(_ link: PadLink, user: Int32? = nil) throws -> Int32 {
+        try requirePads(link)
+        controller.release(client: "auto-assign")
+        let status = try link.padsCommand(.secondPad, user.map { "connect \($0)" } ?? "connect",
+                                          timeout: Hub.commandTimeout)
+        refreshLoginUsers(link)
+        guard status == 0 else { statusChanged(); return status }
+        saveControllers(second: true, active: pads?.active ?? 1)
+        let selected = try selectPad(2, link: link)
+        guard selected == 0 else { return selected }
+        if let user, loginUsers?.users.contains(where: { $0.id == user }) == false {
+            notice = "The PS5 asks to sign in \(controllerName(2) ?? String(user)) for controller 2: confirm with "
+                + "Cross (Enter in this window). Input now goes to controller 2."
+        } else if config.autoAssign {
+            DispatchQueue.global().async { [weak self] in self?.autoAssign(link) }
+        }
+        return selected
+    }
+
+    /// Removes controller 2; input goes back to controller 1.
+    func disconnectSecond(_ link: PadLink) throws -> Int32 {
+        try requirePads(link)
+        controller.release(client: "auto-assign")
+        let status = try link.padsCommand(.secondPad, "disconnect", timeout: Hub.commandTimeout)
+        refreshLoginUsers(link)
+        if status == 0 { saveControllers(second: false, active: 1) }
+        statusChanged()
+        return status
+    }
+
+    /// After a (re)connect: answer controller 1's dialog, then bring back controller 2 and the selection. padd keeps
+    /// both controllers while it runs, so an app restart finds them as they were; a padd restart has only
+    /// controller 1. One dialog at a time: controller 2 is connected once controller 1's dialog is answered.
+    private func restoreControllers(_ link: PadLink) {
+        refreshLoginUsers(link)
+        lock.lock(); let second = wantSecond, active = wantActive, secondUser = wantSecondUser; lock.unlock()
+        guard link.hello.flags & PMCP.flagPads != 0, let pads else {
+            if second { notice = "This padd has one controller; Update padd for controller 2." }
+            if config.autoAssign { autoAssign(link) }
+            return
+        }
+        do {
+            if !second || pads.secondConnected {
+                if pads.secondConnected && !second { saveControllers(second: true, active: pads.active) }
+                else if pads.active != active { _ = try selectPad(active, link: link) }
+                if config.autoAssign { autoAssign(link) }
+                return
+            }
+            if pads.active != 1 { _ = try selectPad(1, link: link) }
+            if config.autoAssign { autoAssign(link) }
+            // The same user as before when they are still signed in; otherwise the second signed-in user.
+            let signedIn = secondUser.map { id in loginUsers?.users.contains { $0.id == id } == true } ?? false
+            let status = try link.padsCommand(.secondPad, signedIn ? "connect \(secondUser!)" : "connect",
+                                              timeout: Hub.commandTimeout)
+            refreshLoginUsers(link)
+            guard status == 0 else {
+                notice = "Controller 2: \(PMCP.padsText(.secondPad, status))."
+                statusChanged()
+                return
+            }
+            _ = try selectPad(2, link: link)
+            if config.autoAssign { autoAssign(link) }
+            if active == 1 { _ = try selectPad(1, link: link) }
+        } catch {
+            say("controllers: \(error)")
         }
     }
 
@@ -401,21 +596,56 @@ final class Hub {
 
     // MARK: auto-assign
 
+    /// Answers the selected controller's dialog. Controller 1 (the foreground user's): Cross on the focused profile.
+    /// Controller 2: Right to its user's profile first (the dialog focuses the first profile, the foreground user's),
+    /// and no press when the name is not on screen. Stops if another controller is selected meanwhile.
     private func autoAssign(_ link: PadLink) {
         guard let assigner else { return }
         let layer = "auto-assign"
-        let answered = assigner.assignIfAsked(frame: { sink.latestBuffer() }, pressCross: {
-            keepFrame("auto-assign-before.jpg")
-            var cross = PadState()
-            cross.buttons = button("cross")
-            try? controller.set(client: layer, cross)
+        let pad = pads?.active ?? 1
+        let steer = pad == 2
+        let target = link.hello.userName
+        func press(_ name: String) throws {
+            guard (pads?.active ?? 1) == pad else { throw BadInput("controller \(pad) is no longer selected") }
+            var state = PadState()
+            state.buttons = button(name)
+            try? controller.set(client: layer, state)
             Thread.sleep(forTimeInterval: 0.1)
             controller.release(client: layer)
+            Thread.sleep(forTimeInterval: 0.3)
+        }
+        let answered = assigner.assignIfAsked(frame: { sink.latestBuffer() }, answer: { buffer in
+            keepFrame("auto-assign-before.jpg")
+            var steps = 0
+            if steer {
+                let users = assigner.users(buffer)
+                guard let target, let index = users.firstIndex(where: {
+                    $0.caseInsensitiveCompare(target) == .orderedSame
+                }) else {
+                    say("auto-assign: \(target ?? "the pad's user") is not among \(users); not pressing")
+                    notice = "The PS5 asks \"Who's using this controller?\" for controller 2: pick "
+                        + "\(target ?? "its user") with it (arrow keys and Enter in this window)."
+                    return false
+                }
+                say("auto-assign: profiles \(users); moving \(index) right to \(target)")
+                steps = index
+            }
+            do {
+                for _ in 0..<steps { try press("right") }
+                say("auto-assign: pressing Cross")
+                try press("cross")
+            } catch {
+                say("auto-assign: \(error); not answering")
+                return false
+            }
+            return true
         }, log: { say($0) })
         if answered {
             keepFrame("auto-assign-after.jpg")
-            notice = "Answered \"Who's using this controller?\" with the virtual pad. If your DualSense turned off, "
-                + "press its PS button and pick the same user; both controllers then work."
+            notice = steer
+                ? "Answered \"Who's using this controller?\" with \(target ?? "its user") for controller 2."
+                : "Answered \"Who's using this controller?\" with controller 1. If your DualSense turned off, "
+                    + "press its PS button and pick the same user; both controllers then work."
         }
     }
 

@@ -62,7 +62,12 @@ func connectTCP(host: String, port: UInt16, timeout: Double) throws -> Int32 {
 final class PadLink {
     let host: String
     let port: UInt16
-    private(set) var hello: Hello!
+    private var currentHello: Hello!
+    /// The HELLO, updated when the pad moves to another user.
+    private(set) var hello: Hello! {
+        get { cond.lock(); defer { cond.unlock() }; return currentHello }
+        set { cond.lock(); currentHello = newValue; cond.unlock() }
+    }
     private let fd: Int32
     private let timeout: Double
     private let sendLock = NSLock()
@@ -214,14 +219,50 @@ final class PadLink {
         return decodePong(reply)
     }
 
-    private func getUserName(timeout: Double) throws -> String? {
+    private func getUser(timeout: Double) throws -> (status: Int32, userID: Int32, name: String?) {
         let reply = try request(encode(.getUser), reply: .getUser, timeout: timeout)
         guard reply.count == 72 else { throw PadError.failed("invalid GET_USER reply") }
         var cursor = Cursor(data: reply)
         let status = cursor.i32(), userID = cursor.i32()
-        guard status == 0, userID == hello.userID else { return nil }
         let name = String(decoding: reply.dropFirst(8).prefix(while: { $0 != 0 }), as: UTF8.self)
-        return name.isEmpty ? nil : name
+        return (status, userID, status == 0 && !name.isEmpty ? name : nil)
+    }
+
+    private func getUserName(timeout: Double) throws -> String? {
+        let user = try getUser(timeout: timeout)
+        return user.userID == hello.userID ? user.name : nil
+    }
+
+    /// The foreground and signed-in users (padd 1.7); nil from an older padd.
+    func getUsers(timeout: Double = 2) throws -> LoginUsers? {
+        guard hello.flags & PMCP.flagUsers != 0 else { return nil }
+        let reply = try request(encode(.getUsers), reply: .getUsers, timeout: timeout)
+        guard reply.count == 248 else { throw PadError.failed("invalid GET_USERS reply") }
+        return decodeUsers(reply)
+    }
+
+    /// Which pad input drives and both pads' handles and users (padd 1.7); nil from an older padd.
+    func getPads(timeout: Double = 2) throws -> Pads? {
+        guard hello.flags & PMCP.flagPads != 0 else { return nil }
+        let reply = try request(encode(.getPads), reply: .getPads, timeout: timeout)
+        guard reply.count == 20 else { throw PadError.failed("invalid GET_PADS reply") }
+        return decodePads(reply)
+    }
+
+    /// SECOND_PAD or SELECT_PAD (padd 1.7). On success the HELLO shown in `status` follows the active pad: its
+    /// handle, user and name.
+    func padsCommand(_ op: PMCP.Command, _ arg: String, timeout: Double = 10) throws -> Int32 {
+        let status = try command(op, arg, timeout: timeout)
+        guard status == 0 else { return status }
+        let pong = try ping(timeout: 2)
+        let user = try getUser(timeout: 2)
+        cond.lock()
+        currentHello.padHandle = pong.padHandle
+        currentHello.flags = pong.flags
+        currentHello.userID = user.userID
+        currentHello.userName = user.name
+        cond.unlock()
+        return status
     }
 
     func getState(timeout: Double? = nil) throws -> PadState {

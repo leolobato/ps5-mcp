@@ -2,7 +2,10 @@
  *
  * PADD_TRACE=<file> receives one JSON line per state *change* and per call, so
  * tests can assert what the console would have seen.
- * PADD_FAIL_ADD=<errno> makes pad_add fail.
+ * PADD_FAIL_ADD=<errno> makes pad_add fail; PADD_FAIL_ADD_USER=<user id> limits that to one user.
+ * PADD_LOGIN_USERS=<id>,<id>... are the signed-in users (default: only the foreground user);
+ * PADD_FAIL_LOGIN_USERS=<status> makes that list fail.
+ * PADD_USER_NAME and PADD_GUEST_NAME name the foreground user and the others.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,8 +15,12 @@
 #include "system.h"
 
 static FILE *trace;
-static struct pmcp_state last;
-static int have_last;
+/* The last state traced per pad (padd feeds up to two), so a repeat is skipped but each pad's first report shows. */
+static struct {
+    int32_t handle;
+    struct pmcp_state state;
+} last[16];
+static int lasts;
 static int32_t next_handle = 1000;
 
 static void emit(const char *line) {
@@ -25,25 +32,49 @@ static void emit(const char *line) {
     fputs(line, trace);
 }
 
+#define FOREGROUND_USER 0x11ecf8b9
+
 int system_foreground_user(int32_t *user_id) {
-    *user_id = 0x11ecf8b9;
+    *user_id = FOREGROUND_USER;
     return 0;
 }
 
+int system_login_users(int32_t ids[SYSTEM_LOGIN_USERS]) {
+    const char *fail = getenv("PADD_FAIL_LOGIN_USERS");
+    const char *list = getenv("PADD_LOGIN_USERS");
+    for (int i = 0; i < SYSTEM_LOGIN_USERS; i++) ids[i] = -1;
+    if (fail) return atoi(fail);
+    if (!list) {
+        ids[0] = FOREGROUND_USER;
+        return 0;
+    }
+    char *end;
+    for (int i = 0; i < SYSTEM_LOGIN_USERS && *list; i++) {
+        ids[i] = (int32_t)strtol(list, &end, 0);
+        list = *end == ',' ? end + 1 : end;
+    }
+    return 0;
+}
+
+/* The foreground user is PADD_USER_NAME ("Test Player"); the others are PADD_GUEST_NAME or "Guest <id>". */
 int system_user_name(int32_t user_id, char *name, size_t size) {
-    (void)user_id;
     const char *fail = getenv("PADD_FAIL_USER_NAME");
     const char *value = getenv("PADD_USER_NAME");
-    snprintf(name, size, "%s", fail ? "" : value ? value : "Test Player");
+    const char *guest = getenv("PADD_GUEST_NAME");
+    if (fail) snprintf(name, size, "%s", "");
+    else if (user_id != FOREGROUND_USER && guest) snprintf(name, size, "%s", guest);
+    else if (user_id != FOREGROUND_USER) snprintf(name, size, "Guest %d", user_id);
+    else snprintf(name, size, "%s", value ? value : "Test Player");
     return fail ? atoi(fail) : 0;
 }
 
 int pad_add(int32_t user_id, int32_t *handle) {
     const char *fail = getenv("PADD_FAIL_ADD");
+    const char *only = getenv("PADD_FAIL_ADD_USER");
     char line[128];
     snprintf(line, sizeof line, "{\"call\":\"pad_add\",\"user_id\":%d}\n", user_id);
     emit(line);
-    if (fail) return atoi(fail);
+    if (fail && (!only || strtol(only, NULL, 0) == user_id)) return atoi(fail);
     *handle = next_handle++;
     return 0;
 }
@@ -51,9 +82,15 @@ int pad_add(int32_t user_id, int32_t *handle) {
 int pad_report(int32_t handle, const struct pmcp_state *state) {
     struct pmcp_state copy = *state;
     copy.seq = 0;
-    if (have_last && memcmp(&copy, &last, sizeof copy) == 0) return 0;
-    last = copy;
-    have_last = 1;
+    int i = 0;
+    while (i < lasts && last[i].handle != handle) i++;
+    if (i < lasts && memcmp(&copy, &last[i].state, sizeof copy) == 0) return 0;
+    if (i == lasts) {
+        if (lasts == 16) i = lasts - 1;  /* many old handles: reuse the newest slot */
+        else lasts++;
+    }
+    last[i].handle = handle;
+    last[i].state = copy;
     char line[256];
     snprintf(line, sizeof line,
              "{\"call\":\"pad_report\",\"handle\":%d,\"buttons\":%u,\"lx\":%u,\"ly\":%u,\"rx\":%u,\"ry\":%u,"

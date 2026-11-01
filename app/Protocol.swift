@@ -11,12 +11,28 @@ enum PMCP {
     static let flagPadReady: UInt32 = 0x1
     static let flagUserName: UInt32 = 0x4
     static let flagUninstall: UInt32 = 0x8
+    static let flagPadUser: UInt32 = 0x10  // padd 1.5 only
+    static let flagUsers: UInt32 = 0x20
+    static let flagPads: UInt32 = 0x40
 
-    enum Kind: UInt8 { case hello = 1, state, ping, ack, error, shutdown, getState, command, getUser }
-    enum Command: UInt32 { case home = 1, launch = 2, close = 3, uninstall = 4 }
+    enum Kind: UInt8 { case hello = 1, state, ping, ack, error, shutdown, getState, command, getUser, getUsers, getPads }
+    enum Command: UInt32 { case home = 1, launch = 2, close = 3, uninstall = 4, secondPad = 6, selectPad = 7 }
     enum ErrorCode: UInt32 { case badMagic = 1, badVersion, badLength, unknownType, busy, noPad }
 
     static let homeMethods = ["system", "shellcore", "suspend"]
+
+    /// SECOND_PAD and SELECT_PAD statuses (padd 1.7), as `protocol.pads_text` in Python.
+    static func padsText(_ op: Command, _ status: Int32) -> String {
+        switch (op, status) {
+        case (_, 0): return "ok"
+        case (.secondPad, 2): return "no other user is signed in: sign one in (or a guest) on the console first"
+        case (.secondPad, 22): return "not connect or disconnect"
+        case (.secondPad, 78): return "this console's padd cannot list the signed-in users"
+        case (.selectPad, 2): return "controller 2 is not connected"
+        case (.selectPad, 22): return "not 1 or 2"
+        default: return String(format: "refused, status 0x%08X", UInt32(bitPattern: status))
+        }
+    }
 
     /// Uninstall statuses (padd 1.3), as `protocol.UNINSTALL_ERRORS` in Python.
     static let uninstallRetry: Set<Int32> = [16, 36]  // EBUSY, EINPROGRESS: SMP is busy or still deleting the source
@@ -138,6 +154,52 @@ struct Hello {
         ["protocol": Int(proto), "payload_version": Int(payloadVersion), "pad_handle": Int(padHandle),
          "user_id": Int(userID), "user_name": userName as Any? ?? NSNull(), "flags": Int(flags), "add_status": Int(addStatus)]
     }
+}
+
+/// GET_USERS (padd 1.7): the foreground user and the signed-in users, in the console's order.
+struct LoginUsers {
+    var status: Int32, foreground: Int32
+    var users: [(id: Int32, name: String)]
+
+    /// Who "second" gives the pad to: the first signed-in user that is not the foreground one (as padd resolves it).
+    var second: (id: Int32, name: String)? { status == 0 ? users.first { $0.id != foreground } : nil }
+    var foregroundName: String? { users.first { $0.id == foreground }.map(LoginUsers.label) }
+    /// A user's profile name, or its id when the name lookup failed.
+    static func label(_ user: (id: Int32, name: String)) -> String {
+        user.name.isEmpty ? String(format: "0x%08X", UInt32(bitPattern: user.id)) : user.name
+    }
+    var json: [String: Any] {
+        ["status": Int(status), "foreground": Int(foreground), "second": second.map { Int($0.id) } as Any? ?? NSNull(),
+         "users": users.map { ["user_id": Int($0.id), "name": $0.name] }]
+    }
+}
+
+/// GET_PADS (padd 1.7): the pad input drives (1 or 2) and each pad's handle (-1: not connected) and user.
+struct Pads: Equatable {
+    var active: Int
+    var handles: [Int32], userIDs: [Int32]
+    var secondConnected: Bool { handles[1] >= 0 }
+}
+
+func decodePads(_ data: [UInt8]) -> Pads {
+    var c = Cursor(data: data)
+    let active = Int(c.u8())
+    c.at = 4
+    let h1 = c.i32(), u1 = c.i32(), h2 = c.i32(), u2 = c.i32()
+    return Pads(active: active, handles: [h1, h2], userIDs: [u1, u2])
+}
+
+func decodeUsers(_ data: [UInt8]) -> LoginUsers {
+    var c = Cursor(data: data)
+    var out = LoginUsers(status: c.i32(), foreground: c.i32(), users: [])
+    for slot in 0..<4 {
+        let at = 8 + slot * 60
+        var u = Cursor(data: data, at: at)
+        let id = u.i32()
+        guard id >= 0 else { continue }
+        out.users.append((id, String(decoding: data[(at + 4)..<(at + 60)].prefix(while: { $0 != 0 }), as: UTF8.self)))
+    }
+    return out
 }
 
 struct Pong {

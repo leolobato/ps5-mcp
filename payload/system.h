@@ -14,6 +14,11 @@
 int system_foreground_user(int32_t *user_id);
 int system_user_name(int32_t user_id, char *name, size_t size);
 
+/* Room in sceUserServiceGetLoginUserIdList's list; an empty slot is -1. */
+#define SYSTEM_LOGIN_USERS 4
+/* Returns 0 and the signed-in users' ids, ENOSYS when the call is missing, or an SCE error code. */
+int system_login_users(int32_t ids[SYSTEM_LOGIN_USERS]);
+
 /* Each returns 0 on success, an errno (>0) or an SCE error code (<0). */
 int pad_add(int32_t user_id, int32_t *handle);
 int pad_report(int32_t handle, const struct pmcp_state *state);

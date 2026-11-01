@@ -131,6 +131,8 @@ keeps the server code it started with; restart it after updating this checkout.
 The window shows live video, audio, and connection status. The sidebar has these controls:
 
 - **padd:** Start, Update (stop, then start the padd built into the app; enabled only when padd runs another version), and Stop.
+  **Connect second controller** adds a second virtual controller, and **Input to** chooses which one the keyboard and
+  agents drive (padd 1.7; see [A second player](#a-second-player)).
 - **Console:** Home, close the running game/app, Release all input (**⌘.**), and Force release agent… to take the
   console from an agent that claimed it and will not let go (the next agent in the queue gets it).
 - **Launch:** pick an installed game/app and launch it (**⌘L**). The list comes from PS5 Web File Manager and is cached
@@ -169,6 +171,7 @@ Quit with **⌘Q** or `uv run ps5mcp capture stop`.
 | Capture and status | `snapshot`, `status`, `show_viewer` |
 | Controller input | `press`, `hold`, `stick`, `trigger`, `touchpad`, `sequence`, `release_all` |
 | Console apps | `home`, `close_app`, `launch`, `list_apps`, `install`, `uninstall_apps` |
+| Second player | `second_controller`, `use_controller` |
 | Remote Play only | `ps_button`, `type_text`, `close_keyboard` |
 | File transfer | `push`, `pull` |
 | Visual automation | `save_template`, `list_templates`, `wait_for`, `wait_for_change` |
@@ -179,6 +182,31 @@ Input tools can return a frame with `snapshot_after_ms`. `home` suspends the gam
 use `press("circle")` to back out of system screens. With Remote Play as the video source, `ps_button` presses the
 real PS button (control center) and `type_text` fills the text field whose on-screen keyboard is open. A game takes input only from the controller that launched it,
 so launch games with `launch` to control them through the MCP.
+
+### A second player
+
+To test local multiplayer without a real controller, padd 1.7 runs two virtual controllers. Controller 1 is the
+foreground user's (player 1) and controller 2 is the second signed-in user's (player 2). Input from the keyboard,
+the API and MCP agents goes to the selected one.
+
+1. Sign in a second user or a guest on the console. "Second user" is the first signed-in user that is not the
+   foreground one. `status()` lists the signed-in users under `payload.login_users`. Without a real controller,
+   controller 2 can sign someone in (padd 1.8): with nobody else signed in, **Connect second controller** offers the
+   users the app has seen signed in before, or call `second_controller(true, user_id=<id>)`. The console opens its
+   sign-in picker with that user selected; press Cross (Enter in the window) to confirm.
+2. Click **Connect second controller** in the sidebar, or call `second_controller(true)`, or run
+   `uv run ps5mcp pad second connect`. Controller 2 is selected, so the next input goes to it.
+3. The console asks "Who's using this controller?" for controller 2, with the focus on the first profile. The app
+   moves to the second user's profile and answers it there.
+4. Pick the controller to drive under **Input to** (for example "Controller 1 (User1)" or "Controller 2
+   (leolobato-jb)"), or call `use_controller(1)` / `use_controller(2)`, or run `uv run ps5mcp pad use 1`. The other
+   controller is released.
+5. Launch the game with `launch`. It always starts the game for the foreground user, so controller 1 owns it.
+
+If nobody else is signed in, controller 2 is not added and the app says so. The choice is saved in the state folder
+and restored when padd restarts. **Disconnect second controller** removes it and selects controller 1. `status()`
+shows both controllers under `payload.controllers`. A game reading controller 2 is not yet verified on the console
+(see [findings](docs/findings.md#two-virtual-controllers-padd-16-not-yet-verified-on-the-console)).
 
 ### Sharing the console
 
@@ -250,6 +278,9 @@ uv run ps5mcp pad home suspend             # return to the home screen
 uv run ps5mcp pad close                    # close the running game
 uv run ps5mcp pad launch PPSA06654          # launch a title
 uv run ps5mcp pad uninstall PPSA06654       # uninstall a title (padd 1.3)
+uv run ps5mcp pad second connect           # add controller 2 for the second signed-in user, send input to it (padd 1.7)
+uv run ps5mcp pad second connect 480174124 # ... for that user; one who is not signed in gets the sign-in picker (padd 1.8)
+uv run ps5mcp pad use 1                    # send input to controller 1 (or 2)
 uv run ps5mcp install game.pkg             # install a package (or an .elf payload; --run starts it)
 uv run ps5mcp push build/title /data/homebrew/FAKE00001   # copy a folder to the console (zftpd)
 uv run ps5mcp pull /data/playden/logs ./logs/              # copy a folder from the console (--no-start, --force)

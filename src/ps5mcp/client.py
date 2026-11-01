@@ -139,6 +139,16 @@ class PadLink:
             return None
         return p.decode_user(self._request(p.encode(p.Type.GET_USER), p.Type.GET_USER, timeout))
 
+    def get_users(self, timeout: float | None = None) -> p.Users | None:
+        if not self.hello.flags & p.FLAG_USERS:
+            return None
+        return p.decode_users(self._request(p.encode(p.Type.GET_USERS), p.Type.GET_USERS, timeout))
+
+    def get_pads(self, timeout: float | None = None) -> p.Pads | None:
+        if not self.hello.flags & p.FLAG_PADS:
+            return None
+        return p.decode_pads(self._request(p.encode(p.Type.GET_PADS), p.Type.GET_PADS, timeout))
+
     def get_state(self, timeout: float | None = None) -> PadState:
         return p.decode_state(self._request(p.encode(p.Type.GET_STATE), p.Type.STATE, timeout))[1]
 

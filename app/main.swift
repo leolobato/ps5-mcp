@@ -7,6 +7,7 @@
 // Usage: PS5 [--state-dir DIR] [--video NAME|remoteplay|file:PATH|synthetic] [--audio NAME|none] [--headless]
 //            [--host H] [--port N] [--no-auto-assign] [--padd-cli EXE] [--snapshot-fps N]
 //        PS5 --dialog-score IMAGE   (prints the assignment-dialog match score and exits)
+//        PS5 --dialog-users IMAGE   (prints the dialog's profile names, left to right, and exits)
 
 import AppKit
 import Darwin
@@ -33,6 +34,7 @@ struct Config {
     var paddCLI: String?
     var templatePath = ""
     var dialogScore: String?
+    var dialogUsers: String?
 
     init(_ args: [String]) {
         if !host.isEmpty { hostSource = "PS5_HOST" }
@@ -50,6 +52,7 @@ struct Config {
             case "--repo": repo = value; i += 1
             case "--padd-cli": paddCLI = value; i += 1
             case "--dialog-score": dialogScore = value; i += 1
+            case "--dialog-users": dialogUsers = value; i += 1
             case "--headless": headless = true
             case "--no-auto-assign": autoAssign = false
             case "--no-remoteplay-keyboard": remotePlayKeyboard = false
@@ -69,11 +72,12 @@ struct Config {
 let config = Config(CommandLine.arguments)
 signal(SIGPIPE, SIG_IGN)
 
-if let path = config.dialogScore {
+if let path = config.dialogScore ?? config.dialogUsers {
     do {
         let assigner = try Assigner(templatePath: config.templatePath)
         guard let image = loadImage(path) else { throw BadInput("cannot read \(path)") }
-        print(String(format: "%.6f", assigner.score(render(image))))
+        if config.dialogScore != nil { print(String(format: "%.6f", assigner.score(render(image)))) }
+        else { assigner.users(render(image)).forEach { print($0) } }
         exit(0)
     } catch {
         say("\(error)")

@@ -85,7 +85,7 @@ free, every client drives it as before.
 
 | cmd | fields | reply |
 |---|---|---|
-| `command` | `op`: `home` (`arg` = `suspend` (default), `system` or `shellcore`), `close`, `launch` (`arg` = title id) or `uninstall` (`arg` = title id; padd 1.3+) | `status`: padd's ACK status (0 ok, <0 SCE error) |
+| `command` | `op`: `home` (`arg` = `suspend` (default), `system` or `shellcore`), `close`, `launch` (`arg` = title id), `uninstall` (`arg` = title id; padd 1.3+), `second_pad` (`arg` = `connect`, `connect <user id>` (padd 1.8+) or `disconnect`; padd 1.7+) or `select_pad` (`arg` = `1` or `2`; padd 1.7+) | `status`: padd's ACK status (0 ok, >0 errno, <0 SCE error) |
 | `ping` | | `pong`: uptime, reports sent and failed, neutral events |
 | `padd_start` | `firmware?` (default 13.60) | Pauses the link, runs `ps5mcp padd start` once, then resumes. Returns `status`, `run` (the `results/` dir), `exit` and `output`. |
 | `padd_stop` | | The same flow, with `ps5mcp padd stop`. |
@@ -95,6 +95,18 @@ free, every client drives it as before.
   `make` builds into the app, else `checkout` for `build/padd.elf`), `version` from its build report (compare it with
   `pad.version`), `stale` when the ELF no longer matches that report, and `error` when there is nothing to deploy
   (run `make`). The app passes `path` to the CLI as `--elf`.
+- Two controllers (padd 1.7, `docs/protocol.md` COMMAND ops 6 and 7): controller 1 is the foreground user's,
+  controller 2 the second signed-in user's. All input (keyboard, `set`, `press`, ...) drives the selected one, and
+  `pad.hello` shows its handle, user and name. `second_pad connect` adds controller 2 and selects it, and auto-assign
+  answers its "Who's using this controller?"; `disconnect` removes it and selects controller 1. `select_pad` picks
+  the controller; the other one is released. A nonzero status changes nothing (`second_pad` 2: nobody else is signed
+  in; `select_pad` 2: controller 2 is not connected). `connect <user id>` adds controller 2 for that user; for a user
+  who is not signed in the console shows its sign-in picker with that user selected, and `notice` asks to confirm with
+  Cross (no auto-assign there). The app remembers every user padd has reported signed in (`<state>/known-users`), so
+  `controllers.signed_out` lists who controller 2 can sign in. The app keeps the choice in `<state>/controllers`
+  (with controller 2's user) and restores it after every (re)connect, with the same user while they are signed in: a restarted padd has controller 1 only, so the app answers its dialog, then connects
+  controller 2 and answers that one. The window's **Input to** menu and **Connect second controller** button do the
+  same, without the lease check.
 - `padd_start` and `padd_update` deploy to the console. Nothing calls it on its own, and it never retries.
 - The CLI writes the archive exactly as it does without the app.
 
@@ -102,7 +114,7 @@ free, every client drives it as before.
 
 | cmd | fields | reply |
 |---|---|---|
-| `status` | `wait?` (seconds to wait for the padd link) | `pid`, `frames`, `frame_age`, `visible`, `now` (uptime clock = Python `time.monotonic`), `source`, `clients`, `pad` (link, hello, counters, `human_has_control`, `agent_layers`, `paused`), `title`, `notice`, `padd`, `auto_assign` |
+| `status` | `wait?` (seconds to wait for the padd link) | `pid`, `frames`, `frame_age`, `visible`, `now` (uptime clock = Python `time.monotonic`), `source`, `clients`, `pad` (link, hello, counters, `human_has_control`, `agent_layers`, `paused`), `title`, `notice`, `padd`, `auto_assign`, `controllers` (`active` 1 or 2, `second` (controller 2 connected), `supported` (padd 1.7), `list` [{`controller`, `handle`, `user_id`, `user_name`}], `signed_out` [{`user_id`, `name`}]: users seen signed in before who are not now), `login_users` (padd 1.7: `status`, `foreground`, `second` (the user controller 2 is for, or null), `users` [{`user_id`, `name`}]; null before padd 1.7) |
 | `snapshot` | | Writes `<state>/latest.jpg` now and returns `path` (it is also rewritten at 5 fps). |
 | `capture_restart` | `video` (device ID/name, `file:PATH`, `synthetic`, `remoteplay`, or empty to disable), `audio?` (device ID/name or `none`) | Restarts capture without closing API clients. Blocked by another client's lease or an active video recording. Does not save preferences; Settings saves selected device IDs. |
 | `watch_change` | `threshold` (6), `timeout_s` (2) | Two replies: `armed_at`, then `changed_at` and `diff`, or `ok: false` on timeout. |
@@ -115,7 +127,11 @@ free, every client drives it as before.
 After every (re)connect the app looks for "Who's using this controller?" for 6 s. It presses Cross only when the
 dialog is visible. The match uses the title template at (712, 168), within 24 px, with a score of at least 0.9, as
 `assign.py` does. When it answers, `notice` says so, because answering turns the DualSense off
-(see [findings](findings.md)). Disable it with `--no-auto-assign` or `PS5MCP_AUTO_ASSIGN=0`.
+(see [findings](findings.md)). It answers with the selected controller. For controller 2 the dialog still
+focuses the first profile (the foreground user's, on the console tested), so the app reads the profile names
+(Vision), presses Right to controller 2's user and then Cross. If that name is not on screen it presses nothing and
+`notice` asks you to pick it. It stops if another controller is selected meanwhile.
+Disable it with `--no-auto-assign` or `PS5MCP_AUTO_ASSIGN=0`.
 
 ## Launch options
 
@@ -130,6 +146,7 @@ dialog is visible. The match uses the title template at (712, 168), within 24 px
 - `--video file:PATH` (it re-reads the image when it changes) and `--video synthetic` run without the capture card.
   They are for development and tests.
 - `PS5 --dialog-score IMAGE` prints the auto-assign match score and exits.
+- `PS5 --dialog-users IMAGE` prints the dialog's profile names, left to right, and exits.
 - `capture.NativeApp.start` launches the app. With the card it uses `open`, so macOS asks for camera and
   microphone permission for the app itself.
 

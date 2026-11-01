@@ -23,6 +23,8 @@ class Type(IntEnum):
     GET_STATE = 7
     COMMAND = 8
     GET_USER = 9
+    GET_USERS = 10  # padd 1.7+ (FLAG_USERS)
+    GET_PADS = 11  # padd 1.7+ (FLAG_PADS)
 
 
 class Command(IntEnum):
@@ -30,6 +32,9 @@ class Command(IntEnum):
     LAUNCH = 2
     CLOSE = 3
     UNINSTALL = 4  # padd 1.3+ (FLAG_UNINSTALL)
+    PAD_USER = 5  # padd 1.5 only (FLAG_PAD_USER): its one pad to "foreground", "second" or a user id
+    SECOND_PAD = 6  # padd 1.7+ (FLAG_PADS): arg "connect" or "disconnect"
+    SELECT_PAD = 7  # padd 1.7+ (FLAG_PADS): arg "1" or "2", the pad STATE drives
 
 
 HOME_METHODS = ("system", "shellcore", "suspend")
@@ -48,6 +53,26 @@ FLAG_PAD_READY = 0x1
 FLAG_TOUCH_UNMAPPED = 0x2
 FLAG_USER_NAME = 0x4
 FLAG_UNINSTALL = 0x8
+FLAG_PAD_USER = 0x10  # padd 1.5 only
+FLAG_USERS = 0x20
+FLAG_PADS = 0x40
+
+# Two controllers (padd 1.7): controller 1 is the foreground user's; controller 2 is the second signed-in user's (the
+# first one that is not the foreground user, a prospero-win game's controller 1). Input drives the selected one.
+SECOND_PAD_ERRORS = {
+    2: "no other user is signed in: sign one in (or a guest) on the console first",
+    22: "not connect or disconnect",
+    78: "this console's padd cannot list the signed-in users",
+}
+SELECT_PAD_ERRORS = {2: "controller 2 is not connected", 22: "not 1 or 2"}
+
+
+def pads_text(op: str, status: int) -> str:
+    """Text for a second_pad or select_pad status."""
+    if status == 0:
+        return "ok"
+    errors = SECOND_PAD_ERRORS if op == "second_pad" else SELECT_PAD_ERRORS
+    return errors.get(status, f"refused, status {status & 0xFFFFFFFF:#010x}")
 
 # Uninstall ACK statuses besides 0 and SCE errors. ShadowMountPlus titles have their source deleted first.
 UNINSTALL_RETRY = {16, 36}  # EBUSY (SMP busy or a game running), EINPROGRESS (source still being deleted)
@@ -81,7 +106,10 @@ _HELLO = struct.Struct("<HHiiII")
 _PONG = struct.Struct("<IHHQiIQII")
 _ACK = struct.Struct("<Ii")
 _USER = struct.Struct("<ii64s")
+LOGIN_USERS = 4
+_LOGIN_USER = struct.Struct("<i56s")  # GET_USERS: i32 status, i32 foreground, then LOGIN_USERS of these (248 B)
 _COMMAND = struct.Struct("<II32s")
+_PADS = struct.Struct("<B3xiiii")
 assert _STATE.size == 28 and _HELLO.size == 20 and _PONG.size == 40 and _ACK.size == 8 and _COMMAND.size == 40
 
 
@@ -208,6 +236,35 @@ class User:
 def decode_user(payload: bytes) -> User:
     status, user_id, raw = _USER.unpack(payload)
     return User(status, user_id, raw.split(b"\0", 1)[0].decode("utf-8", errors="replace"))
+
+
+@dataclass(frozen=True)
+class Users:
+    status: int
+    foreground: int  # -1 if unknown
+    users: tuple[User, ...]  # signed in, in the console's order (User.status is 0)
+
+
+def decode_users(payload: bytes) -> Users:
+    status, foreground = struct.unpack_from("<ii", payload)
+    users = []
+    for offset in range(8, 8 + LOGIN_USERS * _LOGIN_USER.size, _LOGIN_USER.size):
+        user_id, raw = _LOGIN_USER.unpack_from(payload, offset)
+        if user_id >= 0:
+            users.append(User(0, user_id, raw.split(b"\0", 1)[0].decode("utf-8", errors="replace")))
+    return Users(status, foreground, tuple(users))
+
+
+@dataclass(frozen=True)
+class Pads:
+    active: int  # 1 or 2
+    handles: tuple[int, int]  # -1: not connected
+    user_ids: tuple[int, int]
+
+
+def decode_pads(payload: bytes) -> Pads:
+    active, h1, u1, h2, u2 = _PADS.unpack(payload)
+    return Pads(active, (h1, h2), (u1, u2))
 
 
 def decode_pong(payload: bytes) -> Pong:

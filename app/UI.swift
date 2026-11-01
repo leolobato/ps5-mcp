@@ -43,6 +43,8 @@ final class Sidebar: NSStackView {
     var buttons: [String: NSButton] = [:]
     let titles = NSPopUpButton(frame: .zero, pullsDown: false)
     let recordings = NSPopUpButton(frame: .zero, pullsDown: false)
+    /// The controller keyboard, API and MCP input drive: 1 (foreground user) or 2 (second user, when connected).
+    let controllerPicker = NSPopUpButton(frame: .zero, pullsDown: false)
     private let keyboard = NSGridView()
     private let keyboardToggle = NSButton()
 
@@ -86,6 +88,23 @@ final class Sidebar: NSStackView {
                   button("paddUpdate", "Update", "arrow.triangle.2.circlepath", #selector(AppDelegate.updatePadd),
                          target),
                   button("paddStop", "Stop", "stop.fill", #selector(AppDelegate.stopPadd), target)]))
+        controllerPicker.refusesFirstResponder = true  // keys stay with the video
+        controllerPicker.addItem(withTitle: "Controller 1")
+        controllerPicker.target = target
+        controllerPicker.action = #selector(AppDelegate.chooseController)
+        controllerPicker.toolTip = "The virtual controller that the keyboard, the API and MCP agents drive. Controller 1 "
+            + "is the foreground user's; controller 2 the second signed-in user's (needs padd 1.7)"
+        controllerPicker.setAccessibilityLabel("Controlled controller")
+        let pickerLabel = NSTextField(labelWithString: "Input to")
+        pickerLabel.font = .systemFont(ofSize: 11)
+        pickerLabel.textColor = .secondaryLabelColor
+        pickerLabel.setContentHuggingPriority(.required, for: .horizontal)
+        full(row([pickerLabel, controllerPicker], equal: false))
+        let second = button("secondController", "Connect second controller", "plus.circle",
+                            #selector(AppDelegate.toggleSecondController(_:)), target)
+        second.toolTip = "Add a second virtual controller for the second signed-in user (a game's player 2) and "
+            + "send input to it; the app answers its \"Who's using this controller?\""
+        full(second)
 
         section("Console")
         let close = button("closeApp", "Close game/app", "xmark.circle", #selector(AppDelegate.closeApp), target)
@@ -683,11 +702,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         if link.connected, uptimeSeconds() - pongAt > 2 {
             pongAt = uptimeSeconds()
             DispatchQueue.global().async {
-                let pong = try? self.hub.controller.currentLink().ping(timeout: 1)
+                let link = try? self.hub.controller.currentLink()
+                let pong = try? link?.ping(timeout: 1)
+                if let link { self.hub.refreshLoginUsers(link) }
                 DispatchQueue.main.async { self.pong = pong }
             }
         }
         if !link.connected { pong = nil }
+        do {
+            // Name each controller's user: the foreground user changes when another controller takes over.
+            let popup = sidebar.controllerPicker
+            let pads = hub.pads, supported = link.connected && (link.hello?.flags ?? 0) & PMCP.flagPads != 0
+            let count = pads?.secondConnected == true ? 2 : 1
+            while popup.numberOfItems > count { popup.removeItem(at: popup.numberOfItems - 1) }
+            while popup.numberOfItems < count { popup.addItem(withTitle: "") }
+            for pad in 1...count {
+                popup.item(at: pad - 1)?.title = "Controller \(pad)" + (hub.controllerName(pad).map { " (\($0))" } ?? "")
+            }
+            popup.selectItem(at: min(pads?.active ?? 1, count) - 1)
+            popup.isEnabled = supported && count == 2
+            let second = hub.loginUsers?.second.map(LoginUsers.label)
+            if pads?.secondConnected == true {
+                sidebar.setButton("secondController", title: "Disconnect second controller", symbol: "minus.circle")
+            } else {
+                sidebar.setButton("secondController", title: "Connect second controller", symbol: "plus.circle")
+            }
+            let signedOut = hub.signedOutUsers.map(\.name)
+            sidebar.buttons["secondController"]?.isEnabled = supported
+                && (pads?.secondConnected == true || !signedOut.isEmpty
+                    || hub.loginUsers.map { $0.status != 0 || second != nil } ?? true)
+            sidebar.buttons["secondController"]?.toolTip = !supported
+                ? "Needs padd 1.7: press Update"
+                : pads?.secondConnected == true ? "Remove controller 2; input goes back to controller 1"
+                : second.map { "Add controller 2 for \($0) and send input to it" }
+                    ?? (signedOut.isEmpty ? "Sign a second user (or a guest) in on the console first"
+                        : "Nobody else is signed in: sign in \(signedOut.joined(separator: " or ")) with controller 2")
+        }
         if let pong {
             sidebar.set("Reports", "\(pong.reportsSent) sent, \(pong.reportFailures) failed",
                         color: pong.reportFailures > 0 ? .systemRed : .labelColor)
@@ -928,6 +978,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
                 self.window.makeFirstResponder(self.video)
                 self.refresh()
             }
+        }
+    }
+
+    /// Sidebar's controller picker: input goes to controller 1 or 2.
+    @objc func chooseController() {
+        guard let index = sidebar?.controllerPicker.indexOfSelectedItem, index >= 0, index + 1 != hub.pads?.active
+        else { return }
+        background {
+            let status = try self.hub.selectPad(index + 1, link: self.hub.controller.currentLink())
+            if status != 0 { self.hub.notice = "Controller \(index + 1): \(PMCP.padsText(.selectPad, status))" }
+        }
+    }
+
+    /// Sidebar's Connect / Disconnect second controller. With nobody else signed in, a menu offers the profiles seen
+    /// before: controller 2 then signs one in.
+    @objc func toggleSecondController(_ sender: NSButton) {
+        let connected = hub.pads?.secondConnected == true
+        if !connected, hub.loginUsers?.second == nil, !hub.signedOutUsers.isEmpty {
+            let menu = NSMenu()
+            for user in hub.signedOutUsers {
+                let item = NSMenuItem(title: "Sign in \(user.name) with controller 2", action: #selector(connectSecondUser(_:)),
+                                      keyEquivalent: "")
+                item.target = self
+                item.tag = Int(user.id)
+                menu.addItem(item)
+            }
+            menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height + 4), in: sender)
+            return
+        }
+        background {
+            let link = try self.hub.controller.currentLink()
+            let status = try connected ? self.hub.disconnectSecond(link) : self.hub.connectSecond(link)
+            if status != 0 { self.hub.notice = "Controller 2: \(PMCP.padsText(.secondPad, status))" }
+        }
+    }
+
+    @objc func connectSecondUser(_ item: NSMenuItem) {
+        let user = Int32(item.tag)
+        background {
+            let status = try self.hub.connectSecond(self.hub.controller.currentLink(), user: user)
+            if status != 0 { self.hub.notice = "Controller 2: \(PMCP.padsText(.secondPad, status))" }
         }
     }
 
