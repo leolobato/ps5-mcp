@@ -39,6 +39,13 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
     private let connectionNote = NSTextField(wrappingLabelWithString: "")
     private let forgetRemotePlay = NSButton(title: "Forget…", target: nil, action: nil)
     private var remotePlaySetupWindow: RemotePlaySetupWindow?
+    private let stopPBS = NSButton(title: "Stop PBS", target: nil, action: nil)
+    private let reconnectPBS = NSButton(title: "Reconnect", target: nil, action: nil)
+    private let pbsNote = NSTextField(wrappingLabelWithString: "")
+    private let loadPBS = NSButton(title: "Load PBS", target: nil, action: nil)
+    private var pbsBusy = false
+    private var pbsMessage: String?
+    private var pbsWasStreaming = false
 
     init(hub: Hub, onSaved: @escaping () -> Void) {
         self.hub = hub
@@ -75,6 +82,11 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
         reconnectRemotePlay.target = self; reconnectRemotePlay.action = #selector(reconnect)
         let remotePlayButtons = NSStackView(views: [setupRemotePlay, reconnectRemotePlay, forgetRemotePlay])
         remotePlayButtons.spacing = 8
+        stopPBS.target = self; stopPBS.action = #selector(stopPBSPayload)
+        reconnectPBS.target = self; reconnectPBS.action = #selector(reconnectToPBS)
+        loadPBS.target = self; loadPBS.action = #selector(loadPBSPayload)
+        let pbsButtons = NSStackView(views: [loadPBS, reconnectPBS, stopPBS])
+        pbsButtons.spacing = 8
 
         folder.pathStyle = .popUp
         folder.isEditable = false
@@ -83,7 +95,7 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
         let folderRow = NSStackView(views: [folder, choose])
         folderRow.spacing = 8
 
-        for text in [note, captureNote, remotePlayNote, connectionNote] {
+        for text in [note, captureNote, remotePlayNote, connectionNote, pbsNote] {
             text.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
             text.textColor = .secondaryLabelColor
             text.preferredMaxLayoutWidth = 380
@@ -104,6 +116,8 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
             [label("Remote Play:"), remotePlayButtons],
             [empty, remotePlayNote],
             [label("Connection:"), connectionNote],
+            [label("PBS:"), pbsButtons],
+            [empty, pbsNote],
             [separator(), empty],
             [label("Save snapshots to:"), folderRow],
         ])
@@ -113,7 +127,7 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
         grid.column(at: 0).xPlacement = .trailing
         grid.column(at: 1).xPlacement = .fill
         grid.column(at: 1).width = 380
-        for row in [2, 10] {
+        for row in [2, 12] {
             grid.row(at: row).mergeCells(in: NSRange(location: 0, length: 2))
             grid.cell(atColumnIndex: 0, rowIndex: row).xPlacement = .fill
             grid.row(at: row).topPadding = 6
@@ -121,6 +135,7 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
         }
         grid.cell(for: captureButtons)?.xPlacement = .leading
         grid.cell(for: remotePlayButtons)?.xPlacement = .leading
+        grid.cell(for: pbsButtons)?.xPlacement = .leading
 
         grid.translatesAutoresizingMaskIntoConstraints = false
         let content = NSView()
@@ -169,11 +184,14 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
     }
 
     private func fillDevices(video: String?, audio: String?) {
-        fill(videoDevice, devices: CaptureDevices.video, selection: video == "remoteplay" ? nil : video, empty: "Choose a video device…")
-        videoDevice.addItem(withTitle: "Remote Play (network)")
-        videoDevice.lastItem?.representedObject = "remoteplay"
-        if video == "remoteplay" { videoDevice.select(videoDevice.lastItem) }
-        fill(audioDevice, devices: CaptureDevices.audio, selection: audio == "remoteplay" ? nil : audio, empty: "No audio")
+        let network = ["remoteplay": "Remote Play (network)", "pbs": "PBS payload (network)"]
+        fill(videoDevice, devices: CaptureDevices.video, selection: network[video ?? ""] == nil ? video : nil, empty: "Choose a video device…")
+        for id in ["remoteplay", "pbs"] {
+            videoDevice.addItem(withTitle: network[id]!)
+            videoDevice.lastItem?.representedObject = id
+            if video == id { videoDevice.select(videoDevice.lastItem) }
+        }
+        fill(audioDevice, devices: CaptureDevices.audio, selection: network[audio ?? ""] == nil ? audio : nil, empty: "No audio")
         sourceChanged()
     }
 
@@ -189,7 +207,63 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
             .replacingOccurrences(of: " in Settings", with: "")
             ?? "Selections are saved for future launches. Restarting capture keeps connected MCP clients running."
         refreshRemotePlayStatus()
+        refreshPBSStatus()
         remotePlaySetupWindow?.refreshVerification()
+    }
+
+    private func refreshPBSStatus() {
+        let pbs = hub.source as? PBSSource
+        let streaming = pbs?.status.videoReady == true
+        if streaming, !pbsWasStreaming { pbsMessage = nil }  // only video arriving answers "Started…"; refusals stay
+        pbsWasStreaming = streaming
+        loadPBS.isEnabled = pbs != nil && !streaming && !pbsBusy
+        reconnectPBS.isEnabled = pbs != nil
+        stopPBS.isEnabled = streaming && !pbsBusy
+        pbsNote.stringValue = pbsMessage ?? pbs.map { $0.status.summary } ?? "PBS is not the active capture source."
+    }
+
+    @objc private func reconnectToPBS() {
+        pbsMessage = nil
+        (hub.source as? PBSSource)?.reconnect()
+        refreshPBSStatus()
+    }
+
+    /// Load and Stop change what runs on the shared console, so they respect an agent's claim as Remote Play's Reconnect does.
+    private func consoleIsFreeForPBS() -> Bool {
+        guard let owner = hub.lease.json["owner"] as? [String: Any] else { return true }
+        pbsMessage = "The console is claimed by \(owner["client"] as? String ?? "another client"). Wait for its claim to be released."
+        refreshPBSStatus()
+        return false
+    }
+
+    @objc private func loadPBSPayload() {
+        guard let pbs = hub.source as? PBSSource, consoleIsFreeForPBS() else { return }
+        pbsBusy = true
+        pbsMessage = "Loading PBS…"
+        refreshPBSStatus()
+        pbs.loadPayload { [weak self] result in
+            guard let self else { return }
+            self.pbsBusy = false
+            switch result {
+            case .started(let name): self.pbsMessage = "Started \(name). Waiting for video…"
+            case .notInLibrary: self.pbsMessage = "PBS is not in Payload Manager's library. Add its .elf with `ps5mcp install`, then try again."
+            case .unreachable: self.pbsMessage = "Payload Manager did not answer on the console."
+            }
+            self.refreshPBSStatus()
+        }
+    }
+
+    @objc private func stopPBSPayload() {
+        guard let pbs = hub.source as? PBSSource, consoleIsFreeForPBS() else { return }
+        pbsBusy = true
+        pbsMessage = "Stopping PBS…"
+        refreshPBSStatus()
+        pbs.stopPayload { [weak self] answered in
+            guard let self else { return }
+            self.pbsBusy = false
+            self.pbsMessage = answered ? nil : "PBS did not answer. It may already be stopped."
+            self.refreshPBSStatus()
+        }
     }
 
     private func refreshRemotePlayStatus() {
@@ -222,20 +296,23 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
     }
 
     @objc private func sourceChanged() {
-        let remotePlay = videoDevice.selectedItem?.representedObject as? String == "remoteplay"
-        if remotePlay {
-            if !audioDevice.itemArray.contains(where: { $0.representedObject as? String == "remoteplay" }) {
-                audioDevice.addItem(withTitle: "Remote Play audio")
-                audioDevice.lastItem?.representedObject = "remoteplay"
+        let selected = videoDevice.selectedItem?.representedObject as? String
+        let labels = ["remoteplay": "Remote Play", "pbs": "PBS"]
+        for item in audioDevice.itemArray where (item.representedObject as? String).map({ labels[$0] != nil && $0 != selected }) == true {
+            audioDevice.removeItem(at: audioDevice.index(of: item))
+        }
+        let label = selected.flatMap { labels[$0] }
+        if let selected, let label {
+            if !audioDevice.itemArray.contains(where: { $0.representedObject as? String == selected }) {
+                audioDevice.addItem(withTitle: "\(label) audio")
+                audioDevice.lastItem?.representedObject = selected
             }
-            if let item = audioDevice.itemArray.first(where: { $0.representedObject as? String == "remoteplay" }) {
+            if let item = audioDevice.itemArray.first(where: { $0.representedObject as? String == selected }) {
                 audioDevice.select(item)
             }
-        } else if let index = audioDevice.itemArray.firstIndex(where: { $0.representedObject as? String == "remoteplay" }) {
-            audioDevice.removeItem(at: index)
         }
-        audioDevice.isEnabled = !remotePlay
-        audioDevice.toolTip = audioDevice.isEnabled ? nil : "Remote Play supplies both video and audio."
+        audioDevice.isEnabled = label == nil
+        audioDevice.toolTip = label.map { "\($0) supplies both video and audio." }
     }
 
     @objc private func setUpRemotePlay() {

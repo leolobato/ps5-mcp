@@ -163,6 +163,24 @@ final class Hub {
                 source = UnavailableSource()
                 captureIssue = error.localizedDescription
             }
+        case "pbs":
+            captureAudio = "pbs"
+            if host.isEmpty {
+                source = UnavailableSource()
+                captureIssue = missingHost
+            } else {
+                let pbs = PBSSource(host: host, port: config.pbsPort, sink: sink)
+                pbs.onStatus = { [weak self, weak pbs] status in
+                    guard let self, let pbs, self.source === pbs else { return }
+                    self.captureIssue = status.issue
+                    self.statusChanged()
+                }
+                pbs.onStreamLost = { [weak self, weak pbs] saved in
+                    guard let self, let pbs, self.source === pbs, let ui = self.ui else { saved(); return }
+                    ui.remotePlayStreamLost(completion: saved)
+                }
+                source = pbs
+            }
         case "synthetic":
             source = SyntheticSource(sink: sink)
         case let video where video.hasPrefix("file:"):
@@ -261,6 +279,7 @@ final class Hub {
             sink.invalidate()
         }
         controller.setHost(host)
+        if captureVideo == "pbs" { pbsHostChanged(host) }
         if captureVideo == "remoteplay" {
             ui?.remotePlayStreamLost { [weak self] in
                 guard let self, self.remotePlayHostChange == generation,
@@ -271,6 +290,12 @@ final class Hub {
         }
         if notice == missingHost { notice = nil }
         statusChanged()
+    }
+
+    private func pbsHostChanged(_ host: String) {
+        if let pbs = source as? PBSSource { pbs.setHost(host); return }
+        do { try ui?.restartCapture(video: "pbs", audio: "pbs") }  // no address until now: the source did not exist
+        catch { captureIssue = "PBS stopped after host change: \(error.localizedDescription)" }
     }
 
     /// Takes the console from an agent that will not let go: the next in the queue gets it, and the evicted
@@ -297,11 +322,12 @@ final class Hub {
         let shown = visible, clients = connections.count, note = noticeText ?? captureIssueText
         let sink = currentSink, source = currentSource
         lock.unlock()
-        return ["ok": true, "api": apiVersion, "version": AppVersion.short, "build": AppVersion.build, "pid": Int(getpid()), "frames": sink.frames, "frame_age": sink.frameAge,
+        return ["ok": true, "api": apiVersion, "version": AppVersion.short, "build": AppVersion.build, "pid": Int(getpid()), "frames": sink.frames, "preview_frames": sink.previewFrames, "frame_age": sink.frameAge,
                 "visible": shown, "now": uptimeSeconds(), "source": source?.name ?? "none", "clients": clients,
                 "pad": link.json, "title": link.title, "notice": note ?? NSNull(), "padd": padd.json,
                 "remote_play": (source as? RemotePlaySource)?.json as Any? ?? (captureVideo == "remoteplay"
                     ? RemotePlayStatus(phase: .setupNeeded, issue: note).json : NSNull()),
+                "pbs": (source as? PBSSource)?.json as Any? ?? NSNull(),
                 "auto_assign": config.autoAssign && assigner != nil, "camera": cameraPermission, "lease": lease.json,
                 "controllers": controllersJSON, "login_users": loginUsers?.json as Any? ?? NSNull()]
     }

@@ -4,8 +4,8 @@
 // - Owns the only padd connection (TCP 9305); keyboard and every API client feed one merged pad state.
 // - Local API on <state>/capture.sock (docs/app-api.md); the MCP server is a thin client of it.
 //
-// Usage: PS5 [--state-dir DIR] [--video NAME|remoteplay|file:PATH|synthetic] [--audio NAME|none] [--headless]
-//            [--host H] [--port N] [--no-auto-assign] [--padd-cli EXE] [--snapshot-fps N]
+// Usage: PS5 [--state-dir DIR] [--video NAME|remoteplay|pbs|file:PATH|synthetic] [--audio NAME|none] [--headless]
+//            [--host H] [--port N] [--pbs-port N] [--no-auto-assign] [--padd-cli EXE] [--snapshot-fps N]
 //        PS5 --dialog-score IMAGE   (prints the assignment-dialog match score and exits)
 //        PS5 --dialog-users IMAGE   (prints the dialog's profile names, left to right, and exits)
 
@@ -27,6 +27,7 @@ struct Config {
     var homeMethod = ProcessInfo.processInfo.environment["PS5MCP_HOME_METHOD"] ?? "suspend"
     var autoAssign = ProcessInfo.processInfo.environment["PS5MCP_AUTO_ASSIGN"] != "0"
     /// Remote Play asks the console for its on-screen keyboard (MCP type_text). PS5MCP_RP_KEYBOARD=0 turns it off.
+    var pbsPort = Int(ProcessInfo.processInfo.environment["PS5MCP_PBS_PORT"] ?? "") ?? PBSSource.defaultPort
     var remotePlayKeyboard = ProcessInfo.processInfo.environment["PS5MCP_RP_KEYBOARD"] != "0"
     /// Baked into Info.plist by the Makefile: the repo (for the padd CLI and its archive) and uv.
     var repo = Bundle.main.object(forInfoDictionaryKey: "PS5MCPRepo") as? String
@@ -48,6 +49,7 @@ struct Config {
             case "--snapshot-fps": snapshotFPS = Double(value) ?? 5; i += 1
             case "--host": host = value; hostSource = "--host"; i += 1
             case "--port": port = UInt16(value) ?? PMCP.port; i += 1
+            case "--pbs-port": pbsPort = Int(value) ?? PBSSource.defaultPort; i += 1
             case "--firmware": firmware = value; i += 1
             case "--repo": repo = value; i += 1
             case "--padd-cli": paddCLI = value; i += 1

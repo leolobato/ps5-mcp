@@ -79,6 +79,7 @@ final class TestHub {
     let controller=TestController()
     var host: String { controller.host }
     var captureVideo="remoteplay", captureIssue: String?, notice: String?
+    func pbsHostChanged(_ host: String) {}
     var source: TestSource?=TestSource()
     let sink=FrameSink(path: "/tmp/unused-recovery.jpg", fps: 0)
     weak var ui: TestUI?

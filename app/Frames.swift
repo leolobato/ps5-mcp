@@ -33,6 +33,8 @@ final class FrameSink: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate,
     private let interval: Double
     private(set) var frames: UInt64 = 0
     private(set) var lastFrameAt = 0.0
+    /// Frames the window has shown, for sources it draws itself.
+    private(set) var previewFrames: UInt64 = 0
     private var recorder: VideoRecorder?
     /// The capture card's audio format, once its first buffer arrives (nil: no audio to record).
     private(set) var audioFormat: CMFormatDescription?
@@ -105,6 +107,8 @@ final class FrameSink: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate,
     func record(_ recorder: VideoRecorder?) {
         lock.lock(); self.recorder = recorder; lock.unlock()
     }
+
+    func previewDrawn() { lock.lock(); previewFrames += 1; lock.unlock() }
 
     func latestBuffer() -> CVPixelBuffer? {
         lock.lock(); defer { lock.unlock() }

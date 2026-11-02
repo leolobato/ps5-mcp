@@ -242,6 +242,16 @@ def test_remoteplay_start_returns_diagnostics_before_first_frame(native_launch, 
     assert args[args.index("--video") + 1] == "remoteplay"
 
 
+def test_pbs_start_returns_before_the_payload_is_running(native_launch, monkeypatch):
+    app, launches = native_launch
+    replies = [None]
+    waiting = {"pid": 1234, "frames": 0, "frame_age": -1, "source": "pbs", "pbs": {"state": "connecting"}}
+    monkeypatch.setattr(app, "status", lambda: replies.pop() if replies else waiting)
+    assert app.start(video="pbs", timeout=0.01) == 1234
+    args = launches[0]
+    assert args[args.index("--video") + 1] == "pbs"
+
+
 @pytest.mark.parametrize("entrypoint", ["command", "snapshot"])
 def test_remoteplay_cannot_fall_back_to_ffmpeg_camera(tmp_path, entrypoint):
     with pytest.raises(capture.CaptureError, match="Remote Play.*native app"):

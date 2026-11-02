@@ -95,6 +95,8 @@ def _input_args(video: str | None, audio: str | None) -> list[str]:
     video = video if video is not None else os.environ.get("PS5MCP_VIDEO")
     if video == "remoteplay":
         raise CaptureError("Remote Play requires the native app; select --backend native and pair in Settings")
+    if video == "pbs":
+        raise CaptureError("PBS requires the native app; select --backend native and load the PBS payload")
     if not video:
         raise CaptureError("FFmpeg capture requires an explicit video device; pass --video or set PS5MCP_VIDEO "
                            "(use ps5mcp devices to list devices)")
@@ -309,7 +311,7 @@ class NativeApp:
             if process is not None and process.poll() is not None:
                 raise CaptureError(f"PS5 app exited with {process.returncode}; see {self.log}")
             status = self.status()
-            if status and (status["frames"] > 0 or status.get("source") in ("unavailable", "remoteplay")):
+            if status and (status["frames"] > 0 or status.get("source") in ("unavailable", "remoteplay", "pbs")):
                 return status["pid"]
             time.sleep(0.2)
         if process is None:

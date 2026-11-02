@@ -313,6 +313,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
     /// Over the last picture while frames stop (the console's screen dropped the HDMI signal): it is not frozen.
     private let noSignalLabel = NSTextField(labelWithString: "")
     private var imageLayer: CALayer?
+    private var previewLink: CADisplayLink?
+    /// Kept while on screen: the decoder's pool must not reuse the surface the layer is showing.
+    private var shownBuffer: CVPixelBuffer?
     private var pong: Pong?
     private var pongAt = 0.0
     private var titleLibrary: TitleLibrary?
@@ -419,12 +422,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         restoreFrame()
         setVisible(!hub.config.headless)
         Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in self?.refresh() }
-        Timer.scheduledTimer(withTimeInterval: 1.0 / 15, repeats: true) { [weak self] _ in self?.drawFrame() }
+        // Follows the window's display and stops while the window cannot be seen.
+        let link = video.displayLink(target: self, selector: #selector(drawFrame))
+        link.add(to: .main, forMode: .common)
+        previewLink = link
         say("ready")
     }
 
     private func attachCapturePreview() {
         imageLayer = nil
+        shownBuffer = nil
         if let camera = hub.source as? CameraSource {
             let preview = AVCaptureVideoPreviewLayer(session: camera.session)
             preview.videoGravity = .resizeAspect
@@ -609,13 +616,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         hub.source.setMuted(audioMuted || !hub.visible)
     }
 
-    private func drawFrame() {
+    /// Shows the newest frame of a source that has no preview layer of its own (all but the capture card).
+    @objc private func drawFrame() {
         guard imageLayer != nil, !videoHidden, window.isVisible else { return }
-        let image = hub.sink.latestImage()
+        let buffer = hub.sink.latestBuffer()
+        if buffer === shownBuffer { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        imageLayer?.contents = image
+        if let buffer, let surface = CVPixelBufferGetIOSurface(buffer)?.takeUnretainedValue() {
+            imageLayer?.contents = surface
+        } else {
+            imageLayer?.contents = hub.sink.latestImage()
+        }
         CATransaction.commit()
+        shownBuffer = buffer
+        if buffer != nil { hub.sink.previewDrawn() }
     }
 
     /// Show or hide the window. Hiding through the API (and a headless launch) also drops the Dock icon and menu bar;
@@ -746,10 +761,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         }
         let age = hub.sink.frameAge
         let camera = hub.cameraPermission
-        noSignalLabel.isHidden = videoHidden || age <= 2
-        noSignalLabel.stringValue = hub.source is CameraSource
+        // PBS has its own message, including before the first frame, when the frame age is not a number of seconds yet.
+        let pbsIssue = (hub.source as? PBSSource)?.status.issue
+        noSignalLabel.isHidden = videoHidden || (age <= 2 && pbsIssue == nil)
+        noSignalLabel.stringValue = pbsIssue.map { "  \($0)  " } ?? (hub.source is CameraSource
             ? String(format: "  No HDMI signal for %.0f s · it returns when the console leaves this screen  ", age)
-            : String(format: "  No video for %.0f s  ", age)
+            : String(format: "  No video for %.0f s  ", age))
         sidebar.set("Frame age", camera == "denied" ? "no camera permission" : age < 0 ? "no frames"
                     : String(format: "%.0f ms", age * 1000),
                     color: age < 0 || age > 2 ? .systemRed : .labelColor)
@@ -766,7 +783,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         }
         sidebar.buttons["forceRelease"]?.isEnabled = lease["owner"] is [String: Any]
         sidebar.buttons["claimDetails"]?.isEnabled = lease["owner"] is [String: Any] || queued > 0
-        sidebar.notice.stringValue = hub.notice ?? (hub.source as? RemotePlaySource)?.status.summary ?? ""
+        sidebar.notice.stringValue = hub.notice ?? (hub.source as? RemotePlaySource)?.status.summary
+            ?? (hub.source as? PBSSource)?.status.summary ?? ""
         let canRun = busy == nil && hub.padd.json["available"] as? Bool == true
         let fileManagerBusy = titlesLoading || installing != nil  // Web File Manager runs one task at a time
         sidebar.buttons["paddStart"]?.isEnabled = canRun && !link.connected && !fileManagerBusy
@@ -1443,7 +1461,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
     }
 
     /// A reconnect starts a new clock. Save the old timeline before accepting a new recording.
+    /// A network source's stream ended (Remote Play or PBS): stop playback and save any recording.
     func remotePlayStreamLost(completion: (() -> Void)? = nil) {
+        let label = hub.captureVideo == "pbs" ? "PBS" : "Remote Play"
         stopPlayback = true
         hub.controller.release(client: "play")
         if let completion { afterVideoSaved.append(completion) }
@@ -1456,9 +1476,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         }
         stopVideo(recorder) { [weak self] reason in
             guard let self else { return }
-            if let reason { self.videoSaved("Remote Play recording stopped: \(reason)"); return }
+            if let reason { self.videoSaved("\(label) recording stopped: \(reason)"); return }
             // Keep the finished file at its unique state-directory path; never overwrite another recording.
-            self.videoSaved("Remote Play disconnected. Recording saved to \(recorder.url.path)")
+            self.videoSaved("\(label) disconnected. Recording saved to \(recorder.url.path)")
         }
     }
 
