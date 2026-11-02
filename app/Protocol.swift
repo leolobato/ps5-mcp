@@ -16,20 +16,21 @@ enum PMCP {
     static let flagPads: UInt32 = 0x40
 
     enum Kind: UInt8 { case hello = 1, state, ping, ack, error, shutdown, getState, command, getUser, getUsers, getPads }
-    enum Command: UInt32 { case home = 1, launch = 2, close = 3, uninstall = 4, secondPad = 6, selectPad = 7 }
+    enum Command: UInt32 { case home = 1, launch = 2, close = 3, uninstall = 4, pad = 6, selectPad = 7 }
     enum ErrorCode: UInt32 { case badMagic = 1, badVersion, badLength, unknownType, busy, noPad }
 
     static let homeMethods = ["system", "shellcore", "suspend"]
 
-    /// SECOND_PAD and SELECT_PAD statuses (padd 1.7), as `protocol.pads_text` in Python.
+    /// PAD and SELECT_PAD statuses, as `protocol.pads_text` in Python.
     static func padsText(_ op: Command, _ status: Int32) -> String {
         switch (op, status) {
         case (_, 0): return "ok"
-        case (.secondPad, 2): return "no other user is signed in: sign one in (or a guest) on the console first"
-        case (.secondPad, 22): return "not connect or disconnect"
-        case (.secondPad, 78): return "this console's padd cannot list the signed-in users"
-        case (.selectPad, 2): return "controller 2 is not connected"
-        case (.selectPad, 22): return "not 1 or 2"
+        case (.pad, 2): return "no other signed-in user without a controller: sign one in (or a guest) on the console first"
+        case (.pad, 22): return "not connect or disconnect"
+        case (.pad, 28): return "every controller is already connected"
+        case (.pad, 78): return "this console's padd cannot list the signed-in users"
+        case (.selectPad, 2): return "that controller is not connected"
+        case (.selectPad, 22): return "not a controller number"
         default: return String(format: "refused, status 0x%08X", UInt32(bitPattern: status))
         }
     }
@@ -174,19 +175,30 @@ struct LoginUsers {
     }
 }
 
-/// GET_PADS (padd 1.7): the pad input drives (1 or 2) and each pad's handle (-1: not connected) and user.
+/// GET_PADS: the pad input drives and each pad's handle (-1: not connected) and user. Two pads before padd 1.9.
 struct Pads: Equatable {
     var active: Int
     var handles: [Int32], userIDs: [Int32]
-    var secondConnected: Bool { handles[1] >= 0 }
+    /// How many controllers this padd can run: 2 before padd 1.9, 4 from then on.
+    var capacity: Int { handles.count }
+    /// Connected controller numbers, in order. Controller 1 first; they keep their numbers while padd runs.
+    var connected: [Int] { (1...capacity).filter { handles[$0 - 1] >= 0 } }
+    var extraConnected: Bool { connected.contains { $0 != 1 } }
+    /// The users of controllers 2 and up, in order.
+    var extraUsers: [Int32] { connected.filter { $0 != 1 }.map { userIDs[$0 - 1] } }
+    func controller(forUser user: Int32) -> Int? { connected.first { userIDs[$0 - 1] == user } }
 }
 
 func decodePads(_ data: [UInt8]) -> Pads {
     var c = Cursor(data: data)
     let active = Int(c.u8())
     c.at = 4
-    let h1 = c.i32(), u1 = c.i32(), h2 = c.i32(), u2 = c.i32()
-    return Pads(active: active, handles: [h1, h2], userIDs: [u1, u2])
+    var handles: [Int32] = [], users: [Int32] = []
+    for _ in 0..<((data.count - 4) / 8) {
+        handles.append(c.i32())
+        users.append(c.i32())
+    }
+    return Pads(active: active, handles: handles, userIDs: users)
 }
 
 func decodeUsers(_ data: [UInt8]) -> LoginUsers {

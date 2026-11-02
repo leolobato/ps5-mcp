@@ -245,11 +245,11 @@ final class PadLink {
     func getPads(timeout: Double = 2) throws -> Pads? {
         guard hello.flags & PMCP.flagPads != 0 else { return nil }
         let reply = try request(encode(.getPads), reply: .getPads, timeout: timeout)
-        guard reply.count == 20 else { throw PadError.failed("invalid GET_PADS reply") }
+        guard reply.count == 20 || reply.count == 36 else { throw PadError.failed("invalid GET_PADS reply") }
         return decodePads(reply)
     }
 
-    /// SECOND_PAD or SELECT_PAD (padd 1.7). On success the HELLO shown in `status` follows the active pad: its
+    /// PAD or SELECT_PAD. On success the HELLO shown in `status` follows the active pad: its
     /// handle, user and name.
     func padsCommand(_ op: PMCP.Command, _ arg: String, timeout: Double = 10) throws -> Int32 {
         let status = try command(op, arg, timeout: timeout)

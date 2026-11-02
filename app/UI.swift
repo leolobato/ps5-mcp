@@ -92,19 +92,21 @@ final class Sidebar: NSStackView {
         controllerPicker.addItem(withTitle: "Controller 1")
         controllerPicker.target = target
         controllerPicker.action = #selector(AppDelegate.chooseController)
-        controllerPicker.toolTip = "The virtual controller that the keyboard, the API and MCP agents drive. Controller 1 "
-            + "is the foreground user's; controller 2 the second signed-in user's (needs padd 1.7)"
+        controllerPicker.toolTip = "The virtual controller that the keyboard, the API and MCP agents drive"
         controllerPicker.setAccessibilityLabel("Controlled controller")
         let pickerLabel = NSTextField(labelWithString: "Input to")
         pickerLabel.font = .systemFont(ofSize: 11)
         pickerLabel.textColor = .secondaryLabelColor
         pickerLabel.setContentHuggingPriority(.required, for: .horizontal)
-        full(row([pickerLabel, controllerPicker], equal: false))
-        let second = button("secondController", "Connect second controller", "plus.circle",
-                            #selector(AppDelegate.toggleSecondController(_:)), target)
-        second.toolTip = "Add a second virtual controller for the second signed-in user (a game's player 2) and "
-            + "send input to it; the app answers its \"Who's using this controller?\""
-        full(second)
+        // One row however many controllers there are: the menu lists them, + adds one, − removes the selected one.
+        let add = button("addController", "", "plus", #selector(AppDelegate.addController(_:)), target)
+        let remove = button("removeController", "", "minus", #selector(AppDelegate.removeController), target)
+        add.setAccessibilityLabel("Add a controller")
+        remove.setAccessibilityLabel("Remove the selected controller")
+        for view in [add, remove] { view.setContentHuggingPriority(.required, for: .horizontal) }
+        controllerPicker.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        controllerPicker.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        full(row([pickerLabel, controllerPicker, add, remove], equal: false, spacing: 4))
 
         section("Console")
         let close = button("closeApp", "Close game/app", "xmark.circle", #selector(AppDelegate.closeApp), target)
@@ -728,30 +730,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
             // Name each controller's user: the foreground user changes when another controller takes over.
             let popup = sidebar.controllerPicker
             let pads = hub.pads, supported = link.connected && (link.hello?.flags ?? 0) & PMCP.flagPads != 0
-            let count = pads?.secondConnected == true ? 2 : 1
-            while popup.numberOfItems > count { popup.removeItem(at: popup.numberOfItems - 1) }
-            while popup.numberOfItems < count { popup.addItem(withTitle: "") }
-            for pad in 1...count {
-                popup.item(at: pad - 1)?.title = "Controller \(pad)" + (hub.controllerName(pad).map { " (\($0))" } ?? "")
+            let connected = pads?.connected ?? [1]
+            while popup.numberOfItems > connected.count { popup.removeItem(at: popup.numberOfItems - 1) }
+            while popup.numberOfItems < connected.count { popup.addItem(withTitle: "") }
+            for (index, pad) in connected.enumerated() {
+                let item = popup.item(at: index)
+                item?.title = "Controller \(pad)" + (hub.controllerName(pad).map { " (\($0))" } ?? "")
+                item?.tag = pad
             }
-            popup.selectItem(at: min(pads?.active ?? 1, count) - 1)
-            popup.isEnabled = supported && count == 2
-            let second = hub.loginUsers?.second.map(LoginUsers.label)
-            if pads?.secondConnected == true {
-                sidebar.setButton("secondController", title: "Disconnect second controller", symbol: "minus.circle")
-            } else {
-                sidebar.setButton("secondController", title: "Connect second controller", symbol: "plus.circle")
-            }
-            let signedOut = hub.signedOutUsers.map(\.name)
-            sidebar.buttons["secondController"]?.isEnabled = supported
-                && (pads?.secondConnected == true || !signedOut.isEmpty
-                    || hub.loginUsers.map { $0.status != 0 || second != nil } ?? true)
-            sidebar.buttons["secondController"]?.toolTip = !supported
-                ? "Needs padd 1.7: press Update"
-                : pads?.secondConnected == true ? "Remove controller 2; input goes back to controller 1"
-                : second.map { "Add controller 2 for \($0) and send input to it" }
-                    ?? (signedOut.isEmpty ? "Sign a second user (or a guest) in on the console first"
-                        : "Nobody else is signed in: sign in \(signedOut.joined(separator: " or ")) with controller 2")
+            let active = pads?.active ?? 1
+            popup.selectItem(withTag: active)
+            popup.isEnabled = supported && connected.count > 1
+            let available = hub.availableUsers, signedOut = hub.signedOutUsers
+            let full = connected.count >= (pads?.capacity ?? 1)
+            let unknown = hub.loginUsers.map { $0.status != 0 } ?? true
+            sidebar.buttons["addController"]?.isEnabled = supported && !full
+                && (!available.isEmpty || !signedOut.isEmpty || unknown)
+            sidebar.buttons["addController"]?.toolTip = !supported ? "Needs a newer padd: press Update"
+                : full ? ((pads?.capacity ?? 0) < Hub.maxControllers ? "Press Update for up to \(Hub.maxControllers) controllers"
+                          : "All \(Hub.maxControllers) controllers are connected")
+                : !available.isEmpty ? "Add a controller for another signed-in user and send input to it"
+                : !signedOut.isEmpty ? "Nobody else is signed in: sign someone in with a new controller"
+                : "Sign another user (or a guest) in on the console first"
+            sidebar.buttons["removeController"]?.isEnabled = supported && active != 1
+            sidebar.buttons["removeController"]?.toolTip = active != 1 ? "Remove controller \(active); input goes back to controller 1"
+                : connected.count > 1 ? "Select the controller to remove" : "Only controller 1 is connected"
         }
         if let pong {
             sidebar.set("Reports", "\(pong.reportsSent) sent, \(pong.reportFailures) failed",
@@ -1001,42 +1004,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
 
     /// Sidebar's controller picker: input goes to controller 1 or 2.
     @objc func chooseController() {
-        guard let index = sidebar?.controllerPicker.indexOfSelectedItem, index >= 0, index + 1 != hub.pads?.active
-        else { return }
+        guard let pad = sidebar?.controllerPicker.selectedItem?.tag, pad >= 1, pad != hub.pads?.active else { return }
         background {
-            let status = try self.hub.selectPad(index + 1, link: self.hub.controller.currentLink())
-            if status != 0 { self.hub.notice = "Controller \(index + 1): \(PMCP.padsText(.selectPad, status))" }
+            let status = try self.hub.selectPad(pad, link: self.hub.controller.currentLink())
+            if status != 0 { self.hub.notice = "Controller \(pad): \(PMCP.padsText(.selectPad, status))" }
         }
     }
 
-    /// Sidebar's Connect / Disconnect second controller. With nobody else signed in, a menu offers the profiles seen
-    /// before: controller 2 then signs one in.
-    @objc func toggleSecondController(_ sender: NSButton) {
-        let connected = hub.pads?.secondConnected == true
-        if !connected, hub.loginUsers?.second == nil, !hub.signedOutUsers.isEmpty {
-            let menu = NSMenu()
-            for user in hub.signedOutUsers {
-                let item = NSMenuItem(title: "Sign in \(user.name) with controller 2", action: #selector(connectSecondUser(_:)),
-                                      keyEquivalent: "")
-                item.target = self
-                item.tag = Int(user.id)
-                menu.addItem(item)
-            }
-            menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height + 4), in: sender)
+    /// Sidebar's +. A menu only when there is a choice: signed-in users first, then profiles a controller can sign in.
+    @objc func addController(_ sender: NSButton) {
+        let available = hub.availableUsers, signedOut = hub.signedOutUsers
+        if available.count + signedOut.count <= 1 {
+            // The one free signed-in user is who padd picks anyway, and padd before 1.8 takes no user id.
+            connectController(user: available.isEmpty ? signedOut.first?.id : nil)
             return
         }
+        let menu = NSMenu()
+        func add(_ title: String, _ user: Int32) {
+            let item = NSMenuItem(title: title, action: #selector(connectControllerUser), keyEquivalent: "")
+            item.target = self
+            item.tag = Int(user)
+            menu.addItem(item)
+        }
+        for user in available { add("Add controller for \(LoginUsers.label(user))", user.id) }
+        if !available.isEmpty, !signedOut.isEmpty { menu.addItem(.separator()) }
+        for user in signedOut { add("Sign in \(user.name) with a new controller", user.id) }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height + 4), in: sender)
+    }
+
+    @objc func connectControllerUser(_ item: NSMenuItem) { connectController(user: Int32(item.tag)) }
+
+    private func connectController(user: Int32?) {
         background {
-            let link = try self.hub.controller.currentLink()
-            let status = try connected ? self.hub.disconnectSecond(link) : self.hub.connectSecond(link)
-            if status != 0 { self.hub.notice = "Controller 2: \(PMCP.padsText(.secondPad, status))" }
+            let status = try self.hub.connectPad(self.hub.controller.currentLink(), user: user)
+            if status != 0 { self.hub.notice = "New controller: \(PMCP.padsText(.pad, status))" }
         }
     }
 
-    @objc func connectSecondUser(_ item: NSMenuItem) {
-        let user = Int32(item.tag)
+    /// Sidebar's −: the selected controller.
+    @objc func removeController() {
+        guard let pad = hub.pads?.active, pad != 1 else { return }
         background {
-            let status = try self.hub.connectSecond(self.hub.controller.currentLink(), user: user)
-            if status != 0 { self.hub.notice = "Controller 2: \(PMCP.padsText(.secondPad, status))" }
+            let status = try self.hub.disconnectPad(self.hub.controller.currentLink(), pad: pad)
+            if status != 0 { self.hub.notice = "Controller \(pad): \(PMCP.padsText(.pad, status))" }
         }
     }
 

@@ -101,7 +101,7 @@ def test_ping_reports_uptime_and_counters(padd):
     link = padd.connect()
     link.send_state(PadState(buttons=RIGHT), wait=True)
     pong = link.ping()
-    assert pong.protocol == 1 and p.version_string(pong.payload_version) == "1.8"
+    assert pong.protocol == 1 and p.version_string(pong.payload_version) == "1.9"
     assert pong.reports_sent >= 1 and pong.report_failures == 0 and pong.flags & p.FLAG_PAD_READY
     link.close()
 
@@ -477,12 +477,12 @@ def test_second_pad_drives_while_selected_and_the_first_stays_neutral(tmp_path):
     try:
         link = daemon.connect()
         assert link.hello.flags & p.FLAG_PADS and not link.hello.flags & p.FLAG_PAD_USER
-        assert link.get_pads() == p.Pads(1, (1000, -1), (0x11ECF8B9, -1))
+        assert link.get_pads() == p.Pads(1, (1000, -1, -1, -1), (0x11ECF8B9, -1, -1, -1))
         link.send_state(PadState(buttons=RIGHT), wait=True)
-        assert link.command(p.Command.SECOND_PAD, "connect") == 0
+        assert link.command(p.Command.PAD, "connect") == 0
         assert daemon.calls("pad_add")[-1]["user_id"] == GUEST and not daemon.calls("pad_remove")
         assert reports(daemon, 1001) == [0]  # fed from the start, neutral
-        assert link.get_pads() == p.Pads(1, (1000, 1001), (0x11ECF8B9, GUEST))  # connecting does not select it
+        assert link.get_pads() == p.Pads(1, (1000, 1001, -1, -1), (0x11ECF8B9, GUEST, -1, -1))  # connecting does not select it
         assert link.command(p.Command.SELECT_PAD, "2") == 0
         assert reports(daemon, 1000)[-1] == 0  # the held Right is released on pad 1
         assert link.get_user().user_id == GUEST and link.ping().pad_handle == 1001
@@ -506,16 +506,17 @@ def test_disconnecting_the_second_pad_selects_the_first(tmp_path):
     daemon = Padd(tmp_path, env=TWO_USERS)
     try:
         link = daemon.connect()
-        assert link.command(p.Command.SECOND_PAD, "connect") == 0
-        assert link.command(p.Command.SECOND_PAD, "connect") == 0  # already connected: nothing changes
+        assert link.command(p.Command.PAD, "connect") == 0
+        assert link.command(p.Command.PAD, "connect") == 2  # nobody else is left: nothing changes
+        assert link.command(p.Command.PAD, f"connect {GUEST}") == 0  # already connected: nothing changes
         assert len(daemon.calls("pad_add")) == 2
         assert link.command(p.Command.SELECT_PAD, "2") == 0
         link.send_state(PadState(buttons=RIGHT), wait=True)
-        assert link.command(p.Command.SECOND_PAD, "disconnect") == 0
+        assert link.command(p.Command.PAD, "disconnect") == 0
         assert reports(daemon, 1001)[-1] == 0 and daemon.calls("pad_remove") == [{"call": "pad_remove", "handle": 1001}]
-        assert link.get_pads() == p.Pads(1, (1000, -1), (0x11ECF8B9, -1))
+        assert link.get_pads() == p.Pads(1, (1000, -1, -1, -1), (0x11ECF8B9, -1, -1, -1))
         assert link.command(p.Command.SELECT_PAD, "2") == 2  # ENOENT: not connected
-        assert link.command(p.Command.SECOND_PAD, "disconnect") == 0
+        assert link.command(p.Command.PAD, "disconnect") == 0
         assert link.send_state(PadState(buttons=RIGHT), wait=True) == 0 and reports(daemon, 1000)[-1] == RIGHT
         link.close()
     finally:
@@ -524,12 +525,12 @@ def test_disconnecting_the_second_pad_selects_the_first(tmp_path):
 
 def test_second_pad_needs_a_second_user_and_valid_args(padd):
     link = padd.connect()
-    assert link.command(p.Command.SECOND_PAD, "connect") == 2  # ENOENT: nobody else signed in
-    assert link.command(p.Command.SECOND_PAD, "") == 22
-    assert link.command(p.Command.SELECT_PAD, "3") == 22
+    assert link.command(p.Command.PAD, "connect") == 2  # ENOENT: nobody else signed in
+    assert link.command(p.Command.PAD, "") == 22
+    assert link.command(p.Command.SELECT_PAD, "5") == 22
     assert link.command(p.Command.SELECT_PAD, "1") == 0
     assert len(padd.calls("pad_add")) == 1 and not padd.calls("pad_remove")
-    assert p.pads_text("second_pad", 2) == p.SECOND_PAD_ERRORS[2] and p.pads_text("select_pad", 2).startswith("controller 2")
+    assert p.pads_text("pad", 2) == p.PAD_ERRORS[2] and p.pads_text("select_pad", 2).startswith("that controller")
     with pytest.raises(PadError, match="unknown command op"):  # padd 1.5's PAD_USER is gone
         link.command(p.Command.PAD_USER, "second")
     link.close()
@@ -538,20 +539,67 @@ def test_second_pad_needs_a_second_user_and_valid_args(padd):
 def test_second_pad_can_be_for_a_given_user(padd):
     # A user who is not signed in: on the console this opens the sign-in picker with that user selected.
     link = padd.connect()
-    assert link.command(p.Command.SECOND_PAD, "connect 0") == 22
-    assert link.command(p.Command.SECOND_PAD, "connect x1") == 22
-    assert link.command(p.Command.SECOND_PAD, "connectx") == 22
-    assert link.command(p.Command.SECOND_PAD, f"connect {GUEST}") == 0
-    assert padd.calls("pad_add")[-1]["user_id"] == GUEST and link.get_pads().user_ids == (0x11ECF8B9, GUEST)
+    assert link.command(p.Command.PAD, "connect 0") == 22
+    assert link.command(p.Command.PAD, "connect x1") == 22
+    assert link.command(p.Command.PAD, "connectx") == 22
+    assert link.command(p.Command.PAD, f"connect {GUEST}") == 0
+    assert padd.calls("pad_add")[-1]["user_id"] == GUEST and link.get_pads().user_ids == (0x11ECF8B9, GUEST, -1, -1)
     link.close()
+
+
+def test_four_pads_keep_their_numbers(tmp_path):
+    other, third = GUEST + 1, GUEST + 2
+    daemon = Padd(tmp_path, env={"PADD_LOGIN_USERS": f"{0x11ECF8B9},{GUEST},{other},{third}"})
+    try:
+        link = daemon.connect()
+        for _ in range(3):
+            assert link.command(p.Command.PAD, "connect") == 0
+        assert link.get_pads().user_ids == (0x11ECF8B9, GUEST, other, third)
+        assert link.command(p.Command.PAD, "connect") == 28  # ENOSPC: all four connected
+        assert link.command(p.Command.PAD, f"connect {GUEST + 3}") == 28
+        assert link.command(p.Command.PAD, f"connect {other}") == 0  # already connected: nothing changes
+        assert len(daemon.calls("pad_add")) == 4
+
+        # Input follows the selected pad only.
+        assert link.command(p.Command.SELECT_PAD, "4") == 0 and link.ping().pad_handle == 1003
+        assert link.send_state(PadState(buttons=RIGHT), wait=True) == 0
+        assert reports(daemon, 1003)[-1] == RIGHT and reports(daemon, 1002)[-1] == 0
+
+        # Removing another pad leaves the selection and every other number alone.
+        for bad in ("disconnect 1", "disconnect 5", "disconnect x", "disconnect 22"):
+            assert link.command(p.Command.PAD, bad) == 22
+        assert link.command(p.Command.PAD, "disconnect 3") == 0
+        pads = link.get_pads()
+        assert pads.active == 4 and pads.handles == (1000, 1001, -1, 1003)
+        assert reports(daemon, 1003)[-1] == RIGHT
+        assert link.command(p.Command.PAD, "disconnect 3") == 0  # not connected: nothing changes
+        assert link.command(p.Command.SELECT_PAD, "3") == 2
+
+        # A new pad takes the lowest free number.
+        assert link.command(p.Command.PAD, "connect") == 0
+        assert link.get_pads().user_ids == (0x11ECF8B9, GUEST, other, third)
+        assert link.get_pads().handles[2] == 1004
+
+        # Removing the selected one releases it and goes back to pad 1; plain "disconnect" takes the highest.
+        assert link.command(p.Command.PAD, "disconnect 4") == 0
+        assert reports(daemon, 1003)[-1] == 0
+        pads = link.get_pads()
+        assert pads.active == 1 and pads.handles == (1000, 1001, 1004, -1)
+        assert link.command(p.Command.PAD, "disconnect") == 0
+        assert link.get_pads().handles == (1000, 1001, -1, -1)
+        link.close()
+    finally:
+        daemon.stop()
+    # Shutting down removes every pad.
+    assert {c["handle"] for c in daemon.calls("pad_remove")} >= {1000, 1001}
 
 
 def test_failed_second_pad_keeps_the_first(tmp_path):
     daemon = Padd(tmp_path, env={**TWO_USERS, "PADD_FAIL_ADD": "16", "PADD_FAIL_ADD_USER": str(GUEST)})
     try:
         link = daemon.connect()
-        assert link.command(p.Command.SECOND_PAD, "connect") == 16
-        assert link.get_pads().handles == (1000, -1) and link.ping().pad_handle == 1000
+        assert link.command(p.Command.PAD, "connect") == 16
+        assert link.get_pads().handles == (1000, -1, -1, -1) and link.ping().pad_handle == 1000
         assert link.send_state(PadState(buttons=RIGHT), wait=True) == 0
         link.close()
     finally:
@@ -562,12 +610,12 @@ def test_shutdown_removes_both_pads(tmp_path):
     daemon = Padd(tmp_path, env=TWO_USERS)
     try:
         link = daemon.connect()
-        assert link.command(p.Command.SECOND_PAD, "connect") == 0
+        assert link.command(p.Command.PAD, "connect") == 0
         link.shutdown()
         assert wait_for(lambda: daemon.process.poll() is not None)
         assert sorted(c["handle"] for c in daemon.calls("pad_remove")) == [1000, 1001]
         events = [e["event"] for e in daemon.events()]
-        assert "second_pad_removed" in events and events.count("pad_removed") == 1
+        assert "extra_pad_removed" in events and events.count("pad_removed") == 1
     finally:
         daemon.stop()
 

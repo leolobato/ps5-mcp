@@ -95,7 +95,7 @@ async def test_home_and_launch_commands(runtime):
 
 async def test_status_reports_link_and_counters(runtime):
     info = json.loads(text(await server.mcp.call_tool("status", {})))
-    assert info["payload"]["connected"] and info["payload"]["version"] == "1.8"
+    assert info["payload"]["connected"] and info["payload"]["version"] == "1.9"
     assert info["payload"]["pong"]["report_failures"] == 0
     assert info["capture"]["running"]
     assert info["app"]["version"] == info["app"]["server_version"]  # one version for the app and the MCP server
@@ -257,13 +257,40 @@ async def test_ps_button_and_type_text_explain_the_remote_play_requirement(runti
     assert reports(runtime)[-1] == 0
 
 
-async def test_second_controller_needs_a_second_user(runtime):
-    result = text(await server.mcp.call_tool("second_controller", {"connected": True, "snapshot_after_ms": None}))
-    assert "no other user is signed in" in result
+async def test_new_controller_needs_another_user(runtime):
+    result = text(await server.mcp.call_tool("connect_controller", {"snapshot_after_ms": None}))
+    assert "no other signed-in user" in result
     assert "not connected" in text(await server.mcp.call_tool("use_controller", {"controller": 2}))
-    assert "1 or 2" in text(await server.mcp.call_tool("use_controller", {"controller": 3}))
+    assert "1 to 4" in text(await server.mcp.call_tool("use_controller", {"controller": 5}))
+    assert "2 to 4" in text(await server.mcp.call_tool("disconnect_controller", {"controller": 1}))
     info = json.loads(text(await server.mcp.call_tool("status", {})))
     assert info["payload"]["controllers"]["active"] == 1 and not info["payload"]["controllers"]["second"]
+
+
+async def test_four_controllers_through_the_tools(tmp_path, monkeypatch):
+    users = [0x11ECF8B9, 0x22334455, 0x22334456, 0x22334457]
+    daemon = Padd(tmp_path, env={"PADD_LOGIN_USERS": ",".join(map(str, users))})
+    app = App(daemon, None, "--no-auto-assign")
+    monkeypatch.setenv("PS5MCP_STATE", str(app.root))
+    monkeypatch.setattr(server, "runtime", server.Runtime())
+    server.runtime.start()
+    try:
+        for number in (2, 3, 4):
+            result = text(await server.mcp.call_tool("connect_controller", {"snapshot_after_ms": None}))
+            assert f"input goes to controller {number}" in result
+        assert "already connected" in text(await server.mcp.call_tool("connect_controller", {"snapshot_after_ms": None}))
+        await server.mcp.call_tool("press", {"button": "right", "hold_ms": 30})
+        assert p.BUTTONS["right"] in [c["buttons"] for c in daemon.calls("pad_report") if c["handle"] == 1003]
+        assert "input goes to controller 3" in text(await server.mcp.call_tool("use_controller", {"controller": 3}))
+        assert "input goes to controller 3" in text(
+            await server.mcp.call_tool("disconnect_controller", {"controller": 2, "snapshot_after_ms": None}))
+        controllers = json.loads(text(await server.mcp.call_tool("status", {})))["payload"]["controllers"]
+        assert [c["controller"] for c in controllers["list"]] == [1, 3, 4]
+        assert [u["user_id"] for u in controllers["available"]] == [users[1]]
+    finally:
+        server.runtime.stop()
+        app.stop()
+        daemon.stop()
 
 
 async def test_input_follows_the_selected_controller(tmp_path, monkeypatch):
@@ -274,7 +301,7 @@ async def test_input_follows_the_selected_controller(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "runtime", server.Runtime())
     server.runtime.start()
     try:
-        result = text(await server.mcp.call_tool("second_controller", {"connected": True, "snapshot_after_ms": None}))
+        result = text(await server.mcp.call_tool("connect_controller", {"snapshot_after_ms": None}))
         assert "input goes to controller 2" in result and "controller 2 = User1" in result
         await server.mcp.call_tool("press", {"button": "right", "hold_ms": 30})
         assert p.BUTTONS["right"] in [c["buttons"] for c in daemon.calls("pad_report") if c["handle"] == 1001]
@@ -286,7 +313,7 @@ async def test_input_follows_the_selected_controller(tmp_path, monkeypatch):
         assert controllers["active"] == 1 and controllers["second"]
         assert [c["user_name"] for c in controllers["list"]] == ["Test Player", "User1"]
         assert "input goes to controller 1" in text(
-            await server.mcp.call_tool("second_controller", {"connected": False, "snapshot_after_ms": None}))
+            await server.mcp.call_tool("disconnect_controller", {"snapshot_after_ms": None}))
     finally:
         server.runtime.stop()
         app.stop()

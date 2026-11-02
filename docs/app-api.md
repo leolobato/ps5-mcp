@@ -85,7 +85,7 @@ free, every client drives it as before.
 
 | cmd | fields | reply |
 |---|---|---|
-| `command` | `op`: `home` (`arg` = `suspend` (default), `system` or `shellcore`), `close`, `launch` (`arg` = title id), `uninstall` (`arg` = title id; padd 1.3+), `second_pad` (`arg` = `connect`, `connect <user id>` (padd 1.8+) or `disconnect`; padd 1.7+) or `select_pad` (`arg` = `1` or `2`; padd 1.7+) | `status`: padd's ACK status (0 ok, >0 errno, <0 SCE error) |
+| `command` | `op`: `home` (`arg` = `suspend` (default), `system` or `shellcore`), `close`, `launch` (`arg` = title id), `uninstall` (`arg` = title id; padd 1.3+), `pad` (`arg` = `connect`, `connect <user id>` (padd 1.8+) or `disconnect`; padd 1.7+) or `select_pad` (`arg` = `1` or `2`; padd 1.7+) | `status`: padd's ACK status (0 ok, >0 errno, <0 SCE error) |
 | `ping` | | `pong`: uptime, reports sent and failed, neutral events |
 | `padd_start` | `firmware?` (default 13.60) | Pauses the link, runs `ps5mcp padd start` once, then resumes. Returns `status`, `run` (the `results/` dir), `exit` and `output`. |
 | `padd_stop` | | The same flow, with `ps5mcp padd stop`. |
@@ -95,18 +95,20 @@ free, every client drives it as before.
   `make` builds into the app, else `checkout` for `build/padd.elf`), `version` from its build report (compare it with
   `pad.version`), `stale` when the ELF no longer matches that report, and `error` when there is nothing to deploy
   (run `make`). The app passes `path` to the CLI as `--elf`.
-- Two controllers (padd 1.7, `docs/protocol.md` COMMAND ops 6 and 7): controller 1 is the foreground user's,
-  controller 2 the second signed-in user's. All input (keyboard, `set`, `press`, ...) drives the selected one, and
-  `pad.hello` shows its handle, user and name. `second_pad connect` adds controller 2 and selects it, and auto-assign
-  answers its "Who's using this controller?"; `disconnect` removes it and selects controller 1. `select_pad` picks
-  the controller; the other one is released. A nonzero status changes nothing (`second_pad` 2: nobody else is signed
-  in; `select_pad` 2: controller 2 is not connected). `connect <user id>` adds controller 2 for that user; for a user
-  who is not signed in the console shows its sign-in picker with that user selected, and `notice` asks to confirm with
-  Cross (no auto-assign there). The app remembers every user padd has reported signed in (`<state>/known-users`), so
-  `controllers.signed_out` lists who controller 2 can sign in. The app keeps the choice in `<state>/controllers`
-  (with controller 2's user) and restores it after every (re)connect, with the same user while they are signed in: a restarted padd has controller 1 only, so the app answers its dialog, then connects
-  controller 2 and answers that one. The window's **Input to** menu and **Connect second controller** button do the
-  same, without the lease check.
+- Controllers (`docs/protocol.md` COMMAND ops 6 and 7): up to four with padd 1.9, two before it. Controller 1 is the
+  foreground user's, and the others are for other signed-in users. All input (keyboard, `set`, `press`, ...) drives the
+  selected one, and `pad.hello` shows its handle, user and name. `pad connect` adds one for the next signed-in user with no
+  controller and selects it, and auto-assign answers its "Who's using this controller?". `pad disconnect <controller>`
+  removes that one (without a number, the highest), and input goes back to controller 1 if it was selected; the others keep
+  their numbers. `select_pad` picks the controller; the others are released. A nonzero status changes nothing (`pad` 2:
+  nobody else is free; `pad` 28: all connected; `select_pad` 2: not connected). `connect <user id>` adds one for that user;
+  for a user who is not signed in the console shows its sign-in picker with that user selected, and `notice` asks to confirm
+  with Cross (no auto-assign there). `second_pad` is an old name for `pad`. The app remembers every user padd has reported
+  signed in (`<state>/known-users`), and `controllers.signed_out` lists them; `controllers.available` lists the signed-in
+  users with no controller, and `controllers.max` how many this padd runs. The app keeps the users and the selected one in
+  `<state>/controllers` and restores them after every (re)connect, one dialog at a time: a restarted padd has controller 1
+  only, so numbers follow the saved order. A user who can no longer come back keeps the choice saved and sets `notice`. The
+  window's **Input to** menu and its **+** and **−** buttons do the same, without the lease check.
 - `padd_start` and `padd_update` deploy to the console. Nothing calls it on its own, and it never retries.
 - The CLI writes the archive exactly as it does without the app.
 
@@ -127,9 +129,9 @@ free, every client drives it as before.
 After every (re)connect the app looks for "Who's using this controller?" for 6 s. It presses Cross only when the
 dialog is visible. The match uses the title template at (712, 168), within 24 px, with a score of at least 0.9, as
 `assign.py` does. When it answers, `notice` says so, because answering turns the DualSense off
-(see [findings](findings.md)). It answers with the selected controller. For controller 2 the dialog still
-focuses the first profile (the foreground user's, on the console tested), so the app reads the profile names
-(Vision), presses Right to controller 2's user and then Cross. If that name is not on screen it presses nothing and
+(see [findings](findings.md)). It answers with the selected controller. For an added controller the dialog still
+focuses the first profile (the foreground user's, on the console tested with two), so the app reads the profile names
+(Vision), presses Right to that controller's user and then Cross. If that name is not on screen it presses nothing and
 `notice` asks you to pick it. It stops if another controller is selected meanwhile.
 Disable it with `--no-auto-assign` or `PS5MCP_AUTO_ASSIGN=0`.
 

@@ -1,9 +1,9 @@
 /* padd: long-running virtual-pad daemon for ps5-mcp.
  *
  * - One instance: the listening port is the lock.
- * - Up to two virtual pads, each fed its state every tick: pad 1 for the foreground user at start, and pad 2 for
- *   the second signed-in user while COMMAND SECOND_PAD has it connected. STATE drives the active pad (COMMAND
- *   SELECT_PAD); the other one stays neutral. HELLO, PING, GET_USER and GET_STATE describe the active pad.
+ * - Up to four virtual pads, each fed its state every tick: pad 1 for the foreground user at start, and pads 2 to 4
+ *   for other signed-in users while COMMAND PAD has them connected. STATE drives the active pad (COMMAND
+ *   SELECT_PAD); the others stay neutral. HELLO, PING, GET_USER and GET_STATE describe the active pad.
  * - One client at a time; each STATE carries the whole pad state and is ACKed by seq.
  * - Safety: no STATE for watchdog_ms, or a disconnect, forces neutral. A client
  *   silent for idle_ms is dropped. The pads are removed on SHUTDOWN, SIGTERM/SIGINT
@@ -35,8 +35,8 @@
    that hung up no longer makes the next one busy. 1.5: the pad can belong to another signed-in user (PAD_USER), and
    launch always uses the foreground user. 1.7: a second pad for the second signed-in user instead of PAD_USER
    (SECOND_PAD, SELECT_PAD, GET_PADS), and GET_USERS lists the foreground and signed-in users. 1.8: SECOND_PAD
-   "connect <user id>". */
-#define PADD_VERSION 0x0108
+   "connect <user id>". 1.9: up to four pads (COMMAND PAD, the former SECOND_PAD, and "disconnect <pad>"). */
+#define PADD_VERSION 0x0109
 
 struct config {
     int port;
@@ -195,15 +195,18 @@ static uint32_t flags(const struct daemon *d) {
         | PMCP_FLAG_UNINSTALL | PMCP_FLAG_USERS | PMCP_FLAG_PADS;
 }
 
-/* The first signed-in user that is not the foreground one, as prospero-win gives a game's controller 1.
+/* The first signed-in user with no pad who is not the foreground one, as prospero-win gives a game's next controller.
    ENOENT: nobody else is signed in. */
-static int second_user(int32_t *user_id) {
+static int next_user(const struct daemon *d, int32_t *user_id) {
     int32_t foreground, ids[SYSTEM_LOGIN_USERS];
     int rc = system_foreground_user(&foreground);
     if (rc) return rc;
     if ((rc = system_login_users(ids))) return rc;
     for (int i = 0; i < SYSTEM_LOGIN_USERS; i++) {
-        if (ids[i] >= 0 && ids[i] != foreground) {
+        if (ids[i] < 0 || ids[i] == foreground) continue;
+        int taken = 0;
+        for (int p = 0; p < PMCP_PADS; p++) taken |= d->pads[p].ready && d->pads[p].user_id == ids[i];
+        if (!taken) {
             *user_id = ids[i];
             return 0;
         }
@@ -211,58 +214,80 @@ static int second_user(int32_t *user_id) {
     return ENOENT;
 }
 
-/* "connect" adds pad 2 for the second user, "connect <user id>" for that user (already connected: nothing changes);
-   "disconnect" removes it, and pad 1 becomes the active one. A user who is not signed in gets the console's sign-in
-   picker with that user selected (docs/findings.md). Pad 2 logs its own events: the runner reads pad_added and pad_removed as padd's start and
-   exit. */
-static int second_pad(struct daemon *d, const char *arg) {
-    struct pad *pad = &d->pads[1];
-    if (!strncmp(arg, "connect", 7) && (!arg[7] || arg[7] == ' ')) {
-        if (pad->ready) return 0;
-        int32_t user_id = -1, handle = -1;
-        int status;
-        if (arg[7]) {
-            char *end;
-            long value = strtol(arg + 8, &end, 10);
-            if (!arg[8] || *end || value <= 0 || value > INT32_MAX) return EINVAL;
-            user_id = (int32_t)value;
-            status = 0;
-        } else {
-            status = second_user(&user_id);
+static int connect_pad(struct daemon *d, const char *arg) {
+    int32_t user_id = -1, handle = -1;
+    if (*arg) {
+        char *end;
+        long value = strtol(arg, &end, 10);
+        if (*end || value <= 0 || value > INT32_MAX) return EINVAL;
+        user_id = (int32_t)value;
+        for (int p = 0; p < PMCP_PADS; p++) {
+            if (d->pads[p].ready && d->pads[p].user_id == user_id) return 0;  /* already connected */
         }
-        if (!status) status = pad_add(user_id, &handle);
-        if (!status && handle < 0) status = EIO;
-        log_event("second_pad_added", "\"ok\":%s,\"status\":%d,\"user_id\":%d,\"handle\":%d",
-                  status ? "false" : "true", status, user_id, handle);
-        if (status) return status;
-        pad->user_id = user_id;
-        pad->handle = handle;
-        pad->ready = 1;
-        neutral(&pad->state);
-        report(d, pad);
-        return 0;
     }
-    if (strcmp(arg, "disconnect")) return EINVAL;
-    if (!pad->ready) return 0;
-    if (!is_neutral(&pad->state)) {  /* only pad 2: a hold on pad 1 stays */
-        neutral(&pad->state);
-        d->neutral_events++;
-        log_event("neutral", "\"reason\":\"second_pad\",\"pad\":2");
-        report(d, pad);
+    struct pad *pad = NULL;
+    for (int p = 1; p < PMCP_PADS && !pad; p++) {
+        if (!d->pads[p].ready) pad = &d->pads[p];
     }
-    d->active = 0;
-    int status = pad_remove(pad->handle);
-    log_event("second_pad_removed", "\"status\":%d,\"handle\":%d", status, pad->handle);
-    pad->ready = 0;
-    pad->handle = -1;
-    pad->user_id = -1;
+    if (!pad) return ENOSPC;
+    int status = *arg ? 0 : next_user(d, &user_id);
+    if (!status) status = pad_add(user_id, &handle);
+    if (!status && handle < 0) status = EIO;
+    log_event("extra_pad_added", "\"ok\":%s,\"status\":%d,\"pad\":%d,\"user_id\":%d,\"handle\":%d",
+              status ? "false" : "true", status, (int)(pad - d->pads) + 1, user_id, handle);
+    if (status) return status;
+    pad->user_id = user_id;
+    pad->handle = handle;
+    pad->ready = 1;
+    neutral(&pad->state);
+    report(d, pad);
     return 0;
 }
 
-/* "1" or "2": the pad STATE drives from now on. The other one goes neutral. ENOENT: that pad is not connected. */
+static void remove_extra_pad(struct daemon *d, int index) {
+    struct pad *pad = &d->pads[index];
+    if (!is_neutral(&pad->state)) {  /* only this pad: a hold on another one stays */
+        neutral(&pad->state);
+        d->neutral_events++;
+        log_event("neutral", "\"reason\":\"extra_pad\",\"pad\":%d", index + 1);
+        report(d, pad);
+    }
+    if (d->active == index) d->active = 0;
+    int status = pad_remove(pad->handle);
+    log_event("extra_pad_removed", "\"status\":%d,\"pad\":%d,\"handle\":%d", status, index + 1, pad->handle);
+    pad->ready = 0;
+    pad->handle = -1;
+    pad->user_id = -1;
+}
+
+/* Pads 2 to 4, on demand. "connect" adds one for the next signed-in user, "connect <user id>" for that user (already
+   connected: nothing changes), into the lowest free pad; other pads keep their numbers. ENOSPC: all are connected.
+   "disconnect <pad>" removes that pad, "disconnect" the highest one (none connected, or not this one: nothing
+   changes); if it was the active one, pad 1 becomes active. A user who is not signed in gets the console's sign-in
+   picker with that user selected (docs/findings.md). These pads log their own events: the runner reads pad_added and
+   pad_removed to judge a start and an exit. */
+static int pad_command(struct daemon *d, const char *arg) {
+    if (!strcmp(arg, "connect")) return connect_pad(d, "");
+    if (!strncmp(arg, "connect ", 8)) return arg[8] ? connect_pad(d, arg + 8) : EINVAL;
+    if (!strcmp(arg, "disconnect")) {
+        for (int p = PMCP_PADS - 1; p >= 1; p--) {
+            if (d->pads[p].ready) {
+                remove_extra_pad(d, p);
+                break;
+            }
+        }
+        return 0;
+    }
+    if (strncmp(arg, "disconnect ", 11) || arg[12] || arg[11] < '2' || arg[11] >= '1' + PMCP_PADS) return EINVAL;
+    int index = arg[11] - '1';
+    if (d->pads[index].ready) remove_extra_pad(d, index);
+    return 0;
+}
+
+/* "1" to "4": the pad STATE drives from now on. The others go neutral. ENOENT: that pad is not connected. */
 static int select_pad(struct daemon *d, const char *arg) {
-    int index = !strcmp(arg, "1") ? 0 : !strcmp(arg, "2") ? 1 : -1;
-    if (index < 0) return EINVAL;
+    if (arg[0] < '1' || arg[0] >= '1' + PMCP_PADS || arg[1]) return EINVAL;
+    int index = arg[0] - '1';
     if (!d->pads[index].ready) return ENOENT;
     if (index != d->active) force_neutral(d, "select_pad");
     d->active = index;
@@ -373,9 +398,9 @@ static void handle_message(struct daemon *d, uint8_t type, const uint8_t *payloa
             if (system_foreground_user(&user_id)) user_id = d->pads[0].user_id;
             log_event("command", "\"op\":\"launch\",\"title_id\":\"%s\",\"user_id\":%d", command.arg, user_id);
             status = system_launch(command.arg, user_id);
-        } else if (command.op == PMCP_CMD_SECOND_PAD) {
-            log_event("command", "\"op\":\"second_pad\",\"arg\":\"%s\"", command.arg);
-            status = second_pad(d, command.arg);
+        } else if (command.op == PMCP_CMD_PAD) {
+            log_event("command", "\"op\":\"pad\",\"arg\":\"%s\"", command.arg);
+            status = pad_command(d, command.arg);
         } else if (command.op == PMCP_CMD_SELECT_PAD) {
             log_event("command", "\"op\":\"select_pad\",\"arg\":\"%s\"", command.arg);
             status = select_pad(d, command.arg);
@@ -562,7 +587,9 @@ int main(int argc, char **argv) {
     force_neutral(&d, "exit");
     if (d.client_fd >= 0) close(d.client_fd);
     close(d.listen_fd);
-    if (d.pads[1].ready) second_pad(&d, "disconnect");
+    for (int p = 1; p < PMCP_PADS; p++) {
+        if (d.pads[p].ready) remove_extra_pad(&d, p);
+    }
     int remove_status = first->ready ? pad_remove(first->handle) : 0;
     log_event("pad_removed", "\"status\":%d", remove_status);
     log_event("stats", "\"reports_sent\":%llu,\"report_failures\":%u,\"neutral_events\":%u",

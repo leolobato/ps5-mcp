@@ -13,7 +13,7 @@ Assigning the virtual pad turns the physical DualSense off. Press its PS button 
 select the same user again to use both controllers together. Dismissing the assignment
 dialog leaves the virtual pad unusable.
 
-### Two virtual controllers (padd 1.7, not yet verified on the console)
+### Several virtual controllers
 
 padd 1.5 gave its one pad to another user (COMMAND op 5): it added a pad for the new user, then removed the old one.
 padd 1.7 keeps both instead: pad 1 for the foreground user and, on request, pad 2 for the first signed-in user that
@@ -21,6 +21,10 @@ is not the foreground one (`sceUserServiceGetLoginUserIdList`, weak import, four
 drives one of them; the other stays neutral but is fed every tick. The aim is local multiplayer tests without a
 DualSense: prospero-win opens `scePadOpen(user)` for each signed-in user that is not the foreground one, in the order
 of that list, once the game asks for controller 1 or later.
+
+padd 1.9 raises this to four: pads 2 to 4 are for the next signed-in users with no controller, in the same order. Numbers
+stay fixed while padd runs. Not verified on the console: more than two pads at once (the target console has only two signed-in
+users so far), whether `/dev/hid` accepts four, and where the dialog's focus starts for pads 3 and 4.
 
 What is known: `/dev/hid` AddDevice takes a user id that is not the foreground user's, and the console then shows
 its user picker with that user selected (the padd variant for User1 in [Online follow-up](#online-follow-up-remote-play-on-1360-2026-10-15) below).

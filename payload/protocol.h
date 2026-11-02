@@ -77,15 +77,15 @@ struct pmcp_users {             /* 248 bytes */
     struct pmcp_login_user users[PMCP_LOGIN_USERS]; /* the signed-in users, in the console's order */
 };
 
-#define PMCP_PADS 2
+#define PMCP_PADS 4
 
-struct pmcp_pads {              /* 20 bytes */
-    uint8_t active;             /* 1 or 2: the pad STATE drives */
+struct pmcp_pads {              /* 36 bytes (20 before padd 1.9, with two pads) */
+    uint8_t active;             /* 1 to 4: the pad STATE drives */
     uint8_t reserved[3];
     struct {
         int32_t handle;         /* -1: not connected */
         int32_t user_id;
-    } pads[PMCP_PADS];          /* pad 1: the foreground user's at start; pad 2: the second user's, on demand */
+    } pads[PMCP_PADS];          /* pad 1: the foreground user's at start; the others: other users', on demand */
 };
 
 struct pmcp_pong {              /* 40 bytes */
@@ -118,7 +118,7 @@ struct pmcp_command {           /* 4 + 4 + 32 bytes */
 #define PMCP_FLAG_UNINSTALL       0x8   /* COMMAND op UNINSTALL supported (padd 1.3+) */
 #define PMCP_FLAG_PAD_USER        0x10  /* COMMAND op PAD_USER supported (padd 1.5 only) */
 #define PMCP_FLAG_USERS           0x20  /* GET_USERS supported (padd 1.7+) */
-#define PMCP_FLAG_PADS            0x40  /* two pads: GET_PADS, COMMAND ops SECOND_PAD and SELECT_PAD (padd 1.7+) */
+#define PMCP_FLAG_PADS            0x40  /* several pads: GET_PADS, COMMAND ops PAD and SELECT_PAD (padd 1.7+) */
 
 enum pmcp_command_op {
     PMCP_CMD_HOME = 1,          /* return to the home screen; arg = method ("" = default) */
@@ -126,9 +126,8 @@ enum pmcp_command_op {
     PMCP_CMD_CLOSE = 3,         /* close the running game or app */
     PMCP_CMD_UNINSTALL = 4,     /* uninstall arg (title id, 4 letters + 5 digits); the removal finishes later */
     PMCP_CMD_PAD_USER = 5,      /* padd 1.5 only: give its one pad to "foreground", "second" or a user id */
-    PMCP_CMD_SECOND_PAD = 6,    /* arg "connect": add pad 2 for the second signed-in user, "connect <user id>" for
-                                   that user; "disconnect": remove it */
-    PMCP_CMD_SELECT_PAD = 7,    /* arg "1" or "2": the pad STATE drives; the other one goes neutral */
+    PMCP_CMD_PAD = 6,           /* arg "connect" or "connect <user id>": add a pad; "disconnect" or "disconnect <pad>": remove one */
+    PMCP_CMD_SELECT_PAD = 7,    /* arg "1" to "4": the pad STATE drives; the others go neutral */
 };
 
 enum pmcp_error {
@@ -145,7 +144,7 @@ _Static_assert(sizeof(struct pmcp_hello) == 20, "hello is 20 bytes");
 _Static_assert(sizeof(struct pmcp_user) == 72, "user is 72 bytes");
 _Static_assert(sizeof(struct pmcp_users) == 248, "users is 248 bytes");
 _Static_assert(sizeof(struct pmcp_users) <= PMCP_MAX_PAYLOAD, "users fits one message");
-_Static_assert(sizeof(struct pmcp_pads) == 20, "pads is 20 bytes");
+_Static_assert(sizeof(struct pmcp_pads) == 36, "pads is 36 bytes");
 _Static_assert(sizeof(struct pmcp_pong) == 40, "pong is 40 bytes");
 _Static_assert(sizeof(struct pmcp_ack) == 8, "ack is 8 bytes");
 _Static_assert(sizeof(struct pmcp_command) == 40, "command is 40 bytes");

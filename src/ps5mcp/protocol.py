@@ -33,8 +33,8 @@ class Command(IntEnum):
     CLOSE = 3
     UNINSTALL = 4  # padd 1.3+ (FLAG_UNINSTALL)
     PAD_USER = 5  # padd 1.5 only (FLAG_PAD_USER): its one pad to "foreground", "second" or a user id
-    SECOND_PAD = 6  # padd 1.7+ (FLAG_PADS): arg "connect" or "disconnect"
-    SELECT_PAD = 7  # padd 1.7+ (FLAG_PADS): arg "1" or "2", the pad STATE drives
+    PAD = 6  # padd 1.7+ (FLAG_PADS): arg "connect [user id]" or "disconnect [controller]" (the controller from 1.9)
+    SELECT_PAD = 7  # padd 1.7+ (FLAG_PADS): arg "1" to "4", the pad STATE drives
 
 
 HOME_METHODS = ("system", "shellcore", "suspend")
@@ -57,22 +57,25 @@ FLAG_PAD_USER = 0x10  # padd 1.5 only
 FLAG_USERS = 0x20
 FLAG_PADS = 0x40
 
-# Two controllers (padd 1.7): controller 1 is the foreground user's; controller 2 is the second signed-in user's (the
-# first one that is not the foreground user, a prospero-win game's controller 1). Input drives the selected one.
-SECOND_PAD_ERRORS = {
-    2: "no other user is signed in: sign one in (or a guest) on the console first",
+# Several controllers (padd 1.7, up to four from 1.9): controller 1 is the foreground user's; the others are other
+# signed-in users' (in the console's order, as a prospero-win game's next controllers). Input drives the selected one.
+MAX_CONTROLLERS = 4
+PAD_ERRORS = {
+    2: "no other signed-in user without a controller: sign one in (or a guest) on the console first",
     22: "not connect or disconnect",
+    28: "every controller is already connected",
     78: "this console's padd cannot list the signed-in users",
 }
-SELECT_PAD_ERRORS = {2: "controller 2 is not connected", 22: "not 1 or 2"}
+SELECT_PAD_ERRORS = {2: "that controller is not connected", 22: "not a controller number"}
 
 
 def pads_text(op: str, status: int) -> str:
-    """Text for a second_pad or select_pad status."""
+    """Text for a pad or select_pad status."""
     if status == 0:
         return "ok"
-    errors = SECOND_PAD_ERRORS if op == "second_pad" else SELECT_PAD_ERRORS
+    errors = PAD_ERRORS if op == "pad" else SELECT_PAD_ERRORS
     return errors.get(status, f"refused, status {status & 0xFFFFFFFF:#010x}")
+
 
 # Uninstall ACK statuses besides 0 and SCE errors. ShadowMountPlus titles have their source deleted first.
 UNINSTALL_RETRY = {16, 36}  # EBUSY (SMP busy or a game running), EINPROGRESS (source still being deleted)
@@ -109,7 +112,6 @@ _USER = struct.Struct("<ii64s")
 LOGIN_USERS = 4
 _LOGIN_USER = struct.Struct("<i56s")  # GET_USERS: i32 status, i32 foreground, then LOGIN_USERS of these (248 B)
 _COMMAND = struct.Struct("<II32s")
-_PADS = struct.Struct("<B3xiiii")
 assert _STATE.size == 28 and _HELLO.size == 20 and _PONG.size == 40 and _ACK.size == 8 and _COMMAND.size == 40
 
 
@@ -263,8 +265,8 @@ class Pads:
 
 
 def decode_pads(payload: bytes) -> Pads:
-    active, h1, u1, h2, u2 = _PADS.unpack(payload)
-    return Pads(active, (h1, h2), (u1, u2))
+    pairs = list(struct.iter_unpack("<ii", payload[4:]))  # 2 before padd 1.9, then 4
+    return Pads(payload[0], tuple(h for h, _ in pairs), tuple(u for _, u in pairs))
 
 
 def decode_pong(payload: bytes) -> Pong:

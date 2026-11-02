@@ -122,7 +122,7 @@ def buttons(padd) -> list[int]:
 def test_status_reports_api_link_and_frames(app):
     status = app.client().status()
     assert status["api"] == 1 and status["frames"] > 0 and 0 <= status["frame_age"] < 1
-    assert status["pad"]["connected"] and status["pad"]["version"] == "1.8"
+    assert status["pad"]["connected"] and status["pad"]["version"] == "1.9"
     assert status["pad"]["hello"]["pad_handle"] == 1000 and status["source"].startswith("file:")
     assert status["pad"]["hello"]["user_name"] == "Test Player"
     assert status["title"] == "PS5 MCP · pad connected"
@@ -731,20 +731,21 @@ def test_second_controller_answers_its_dialog_and_comes_back_after_padd_restarts
     restarted = None
     try:
         client = hub.client()
-        assert client.status()["controllers"] == {"active": 1, "second": False, "supported": True, "list": [
-            {"controller": 1, "handle": 1000, "user_id": 0x11ECF8B9, "user_name": "leolobato-jb"}], "signed_out": []}
+        assert client.status()["controllers"] == {"active": 1, "second": False, "supported": True, "max": 4, "list": [
+            {"controller": 1, "handle": 1000, "user_id": 0x11ECF8B9, "user_name": "leolobato-jb"}],
+            "available": [{"user_id": GUEST, "name": "User1"}], "signed_out": []}
         # Controller 1's dialog; connect once that Cross is released.
         assert wait_for(lambda: CROSS in buttons(daemon) and buttons(daemon)[-1] == 0, 4)
         assert client.command("second_pad", "connect") == 0
         status = client.status()
         assert status["controllers"]["active"] == 2 and status["controllers"]["second"]
         assert status["pad"]["hello"]["user_name"] == "User1" and status["pad"]["hello"]["pad_handle"] == 1001
-        assert json.loads((hub.root / "controllers").read_text()) == {"second": True, "active": 2, "user": GUEST}
+        assert json.loads((hub.root / "controllers").read_text()) == {"users": [GUEST], "active_user": GUEST}
         # Controller 2 answers its own dialog on User1's profile: one Right from the focused first profile, then Cross.
         assert wait_for(lambda: CROSS in pressed(daemon, 1001), 8)
         assert pressed(daemon, 1001)[:2] == [RIGHT, CROSS] and pressed(daemon, 1000) == [CROSS]
-        with pytest.raises(AppError, match="connect <user id> or disconnect"):
-            client.command("second_pad", "toggle")
+        with pytest.raises(AppError, match="connect <user id>, disconnect"):
+            client.command("pad", "toggle")
         # A restarted padd has controller 1 only: the app answers its dialog, then connects controller 2, answers
         # that one, and leaves input on controller 2 as before.
         daemon.stop()
@@ -776,15 +777,15 @@ def test_input_follows_the_selected_controller_and_disconnect_returns_it(tmp_pat
         assert client.command("select_pad", "1") == 0
         client.press(PadState(buttons=L1), 40)
         assert L1 in pressed(daemon, 1000)
-        assert json.loads((hub.root / "controllers").read_text()) == {"second": True, "active": 1, "user": GUEST}
+        assert json.loads((hub.root / "controllers").read_text()) == {"users": [GUEST]}
         assert client.command("select_pad", "2") == 0
-        assert client.command("second_pad", "disconnect") == 0
+        assert client.command("pad", "disconnect") == 0
         status = client.status()
         assert status["controllers"]["active"] == 1 and not status["controllers"]["second"]
         assert status["pad"]["hello"]["pad_handle"] == 1000
         assert client.command("select_pad", "2") == 2  # not connected
-        with pytest.raises(AppError, match="1 or 2"):
-            client.command("select_pad", "3")
+        with pytest.raises(AppError, match="1 to 4"):
+            client.command("select_pad", "5")
     finally:
         hub.stop()
         daemon.stop()
@@ -799,12 +800,12 @@ def test_second_controller_signs_in_a_known_user(tmp_path):
         controllers = client.status()["controllers"]
         assert controllers["signed_out"] == [{"user_id": GUEST, "name": "User1"}]
         with pytest.raises(AppError, match="not a user id"):
-            client.command("second_pad", "connect abc")
-        assert client.command("second_pad", f"connect {GUEST}") == 0
+            client.command("pad", "connect abc")
+        assert client.command("pad", f"connect {GUEST}") == 0
         status = client.status()
         assert daemon.calls("pad_add")[-1]["user_id"] == GUEST and status["controllers"]["active"] == 2
         assert "sign in User1" in status["notice"]
-        assert json.loads((hub.root / "controllers").read_text()) == {"active": 2, "second": True, "user": GUEST}
+        assert json.loads((hub.root / "controllers").read_text()) == {"users": [GUEST], "active_user": GUEST}
         # Known users only grow: the signed-in foreground user is remembered too.
         assert json.loads((hub.root / "known-users").read_text()) == {str(GUEST): "User1", str(0x11ECF8B9): "Test Player"}
     finally:
@@ -834,6 +835,129 @@ def test_status_names_the_foreground_and_second_users(tmp_path):
         users = hub.client().status()["login_users"]
         assert users["foreground"] == 0x11ECF8B9 and users["second"] == GUEST
         assert users["users"] == [{"user_id": 0x11ECF8B9, "name": "Test Player"}, {"user_id": GUEST, "name": "User1"}]
+    finally:
+        hub.stop()
+        daemon.stop()
+
+
+def test_four_controllers_come_back_with_the_same_users_after_padd_restarts(tmp_path):
+    other, third = GUEST + 1, GUEST + 2
+    env = {"PADD_LOGIN_USERS": f"{0x11ECF8B9},{GUEST},{other},{third}"}
+    daemon = Padd(tmp_path, env=env)
+    hub = App(daemon, None, "--no-auto-assign")
+    restarted = None
+    try:
+        client = hub.client("agent")
+        assert wait_for(lambda: client.status()["controllers"]["supported"])  # known only after the first answer
+        assert [u["user_id"] for u in client.status()["controllers"]["available"]] == [GUEST, other, third]
+        for number in (2, 3, 4):
+            assert client.command("pad", "connect") == 0
+            assert client.status()["controllers"]["active"] == number  # a new controller takes the input
+        controllers = client.status()["controllers"]
+        assert controllers["max"] == 4 and controllers["available"] == []
+        assert [c["controller"] for c in controllers["list"]] == [1, 2, 3, 4]
+        assert client.command("pad", "connect") == 28
+        client.press(PadState(buttons=L1), 40)
+        assert L1 in pressed(daemon, 1003) and L1 not in pressed(daemon, 1000)
+
+        # Removing a middle controller keeps the numbers of the others and the selection.
+        assert client.command("pad", "disconnect 3") == 0
+        controllers = client.status()["controllers"]
+        assert controllers["active"] == 4 and [c["controller"] for c in controllers["list"]] == [1, 2, 4]
+        assert [u["user_id"] for u in controllers["available"]] == [other]
+        assert json.loads((hub.root / "controllers").read_text()) == {"users": [GUEST, third], "active_user": third}
+
+        # A restarted padd has controller 1: the same users come back, in order, and input stays with its user.
+        daemon.stop()
+        assert wait_for(lambda: not client.status()["pad"]["connected"])
+        restarted, trace = restart_padd(daemon, tmp_path, env, "four")
+        assert wait_for(lambda: [c["user_id"] for c in client.status()["controllers"].get("list", [])]
+                        == [0x11ECF8B9, GUEST, third], 12)
+        assert wait_for(lambda: client.status()["controllers"]["active"] == 3, 5)  # third's new number
+        assert [c["user_id"] for c in calls_in(trace) if c["call"] == "pad_add"] == [0x11ECF8B9, GUEST, third]
+        assert json.loads((hub.root / "controllers").read_text()) == {"users": [GUEST, third], "active_user": third}
+    finally:
+        if restarted:
+            restarted.send_signal(signal.SIGTERM)
+            restarted.wait(5)
+        hub.stop()
+        daemon.stop()
+
+
+def test_second_pad_keeps_its_old_meaning_for_older_mcp_servers(tmp_path):
+    other = GUEST + 1
+    daemon = Padd(tmp_path, env={"PADD_LOGIN_USERS": f"{0x11ECF8B9},{GUEST},{other}"})
+    hub = App(daemon, None, "--no-auto-assign")
+    try:
+        client = hub.client()
+        assert wait_for(lambda: client.status()["controllers"]["supported"])
+        assert client.command("second_pad", "connect") == 0
+        assert client.command("select_pad", "1") == 0
+        assert client.command("second_pad", "connect") == 0  # selects controller 2, and adds nothing
+        controllers = client.status()["controllers"]
+        assert controllers["active"] == 2 and [c["controller"] for c in controllers["list"]] == [1, 2]
+        assert client.command("pad", "connect") == 0  # someone else adds controller 3
+        assert client.command("second_pad", "disconnect") == 0  # controller 2, not the highest
+        assert [c["controller"] for c in client.status()["controllers"]["list"]] == [1, 3]
+    finally:
+        hub.stop()
+        daemon.stop()
+
+
+def test_a_signed_out_user_does_not_stop_the_others_coming_back(tmp_path):
+    gone, here, there = GUEST + 9, GUEST, GUEST + 1
+    daemon = Padd(tmp_path, env={"PADD_LOGIN_USERS": f"{0x11ECF8B9},{here},{there}"})
+    saved = json.dumps({"users": [gone, here, there]})
+    hub = App(daemon, None, "--no-auto-assign", files={"controllers": saved})
+    try:
+        client = hub.client()
+        assert wait_for(lambda: [c["user_id"] for c in client.status()["controllers"].get("list", [])]
+                        == [0x11ECF8B9, here, there], 8)
+        assert wait_for(lambda: "Controllers:" in (client.status()["notice"] or ""), 3)  # gone has no stand-in
+        assert client.status()["controllers"]["active"] == 1
+        assert json.loads((hub.root / "controllers").read_text())["users"] == [gone, here, there]
+    finally:
+        hub.stop()
+        daemon.stop()
+
+
+def test_controller_1_selection_is_restored_when_nothing_is_missing(tmp_path):
+    daemon = Padd(tmp_path, env={"PADD_LOGIN_USERS": f"{0x11ECF8B9},{GUEST}"})
+    link = daemon.connect()  # padd keeps running with controller 2 selected, as after another client
+    assert link.command(p.Command.PAD, "connect") == 0 and link.command(p.Command.SELECT_PAD, "2") == 0
+    link.close()
+    hub = App(daemon, None, "--no-auto-assign", files={"controllers": json.dumps({"users": [GUEST]})})
+    try:
+        client = hub.client()
+        assert wait_for(lambda: client.status()["controllers"].get("active") == 1, 8)
+    finally:
+        hub.stop()
+        daemon.stop()
+
+
+def test_controllers_saved_before_four_are_restored(tmp_path):
+    daemon = Padd(tmp_path, env={"PADD_LOGIN_USERS": f"{0x11ECF8B9},{GUEST}"})
+    saved = json.dumps({"second": True, "active": 2, "user": GUEST})
+    hub = App(daemon, None, "--no-auto-assign", files={"controllers": saved})
+    try:
+        client = hub.client()
+        assert wait_for(lambda: client.status()["controllers"].get("active") == 2, 8)
+        assert [c["user_id"] for c in client.status()["controllers"]["list"]] == [0x11ECF8B9, GUEST]
+    finally:
+        hub.stop()
+        daemon.stop()
+
+
+def test_saved_controllers_are_kept_when_their_user_cannot_come_back(tmp_path):
+    # Nobody else is signed in and the saved user is not either: nothing can come back, so the choice is kept.
+    daemon = Padd(tmp_path)
+    saved = json.dumps({"users": [GUEST], "active_user": GUEST})
+    hub = App(daemon, None, "--no-auto-assign", files={"controllers": saved})
+    try:
+        client = hub.client()
+        assert wait_for(lambda: "Controllers:" in (client.status()["notice"] or ""), 8)
+        assert client.status()["controllers"]["active"] == 1
+        assert json.loads((hub.root / "controllers").read_text()) == {"users": [GUEST], "active_user": GUEST}
     finally:
         hub.stop()
         daemon.stop()

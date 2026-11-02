@@ -7,7 +7,7 @@
 // Side effect: the PS5 then turns the user's DualSense off. Pressing PS on
 // the DualSense and picking the same user brings it back, and both controllers work.
 //
-// Controller 2 (the second signed-in user's) gets the same dialog, focused on the first profile, which is the
+// Controllers 2 and up (other signed-in users') get the same dialog, focused on the first profile, which is the
 // foreground user's: Cross there takes the DualSense's user. So the app reads the profile names (Vision), moves Right
 // to the pad's user and presses Cross there; a name it cannot find gets no press.
 //
