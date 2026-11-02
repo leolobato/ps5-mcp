@@ -58,7 +58,7 @@ let buttonBits: [(name: String, bit: UInt32)] = [
     ("up", 0x10), ("right", 0x20), ("down", 0x40), ("left", 0x80),
     ("l2", 0x100), ("r2", 0x200), ("l1", 0x400), ("r1", 0x800),
     ("triangle", 0x1000), ("circle", 0x2000), ("cross", 0x4000), ("square", 0x8000),
-    ("touchpad", 0x100000),
+    ("ps", 0x10000), ("touchpad", 0x100000),
 ]
 
 func button(_ name: String) -> UInt32 { buttonBits.first { $0.name == name }!.bit }

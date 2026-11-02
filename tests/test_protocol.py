@@ -38,7 +38,7 @@ def test_reader_rejects_bad_magic_and_version():
 def test_button_names_and_sticks():
     assert p.button_mask(["Cross", "dpad_right"]) == 0x4020
     with pytest.raises(ValueError, match="unknown button"):
-        p.button_mask(["ps"])
+        p.button_mask(["xbox"])
     assert p.stick_byte(-1) == 0 and p.stick_byte(0) == 0x80 and p.stick_byte(1) == 255
 
 

@@ -378,6 +378,8 @@ def stop(host: str, timeout: float = 10) -> int:
         run: Path | None = current_run()
     except SystemExit:
         run = None
+    if run and not (run / "run.json").exists():  # the run belongs to another checkout: no record here
+        run = None
     evidence = _load(run) if run else {}
     handle = None
     try:

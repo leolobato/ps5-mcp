@@ -101,8 +101,8 @@ mcp = MCPServer(
     instructions=(
         "Controls a PS5 through a virtual DualSense and sees it through an HDMI capture card. "
         "Call snapshot() to look before acting. Buttons: " + ", ".join(p.BUTTONS) + ". "
-        "Cross confirms, circle goes back. The pad cannot send the PS button: use home() to go home, or, when "
-        "Remote Play is the video source, ps_button() (control center) and type_text() for text fields. "
+        "Cross confirms, circle goes back. ps_button() opens the control center, and a one-second hold goes home; "
+        "home() suspends the running game. When Remote Play is the video source, type_text() fills text fields. "
         "If a tool says a human has control, wait and retry. "
         "The console is shared with other agents: call claim_console(reason) before a task so nobody interrupts "
         "you, and release_console() when done. If a tool says the PS5 is in use, call claim_console(reason, "
@@ -374,7 +374,7 @@ async def _command(op: str, arg: str = "") -> int:
 @mcp.tool(structured_output=False)
 @_errors
 async def home(method: str = HOME_METHOD, snapshot_after_ms: int | None = 1500):
-    """Go to the PS5 home screen (stands in for the PS button, which the pad cannot send; see ps_button()).
+    """Go to the PS5 home screen by suspending the running game, without pressing anything (see also ps_button()).
 
     method: "suspend" (suspend the running game, as the PS button does), "system" or "shellcore".
     From system screens such as Settings, press circle instead.
@@ -388,15 +388,14 @@ async def home(method: str = HOME_METHOD, snapshot_after_ms: int | None = 1500):
 @mcp.tool(structured_output=False)
 @_errors
 async def ps_button(hold_ms: int = 100, snapshot_after_ms: int | None = 1000):
-    """Press the PS button through Remote Play's controller (only while Remote Play is the video source).
+    """Press the PS button on the selected controller; a tap opens the control center and a second tap closes it.
 
-    A tap opens the control center; holding about a second goes to the home screen. hold_ms: 1..2000. The control
-    center includes Power: never choose Restart or Turn Off unless the user asked for it.
+    Holding about a second goes to the home screen. hold_ms: 1..2000. The control center includes Power: never choose
+    Restart or Turn Off unless the user asked for it.
     """
     if not 0 < hold_ms <= 2000:
         raise ValueError("hold_ms must be 1..2000")
-    app = await _app()
-    await asyncio.to_thread(app.ps_button, hold_ms)
+    await _apply_for(PadState(buttons=p.button_mask(["ps"])), hold_ms)
     return await _result(f"pressed PS for {hold_ms} ms", snapshot_after_ms)
 
 

@@ -113,7 +113,7 @@ final class Sidebar: NSStackView {
         close.toolTip = "Close the game or app that is running now"
         full(row([button("home", "Home", "house", #selector(AppDelegate.home), target), close]))
         let ps = button("psButton", "PS", "playstation.logo", #selector(AppDelegate.psButton), target)
-        ps.toolTip = "Press the PS button through Remote Play: the control center (P). ⌥-click holds it, which goes home."
+        ps.toolTip = "Press the PS button: the control center (P). ⌥-click holds it, which goes home."
         ps.setAccessibilityLabel("PS button")
         let type = button("typeText", "Type…", "keyboard", #selector(AppDelegate.typeText), target)
         type.toolTip = "Type into the PS5 text field whose keyboard is open (Remote Play)"
@@ -205,7 +205,7 @@ final class Sidebar: NSStackView {
             ("Tab", "Options"),
             ("T", "Touchpad"),
             ("H", "Home screen"),
-            ("P", "PS button (Remote Play)"),
+            ("P", "PS button"),
         ] {
             let keyLabel = NSTextField(labelWithString: key)
             keyLabel.font = .monospacedSystemFont(ofSize: 11, weight: .medium)
@@ -809,7 +809,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         for id in ["home", "closeApp", "releaseAll"] { sidebar.buttons[id]?.isEnabled = link.connected }
         let remote = (hub.source as? RemotePlaySource)?.status
         let live = remote.map { $0.phase == .streaming && $0.videoReady } ?? false
-        sidebar.buttons["psButton"]?.isEnabled = live
+        sidebar.buttons["psButton"]?.isEnabled = link.connected
         sidebar.buttons["typeText"]?.isEnabled = live && remote?.keyboardOpen == true && typeSheet == nil
         sidebar.buttons["launch"]?.isEnabled = link.connected && selectedTitle != nil
         sidebar.buttons["reloadTitles"]?.isEnabled = !titlesLoading && busy == nil && installing == nil
@@ -946,13 +946,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
     }
 
     private var typeSheet: NSAlert?
+    private var psClicks = 0
 
     @objc func psButton() {
-        let hold = NSEvent.modifierFlags.contains(.option) ? 1000 : 100
-        let epoch = hub.controller.inputEpoch
-        background {
-            do { try self.hub.pressPSButton(holdMS: hold, epoch: epoch, human: true) }
-            catch { throw BadInput("PS button: \(remotePlayInputMessage(error))") }
+        // The same key as P, so losing focus releases it too; only the latest click ends the press.
+        let hold = NSEvent.modifierFlags.contains(.option) ? 1.0 : 0.1
+        psClicks &+= 1
+        let click = psClicks
+        keys.handle("p", down: true)
+        DispatchQueue.main.asyncAfter(deadline: .now() + hold) { [weak self] in
+            guard let self, self.psClicks == click else { return }
+            self.keys.handle("p", down: false)
         }
     }
 

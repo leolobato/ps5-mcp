@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
 from ps5mcp import capture
 from ps5mcp import protocol as p
@@ -697,12 +697,18 @@ def test_remoteplay_input_is_blocked_without_live_video(app):
     assert status["keyboard"] == {"enabled": False, "open": False}
 
 
-def test_p_key_is_the_remote_play_ps_button(app):
+def test_p_key_presses_the_ps_button_through_padd(app, padd):
     client = app.client()
     client.key("p", True)
+    assert wait_for(lambda: p.BUTTONS["ps"] in buttons(padd), 3)
     client.key("p", False)
-    assert wait_for(lambda: "PS button" in (client.status()["notice"] or ""), 3)
-    assert "Remote Play" in client.status()["notice"]
+    assert wait_for(lambda: buttons(padd)[-1] == 0, 3)
+
+
+def test_ps_is_an_ordinary_button_for_agents(app, padd):
+    client = app.client("agent")
+    client.press(PadState(buttons=p.BUTTONS["ps"]), 40)
+    assert 0x10000 in buttons(padd)
 
 
 GUEST = 0x22334455
@@ -723,12 +729,90 @@ def calls_in(trace) -> list[dict]:
     return [json.loads(line) for line in trace.read_text().splitlines()] if trace.exists() else []
 
 
+class DialogSim:
+    """The console's "Who's using this controller?" as frames: the focused profile stays centered and the row scrolls
+    with the pad's Left and Right, as seen on the console. Cross closes it, showing the home screen."""
+
+    SPACING = 352
+    FONT = "/System/Library/Fonts/Helvetica.ttc"
+
+    def __init__(self, hub, calls, handle: int, names: list[str], focus: int):
+        self.hub, self.calls, self.handle, self.names, self.focus = hub, calls, handle, names, focus
+        self.buttons: list[int] = []
+        self.stopped = threading.Event()
+        self.draw()
+        self.thread = threading.Thread(target=self.run, daemon=True)
+        self.thread.start()
+
+    def draw(self) -> None:
+        image = Image.open(USERS).convert("RGB").resize((1920, 1080))
+        panel = Image.new("RGB", (1440, 90), image.getpixel((300, 640)))
+        pen = ImageDraw.Draw(panel)
+        font = ImageFont.truetype(self.FONT, 40)
+        for index, name in enumerate(self.names):
+            pen.text((720 + (index - self.focus) * self.SPACING, 45), name, fill="white", font=font, anchor="mm")
+        image.paste(panel, (240, 630))
+        put_frame(self.hub.frame, image)
+
+    def run(self) -> None:
+        seen, previous = 0, 0
+        while not self.stopped.wait(0.03):
+            reports = [c["buttons"] for c in self.calls() if c["call"] == "pad_report" and c["handle"] == self.handle]
+            for value in reports[seen:]:
+                if value and value != previous:
+                    self.buttons.append(value)
+                    if value == CROSS:
+                        put_frame(self.hub.frame, HOME)
+                        return
+                    self.focus += {RIGHT: 1, p.BUTTONS["left"]: -1}.get(value, 0)
+                    self.focus = max(0, min(self.focus, len(self.names) - 1))
+                    self.draw()
+                previous = value
+            seen = len(reports)
+
+    def stop(self) -> None:
+        self.stopped.set()
+        self.thread.join(2)
+
+
+LEFT = p.BUTTONS["left"]
+
+
+@pytest.mark.skipif(not USERS.exists() or not HOME.exists() or not Path(DialogSim.FONT).exists(), reason="fixtures")
+@pytest.mark.parametrize("names,focus,target,expected", [
+    (["Add User", "leolobato-jb", "Other"], 1, "Other", [RIGHT, CROSS]),
+    (["Add User", "Guest2", "Guest1", "leolobato-jb", "Other"], 1, "Other", [RIGHT, RIGHT, RIGHT, CROSS]),  # off-screen
+    (["Add User", "Guest2", "Guest1", "leolobato-jb", "Other"], 3, "Guest2", [LEFT, LEFT, CROSS]),
+    (["Add User", "leolobato-jb", "Otner"], 1, "Other", [RIGHT]),  # not a look-alike: another person, no Cross
+])
+def test_controller_is_steered_until_its_name_is_focused(tmp_path, names, focus, target, expected):
+    daemon = Padd(tmp_path, env={"PADD_LOGIN_USERS": f"{0x11ECF8B9},{GUEST}", "PADD_GUEST_NAME": target})
+    hub = App(daemon, USERS)
+    sim = None
+    try:
+        client = hub.client()
+        assert wait_for(lambda: CROSS in buttons(daemon) and buttons(daemon)[-1] == 0, 4)
+        sim = DialogSim(hub, lambda: daemon.calls("pad_report"), 1001, names, focus)
+        assert client.command("pad", "connect") == 0
+        if expected[-1] == CROSS:
+            assert wait_for(lambda: CROSS in sim.buttons, 12), sim.buttons
+            assert sim.buttons == expected
+        else:
+            assert wait_for(lambda: f"pick {target}" in (client.status()["notice"] or ""), 12)
+            assert CROSS not in sim.buttons
+    finally:
+        if sim:
+            sim.stop()
+        hub.stop()
+        daemon.stop()
+
+
 @pytest.mark.skipif(not USERS.exists(), reason="test fixtures not present")
 def test_second_controller_answers_its_dialog_and_comes_back_after_padd_restarts(tmp_path):
     env = {"PADD_LOGIN_USERS": f"{0x11ECF8B9},{GUEST}", "PADD_USER_NAME": "leolobato-jb", "PADD_GUEST_NAME": "User1"}
     daemon = Padd(tmp_path, env=env)
     hub = App(daemon, USERS)
-    restarted = None
+    restarted = sim = None
     try:
         client = hub.client()
         assert client.status()["controllers"] == {"active": 1, "second": False, "supported": True, "max": 4, "list": [
@@ -736,6 +820,7 @@ def test_second_controller_answers_its_dialog_and_comes_back_after_padd_restarts
             "available": [{"user_id": GUEST, "name": "User1"}], "signed_out": []}
         # Controller 1's dialog; connect once that Cross is released.
         assert wait_for(lambda: CROSS in buttons(daemon) and buttons(daemon)[-1] == 0, 4)
+        sim = DialogSim(hub, lambda: daemon.calls("pad_report"), 1001, ["Add User", "leolobato-jb", "User1"], 1)
         assert client.command("second_pad", "connect") == 0
         status = client.status()
         assert status["controllers"]["active"] == 2 and status["controllers"]["second"]
@@ -744,13 +829,16 @@ def test_second_controller_answers_its_dialog_and_comes_back_after_padd_restarts
         # Controller 2 answers its own dialog on User1's profile: one Right from the focused first profile, then Cross.
         assert wait_for(lambda: CROSS in pressed(daemon, 1001), 8)
         assert pressed(daemon, 1001)[:2] == [RIGHT, CROSS] and pressed(daemon, 1000) == [CROSS]
+        sim.stop()
         with pytest.raises(AppError, match="connect <user id>, disconnect"):
             client.command("pad", "toggle")
         # A restarted padd has controller 1 only: the app answers its dialog, then connects controller 2, answers
         # that one, and leaves input on controller 2 as before.
         daemon.stop()
         assert wait_for(lambda: not client.status()["pad"]["connected"])
+        put_frame(hub.frame, USERS)
         restarted, trace = restart_padd(daemon, tmp_path, env, "second")
+        sim = DialogSim(hub, lambda: calls_in(trace), 1001, ["Add User", "leolobato-jb", "User1"], 1)
         assert wait_for(lambda: client.status()["controllers"].get("second") and
                         client.status()["controllers"]["active"] == 2, 12)
         assert wait_for(lambda: CROSS in [c["buttons"] for c in calls_in(trace)
@@ -759,6 +847,8 @@ def test_second_controller_answers_its_dialog_and_comes_back_after_padd_restarts
         assert [c["user_id"] for c in calls_in(trace) if c["call"] == "pad_add"] == [0x11ECF8B9, GUEST]
         assert reports_after[0]["handle"] == 1000 and reports_after[0]["buttons"] == CROSS
     finally:
+        if sim:
+            sim.stop()
         if restarted:
             restarted.send_signal(signal.SIGTERM)
             restarted.wait(5)
@@ -823,6 +913,83 @@ def test_second_controller_never_presses_when_its_user_is_not_on_screen(tmp_path
         assert client.command("second_pad", "connect") == 0
         assert wait_for(lambda: "pick Somebody" in (client.status()["notice"] or ""), 8)
         assert not pressed(daemon, 1001)
+    finally:
+        hub.stop()
+        daemon.stop()
+
+
+@pytest.mark.skipif(not USERS.exists(), reason="test fixtures not present")
+def test_controller_1_is_steered_to_its_own_profile(tmp_path):
+    # The first profile is leolobato-jb; controller 1 is User1's, the second one.
+    daemon = Padd(tmp_path, env={"PADD_USER_NAME": "User1"})
+    hub = App(daemon, HOME)  # the dialog appears only once the row is ready
+    sim = DialogSim(hub, lambda: daemon.calls("pad_report"), 1000, ["Add User", "leolobato-jb", "User1"], 1)
+    try:
+        hub.client().command("close")  # any later reconnect would do; the watch runs for 6 s after the connect
+        assert wait_for(lambda: CROSS in sim.buttons, 8), sim.buttons
+        assert sim.buttons == [RIGHT, CROSS]
+    finally:
+        sim.stop()
+        hub.stop()
+        daemon.stop()
+
+
+@pytest.mark.skipif(not USERS.exists(), reason="test fixtures not present")
+def test_controller_1_answers_the_focused_profile_when_its_name_is_not_read(tmp_path):
+    daemon = Padd(tmp_path, env={"PADD_USER_NAME": "Somebody"})
+    hub = App(daemon, USERS)
+    try:
+        assert wait_for(lambda: CROSS in buttons(daemon), 6)
+        assert pressed(daemon, 1000)[0] == CROSS
+    finally:
+        hub.stop()
+        daemon.stop()
+
+
+@pytest.mark.skipif(not USERS.exists(), reason="test fixtures not present")
+def test_a_misread_look_alike_letter_still_gets_its_profile(tmp_path):
+    daemon = Padd(tmp_path, env={"PADD_LOGIN_USERS": f"{0x11ECF8B9},{GUEST}", "PADD_GUEST_NAME": "Userl"})
+    hub = App(daemon, USERS)
+    sim = None
+    try:
+        client = hub.client()
+        assert wait_for(lambda: CROSS in buttons(daemon) and buttons(daemon)[-1] == 0, 4)
+        sim = DialogSim(hub, lambda: daemon.calls("pad_report"), 1001, ["Add User", "leolobato-jb", "User1"], 1)
+        assert client.command("pad", "connect") == 0  # the dialog shows User1, which looks like Userl
+        assert wait_for(lambda: CROSS in sim.buttons, 12), sim.buttons
+        assert sim.buttons == [RIGHT, CROSS]
+    finally:
+        if sim:
+            sim.stop()
+        hub.stop()
+        daemon.stop()
+
+
+@pytest.mark.skipif(not USERS.exists(), reason="test fixtures not present")
+@pytest.mark.parametrize("name,files", [
+    ("User2", None),  # one letter off, but not a look-alike: another person
+    ("Userl", {"known-users": json.dumps({"12345": "User1"})}),  # a look-alike, but User1 is someone else
+])
+def test_a_different_user_never_gets_a_similar_profile(tmp_path, name, files):
+    daemon = Padd(tmp_path, env={"PADD_LOGIN_USERS": f"{0x11ECF8B9},{GUEST}", "PADD_GUEST_NAME": name})
+    hub = App(daemon, USERS, files=files)
+    try:
+        client = hub.client()
+        assert wait_for(lambda: CROSS in buttons(daemon) and buttons(daemon)[-1] == 0, 4)
+        assert client.command("pad", "connect") == 0
+        assert wait_for(lambda: f"pick {name}" in (client.status()["notice"] or ""), 10)
+        assert not pressed(daemon, 1001)
+    finally:
+        hub.stop()
+        daemon.stop()
+
+
+def test_controller_1_does_not_take_another_users_similar_profile(tmp_path):
+    daemon = Padd(tmp_path, env={"PADD_USER_NAME": "User2"})
+    hub = App(daemon, USERS)
+    try:
+        assert wait_for(lambda: CROSS in buttons(daemon), 6)
+        assert pressed(daemon, 1000)[0] == CROSS  # the focused profile, with no move to User1
     finally:
         hub.stop()
         daemon.stop()

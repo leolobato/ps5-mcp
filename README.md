@@ -172,15 +172,15 @@ Quit with **⌘Q** or `uv run ps5mcp capture stop`.
 | Controller input | `press`, `hold`, `stick`, `trigger`, `touchpad`, `sequence`, `release_all` |
 | Console apps | `home`, `close_app`, `launch`, `list_apps`, `install`, `uninstall_apps` |
 | More players | `connect_controller`, `disconnect_controller`, `use_controller` |
-| Remote Play only | `ps_button`, `type_text`, `close_keyboard` |
+| Remote Play only | `type_text`, `close_keyboard` |
 | File transfer | `push`, `pull` |
 | Visual automation | `save_template`, `list_templates`, `wait_for`, `wait_for_change` |
 | Recording | `record_start`, `record_stop`, `list_recordings`, `play_recording` |
 | Sharing | `claim_console`, `release_console` |
 
-Input tools can return a frame with `snapshot_after_ms`. `home` suspends the game like the PS button;
-use `press("circle")` to back out of system screens. With Remote Play as the video source, `ps_button` presses the
-real PS button (control center) and `type_text` fills the text field whose on-screen keyboard is open. A game takes input only from the controller that launched it,
+Input tools can return a frame with `snapshot_after_ms`. `ps_button` presses the PS button (a tap opens the
+control center) and `home` suspends the running game; use `press("circle")` to back out of system screens. With Remote Play as
+the video source, `type_text` fills the text field whose on-screen keyboard is open. A game takes input only from the controller that launched it,
 so launch games with `launch` to control them through the MCP.
 
 ### More players
@@ -203,7 +203,7 @@ keyboard, the API and MCP agents goes to the selected one.
 
 **−** removes the selected controller, or call `disconnect_controller(3)`, and input goes back to controller 1 if it was
 selected. The others keep their numbers. The choice is saved in the state folder. After padd restarts the same users come
-back in order, so numbers may close up. Three or more controllers side by side are not yet verified on the console (see
+back in order, so numbers may close up. Four controllers worked in a split-screen game on 13.60 (see
 [findings](docs/findings.md#several-virtual-controllers)).
 
 ### Sharing the console

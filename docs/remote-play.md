@@ -1,7 +1,7 @@
 # Remote Play
 
 Remote Play supplies LAN video and audio to the native macOS app. Controller
-input still uses `padd`, except the PS button and on-screen keyboard (below); the
+input still uses `padd`, except the on-screen keyboard (below); the
 capture card, file, and synthetic sources remain available. The initial profile is SDR H.264 at 1080p60. Decoded frames are always
 1920×1080 BGRA for snapshots, visual waits, and assignment detection.
 
@@ -104,11 +104,11 @@ dependency sources, and build instructions under the applicable licenses.
 
 ## PS button and on-screen keyboard
 
-padd cannot send the PS button. Remote Play's own controller can, so while Remote
-Play is the video source the MCP has `ps_button`, `type_text` and `close_keyboard`,
-and the window has **PS** (⌥-click holds; key **P**) and **Type…**. They follow the
-same rules as padd input, need live video, and a held PS button is released when
-the hold is cancelled. All other input stays on padd. See [PS button](ps-button.md)
+Remote Play's own controller can fill the PS5's on-screen keyboard, so while Remote
+Play is the video source the MCP has `type_text` and `close_keyboard`, and the window
+has **Type…**. They follow the same rules as padd input and need live video. The PS
+button goes through padd now, and the app's `rp_button` remains for older MCP servers;
+a press held there is released when the hold is cancelled. All other input stays on padd. See [PS button](ps-button.md)
 and the [API](app-api.md#remote-play-controller-ps-button-and-on-screen-keyboard).
 
 ## Console state and rollback

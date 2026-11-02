@@ -51,6 +51,32 @@ def test_stop_of_a_padd_without_a_recorded_run_checks_only_its_port(tmp_path, mo
     assert json.loads((run / "run.json").read_text()) == {"hello": {"pad_handle": 1}, "status": "running"}
 
 
+def test_stop_of_a_padd_whose_run_belongs_to_another_checkout(tmp_path, monkeypatch, capsys):
+    from types import SimpleNamespace
+
+    from ps5mcp import padd_runner
+    monkeypatch.setenv("PS5MCP_STATE", str(tmp_path))
+    monkeypatch.setattr(padd_runner, "ROOT", tmp_path)
+    (tmp_path / "results").mkdir()  # the pointer is relative, and this checkout has no such run
+    padd_runner.current_run_file().write_text("results/old-padd\n")
+    shutdowns = []
+
+    class Link:
+        def __init__(self, host, port=None):
+            self.hello = SimpleNamespace(pad_handle=2)
+
+        def shutdown(self):
+            shutdowns.append(True)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(padd_runner, "PadLink", Link)
+    monkeypatch.setattr(padd_runner, "_port_open", lambda host: False)
+    assert padd_runner.stop("ps5") == 0
+    assert shutdowns and capsys.readouterr().out.startswith("stopped: ")
+
+
 def _build(root, elf=b"\x7fELF padd", version="1.4"):
     import hashlib
     import json

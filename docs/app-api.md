@@ -129,10 +129,11 @@ free, every client drives it as before.
 After every (re)connect the app looks for "Who's using this controller?" for 6 s. It presses Cross only when the
 dialog is visible. The match uses the title template at (712, 168), within 24 px, with a score of at least 0.9, as
 `assign.py` does. When it answers, `notice` says so, because answering turns the DualSense off
-(see [findings](findings.md)). It answers with the selected controller. For an added controller the dialog still
-focuses the first profile (the foreground user's, on the console tested with two), so the app reads the profile names
-(Vision), presses Right to that controller's user and then Cross. If that name is not on screen it presses nothing and
-`notice` asks you to pick it. It stops if another controller is selected meanwhile.
+(see [findings](findings.md)). It answers with the selected controller. The focused profile stays centered and the row scrolls; three profiles fit, so with
+more it can start off-screen. The app reads the names (Vision), moves until the controller's user is on the focused profile, and
+presses Cross only then. A name can differ by one look-alike character (video compression, such as `j` read as `i`) if no other
+profile is that close and it is nobody else's name. If the name cannot be found, controller 1 answers the profile focused at first;
+an added controller presses no Cross, and `notice` asks you to pick it. It stops if another controller is selected meanwhile.
 Disable it with `--no-auto-assign` or `PS5MCP_AUTO_ASSIGN=0`.
 
 ## Launch options
@@ -174,10 +175,11 @@ is not an API-triggered account mutation. Missing credentials leave the API avai
 without capture-device fallback. Non-neutral input fails while Remote Play has no video;
 release remains available. See [Remote Play](remote-play.md) for validation limits.
 
-### Remote Play controller: PS button and on-screen keyboard
+### Remote Play controller: on-screen keyboard and `rp_button`
 
-The pad cannot send the PS button ([PS button](ps-button.md)). Remote Play has its own controller, so while it is
-the video source the app exposes two inputs that padd cannot give. All other input still goes through padd.
+The PS button is an ordinary padd button, `ps` ([PS button](ps-button.md)). Remote Play has its own controller, so while it
+is the video source the app also exposes the on-screen keyboard, which padd cannot give, and `rp_button`, kept for older MCP
+servers. All other input still goes through padd.
 
 | cmd | fields | effect |
 |---|---|---|

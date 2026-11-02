@@ -23,8 +23,15 @@ DualSense: prospero-win opens `scePadOpen(user)` for each signed-in user that is
 of that list, once the game asks for controller 1 or later.
 
 padd 1.9 raises this to four: pads 2 to 4 are for the next signed-in users with no controller, in the same order. Numbers
-stay fixed while padd runs. Not verified on the console: more than two pads at once (the target console has only two signed-in
-users so far), whether `/dev/hid` accepts four, and where the dialog's focus starts for pads 3 and 4.
+stay fixed while padd runs. Verified on 13.60 (2026-11-02): `/dev/hid` accepts four pads, and in DOOM + DOOM II all four joined and
+each moved only its own split-screen view for over 15 minutes, across game restarts, with no report failures.
+
+The dialog's row scrolls. The focused profile stays centered, three profiles fit, and names at the edge are cut off. With four signed-in
+users, the row started on `Guest2`, `Guest1`, `leolobato-j`, with `User1` out of sight. Auto-assign answered all three dialogs correctly
+by moving until the pad's user was focused, and the console's notice named the right user.
+
+Known gap: `connect <id>` with an id nobody has opens the dialog, where Add User creates a guest. The pad then keeps the requested id,
+so `status` shows a null name and that placeholder id, while the guest is listed under `available` with its real id. Input works.
 
 What is known: `/dev/hid` AddDevice takes a user id that is not the foreground user's, and the console then shows
 its user picker with that user selected (the padd variant for User1 in [Online follow-up](#online-follow-up-remote-play-on-1360-2026-10-15) below).

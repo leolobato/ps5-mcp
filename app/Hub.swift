@@ -612,7 +612,8 @@ final class Hub {
 
     // MARK: Remote Play input
     //
-    // The PS button and the on-screen keyboard exist only on the Remote Play controller; every other input stays on
+    // The on-screen keyboard exists only on the Remote Play controller, and `rp_button` is kept for older MCP servers
+    // (the PS button itself is an ordinary padd button now); every other input stays on
     // padd. Same rules as padd input (the API checks the lease first): a held key wins, and nothing is sent unless
     // Remote Play is delivering fresh video. A held PS button is released when that hold is cancelled.
 
@@ -634,9 +635,9 @@ final class Hub {
     }
 
     /// Holds the PS button for `holdMS`, then releases it and leaves the release gap.
-    func pressPSButton(holdMS: Int, epoch: UInt64, human: Bool = false) throws {
+    func pressPSButton(holdMS: Int, epoch: UInt64) throws {
         remoteInput.lock(); defer { remoteInput.unlock() }
-        try controller.authorizeAgentInput(epoch: epoch, human: human)
+        try controller.authorizeAgentInput(epoch: epoch, human: false)
         let remote = try remotePlay()
         setRemoteButtonsHeld(true)
         defer { remote.releaseButtons(); setRemoteButtonsHeld(false) }
@@ -667,16 +668,8 @@ final class Hub {
         try remotePlay().closeKeyboard(accept: accept)
     }
 
-    /// Keys mapped to commands (H = home, P = PS button through Remote Play).
+    /// Keys mapped to commands (H = home).
     func keyCommand(_ name: String) {
-        if name == "ps" {
-            let epoch = controller.inputEpoch
-            DispatchQueue.global().async {
-                do { try self.pressPSButton(holdMS: 100, epoch: epoch, human: true) }
-                catch { self.notice = "PS button: \(remotePlayInputMessage(error))" }
-            }
-            return
-        }
         guard name == "home" else { return }
         DispatchQueue.global().async {
             if let link = try? self.controller.currentLink() { _ = try? self.command("home", "", link: link) }
@@ -685,9 +678,9 @@ final class Hub {
 
     // MARK: auto-assign
 
-    /// Answers the selected controller's dialog. Controller 1 (the foreground user's): Cross on the focused profile.
-    /// Controller 2: Right to its user's profile first (the dialog focuses the first profile, the foreground user's),
-    /// and no press when the name is not on screen. Stops if another controller is selected meanwhile.
+    /// Answers the selected controller's dialog: moves until its user's name is on the focused profile, scrolling when
+    /// the row is longer than the panel, and presses Cross only then. When the name cannot be found, controller 1 answers
+    /// the profile focused at first and the others press Cross nowhere. Stops if another controller is selected meanwhile.
     /// `expected`: the controller this was started for. Once another one is selected its keys would go elsewhere.
     private func autoAssign(_ link: PadLink, pad expected: Int? = nil) {
         guard let assigner else { return }
@@ -697,7 +690,6 @@ final class Hub {
             notice = "Controller \(expected) may still ask \"Who's using this controller?\": select it and answer with it."
             return
         }
-        let steer = pad != 1
         let target = link.hello.userName
         func press(_ name: String) throws {
             guard (pads?.active ?? 1) == pad else { throw BadInput("controller \(pad) is no longer selected") }
@@ -710,22 +702,70 @@ final class Hub {
         }
         let answered = assigner.assignIfAsked(frame: { sink.latestBuffer() }, answer: { buffer in
             keepFrame("auto-assign-before.jpg")
-            var steps = 0
-            if steer {
-                let users = assigner.users(buffer)
-                guard let target, let index = users.firstIndex(where: {
-                    $0.caseInsensitiveCompare(target) == .orderedSame
-                }) else {
-                    say("auto-assign: \(target ?? "the pad's user") is not among \(users); not pressing")
+            lock.lock(); var others = Array(knownUsersNow.values); lock.unlock()
+            others += (loginUsers?.users ?? []).map(\.name)
+            others.removeAll { $0.caseInsensitiveCompare(target ?? "") == .orderedSame }
+            func isTarget(_ name: String?, tolerant: Bool) -> Bool {
+                guard let name, let target else { return false }
+                return Assigner.userIndex([name], target: target, tolerant: tolerant, others: others) != nil
+            }
+            func dialogOpen() -> CVPixelBuffer? {
+                guard let latest = sink.latestBuffer(), assigner.score(latest) >= Assigner.minScore else { return nil }
+                return latest
+            }
+            var net = 0  // Rights minus Lefts so far
+            func move(_ direction: String) throws {
+                try press(direction)
+                net += direction == "right" ? 1 : -1
+                Thread.sleep(forTimeInterval: 0.4)  // the row scrolls
+            }
+            do {
+                var confirmed = false, heading = "right", absentReads = 0
+                search: for _ in 0..<12 where target != nil {
+                    guard let frame = dialogOpen() else {
+                        say("auto-assign: the dialog closed; not pressing")
+                        return false
+                    }
+                    var seen = assigner.profiles(frame)
+                    if isTarget(Assigner.focused(seen), tolerant: true) {
+                        // One video frame can misread a letter that the next one gets right.
+                        for _ in 0..<3 where !isTarget(Assigner.focused(seen), tolerant: false) {
+                            Thread.sleep(forTimeInterval: 0.4)
+                            seen = sink.latestBuffer().map(assigner.profiles) ?? seen
+                        }
+                        confirmed = isTarget(Assigner.focused(seen), tolerant: true)
+                        if confirmed { break search }
+                    }
+                    if let wanted = seen.first(where: { isTarget($0.name, tolerant: true) }) {
+                        try move(wanted.x > 0.5 ? "right" : "left")
+                    } else if seen.contains(where: { $0.x > 0.9 }), heading == "right" {
+                        try move("right")
+                    } else if seen.contains(where: { $0.x < 0.1 }) {
+                        heading = "left"
+                        try move("left")
+                    } else {
+                        absentReads += 1
+                        if absentReads > 3 { break search }
+                        Thread.sleep(forTimeInterval: 0.4)
+                    }
+                }
+                if confirmed {
+                    say("auto-assign: focus is on \(target ?? "?")")
+                } else if pad == 1 {
+                    // The name could not be found: the profile focused at first, which only controller 1 may take on trust.
+                    say("auto-assign: \(target ?? "the pad's user") not found; answering the first focused profile")
+                    while net != 0 { try move(net > 0 ? "left" : "right") }
+                } else {
+                    say("auto-assign: \(target ?? "the pad's user") not found; not pressing")
                     notice = "The PS5 asks \"Who's using this controller?\" for controller \(pad): pick "
                         + "\(target ?? "its user") with it (arrow keys and Enter in this window)."
                     return false
                 }
-                say("auto-assign: profiles \(users); moving \(index) right to \(target)")
-                steps = index
-            }
-            do {
-                for _ in 0..<steps { try press("right") }
+                // Reading the names takes time: someone may have answered, and a press would land on the next screen.
+                guard dialogOpen() != nil else {
+                    say("auto-assign: the dialog closed; not pressing")
+                    return false
+                }
                 say("auto-assign: pressing Cross")
                 try press("cross")
             } catch {
@@ -736,7 +776,7 @@ final class Hub {
         }, log: { say($0) })
         if answered {
             keepFrame("auto-assign-after.jpg")
-            notice = steer
+            notice = pad != 1
                 ? "Answered \"Who's using this controller?\" with \(target ?? "its user") for controller \(pad)."
                 : "Answered \"Who's using this controller?\" with controller 1. If your DualSense turned off, "
                     + "press its PS button and pick the same user; both controllers then work."

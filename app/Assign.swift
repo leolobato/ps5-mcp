@@ -7,9 +7,9 @@
 // Side effect: the PS5 then turns the user's DualSense off. Pressing PS on
 // the DualSense and picking the same user brings it back, and both controllers work.
 //
-// Controllers 2 and up (other signed-in users') get the same dialog, focused on the first profile, which is the
-// foreground user's: Cross there takes the DualSense's user. So the app reads the profile names (Vision), moves Right
-// to the pad's user and presses Cross there; a name it cannot find gets no press.
+// The focused profile need not be the pad's user, and Cross takes whoever is focused. So the app reads the names (Vision),
+// which stay centered on the focus as the row scrolls, moves until the pad's user is focused, and presses Cross only then.
+// For a name it cannot find, controller 1 answers the profile focused at first, and the others get no Cross.
 //
 // Matching mirrors assign.dialog_score: grayscale at quarter resolution, normalised cross-correlation, title at
 // (712, 168) in a 1920x1080 frame, within 24 px. Python searches the whole frame and rejects a best match outside
@@ -120,7 +120,11 @@ final class Assigner {
     }
 
     /// The profile names in the dialog, left to right ("Add User" left out): the text on the name row of the tiles.
-    func users(_ buffer: CVPixelBuffer) -> [String] {
+    func users(_ buffer: CVPixelBuffer) -> [String] { profiles(buffer).map(\.name) }
+
+    /// The same names with their centers, across the panel: 0 is its left edge and 1 its right. The row scrolls, and the
+    /// focused profile is always at 0.5, so a name near an edge means more of the row may be out of sight.
+    func profiles(_ buffer: CVPixelBuffer) -> [(name: String, x: Double)] {
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate
         request.usesLanguageCorrection = false
@@ -128,10 +132,33 @@ final class Assigner {
         request.regionOfInterest = CGRect(x: 240.0 / 1920, y: 1 - 705.0 / 1080, width: 1440.0 / 1920, height: 70.0 / 1080)
         guard (try? VNImageRequestHandler(cvPixelBuffer: buffer).perform([request])) != nil else { return [] }
         return (request.results ?? [])
-            .compactMap { o in o.topCandidates(1).first.map { (name: $0.string, x: o.boundingBox.midX) } }
+            .compactMap { o in o.topCandidates(1).first.map { (name: $0.string, x: Double(o.boundingBox.midX)) } }
             .filter { $0.name.caseInsensitiveCompare("Add User") != .orderedSame }
             .sorted { $0.x < $1.x }
-            .map(\.name)
+    }
+
+    /// The name of the focused profile, if the focus is on one (it can be on Add User).
+    static func focused(_ profiles: [(name: String, x: Double)]) -> String? {
+        profiles.first { abs($0.x - 0.5) < 0.1 }?.name
+    }
+
+    /// Characters video compression and text recognition mix up. Other differences are different names: User1 is not User2.
+    private static let lookAlike: [Set<Character>] = [["i", "j", "l", "1", "|", "!"], ["o", "0"], ["s", "5"], ["z", "2"], ["b", "8"]]
+
+    /// Where `target` is among the names read from the dialog; case does not count. `tolerant` also accepts a misread name:
+    /// one look-alike character off, the only name that close, and not the name of anyone in `others`.
+    static func userIndex(_ users: [String], target: String, tolerant: Bool, others: [String] = []) -> Int? {
+        let wanted = Array(target.lowercased())
+        if let exact = users.firstIndex(where: { Array($0.lowercased()) == wanted }) { return exact }
+        guard tolerant else { return nil }
+        let taken = Set(others.map { $0.lowercased() })
+        let close = users.indices.filter { index in
+            let name = Array(users[index].lowercased())
+            guard name.count == wanted.count, !taken.contains(users[index].lowercased()) else { return false }
+            let differing = name.indices.filter { name[$0] != wanted[$0] }
+            return differing.count == 1 && lookAlike.contains { $0.contains(name[differing[0]]) && $0.contains(wanted[differing[0]]) }
+        }
+        return close.count == 1 ? close[0] : nil
     }
 
     /// Watch for the dialog for `timeout` s; when it shows, `answer` gets the frame and presses (or returns false to

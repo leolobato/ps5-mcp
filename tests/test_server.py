@@ -63,7 +63,7 @@ async def test_press_can_return_a_frame(runtime):
 
 
 async def test_unknown_button_is_a_readable_error(runtime):
-    assert "unknown button" in text(await server.mcp.call_tool("press", {"button": "ps"}))
+    assert "unknown button" in text(await server.mcp.call_tool("press", {"button": "xbox"}))
 
 
 async def test_hold_sequence_stick_trigger(runtime):
@@ -250,10 +250,18 @@ async def test_looking_keeps_a_claim_alive(hub):
     assert info["claim"]["owner"]["expires_in_s"] >= 9
 
 
-async def test_ps_button_and_type_text_explain_the_remote_play_requirement(runtime):
-    for tool, args in (("ps_button", {}), ("type_text", {"text": "hello"}), ("close_keyboard", {})):
+async def test_type_text_explains_the_remote_play_requirement(runtime):
+    for tool, args in (("type_text", {"text": "hello"}), ("close_keyboard", {})):
         assert "need Remote Play" in text(await server.mcp.call_tool(tool, args))
+    assert reports(runtime)[-1] == 0
+
+
+async def test_ps_button_goes_through_the_pad(runtime):
     assert "hold_ms" in text(await server.mcp.call_tool("ps_button", {"hold_ms": 5000}))
+    assert "pressed PS for 40 ms" in text(
+        await server.mcp.call_tool("ps_button", {"hold_ms": 40, "snapshot_after_ms": None}))
+    assert 0x10000 in reports(runtime)
+    assert "pressed ps" in text(await server.mcp.call_tool("press", {"button": "ps", "hold_ms": 30}))
     assert reports(runtime)[-1] == 0
 
 

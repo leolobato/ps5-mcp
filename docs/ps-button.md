@@ -1,12 +1,28 @@
 # PS button, home and app control
 
-## Why the pad cannot send it
+## The pad can send it
 
-FGG-XSense tested all 16 unused bits of the button word and 17 unused report bytes on 11.60. None of them
-reached the system as a PS-button press. The system handles the PS button above the virtual-pad layer, so this
-project does not try to send it through the report.
+Bit `0x10000` of the virtual pad's button word is the PS button. A 100 ms tap through padd opened the control center, and the
+frame after a second tap looked closed again (13.60, 2026-11-02, padd 1.8, Remote Play not used). No
+padd change was needed, because padd passes the button word through. [AnyController](https://github.com/BallerIsLeet/AnyController)
+(`include/sce_pad.h`) documents the same bit on 13.60, and [AnyPad](https://github.com/S-Mohammad-A/AnyPad-PS5-English) has a
+PS button of its own on 10.01.
 
-## What padd does instead (verified on 13.60, padd 1.1)
+This replaces an earlier conclusion here, from FGG-XSense's tests on 11.60, that no unused bit of the report reaches the system.
+That has not been rechecked on 11.60.
+
+`press("ps")`, `hold`, `ps_button(hold_ms)`, the **P** key and the sidebar's **PS** button all use it, on the selected controller.
+
+**A hold takes over control.** When another user owns the console, the pad's input is ignored, and pressing anything shows "To take
+over control, press and hold the PS button" under the user the console assigned the pad to. A 1 s hold through padd took over: the
+foreground user became that user and input worked again (13.60, 2026-11-02, padd 1.9). AnyPad reports the same priority behaviour.
+A hold with no owner to take over from has not been tested, and neither has PS during a game.
+
+**padd's user and the console's can differ.** After a padd update, a plain Cross on the focused profile gave controller 1 to
+`leolobato-jb`, not the `User1` padd added the pad for, while HELLO and `status` still said `User1`. The app now steers controller 1
+to its user's profile too, but a person can still pick another profile. PS does nothing while "Who's using this controller?" is open: the console shows a blocked icon.
+
+## Other ways to go home and control apps (verified on 13.60, padd 1.1)
 
 padd calls system services directly from the payload process (`COMMAND` messages, `docs/protocol.md`). All of
 these need `sceLncUtilInitialize()` first. Without it, LncUtil calls log `getAppStatus: 0x80940004`.
@@ -35,16 +51,15 @@ Manager). Keyboard: `H` goes home.
 ## Through Remote Play (13.60, implementation 2026-10-17)
 
 When Remote Play is the video source, its session has a controller of its own, separate from padd's virtual
-DualSense. That controller can send the PS button, and the session can fill the PS5 on-screen keyboard:
+DualSense. That controller can send the PS button (`rp_button` in the app's API, for older MCP servers) and the session can
+fill the PS5 on-screen keyboard:
 
-- `ps_button(hold_ms)` sets Chiaki's PS bit on the Remote Play controller, then releases it. A tap is expected to open
-  the control center and a hold of about one second to go home (PS5 defaults).
 - `type_text(text, submit)` and `close_keyboard(accept)` use Chiaki's keyboard messages: the console tells the client
   when a text field opens, the client replaces the field's text, the console echoes it, and the client can accept
   (close, keeping the text) or reject. Reject does not discard: the text stays and the PS5 shows its own keyboard.
 
-The app window has the same controls for people: **PS** (click = tap, ⌥-click = one-second hold), the **P** key,
-and **Type…** while the PS5 waits for a Remote Play keyboard. Window input ignores agent claims, like the other keys.
+The app window has **Type…** while the PS5 waits for a Remote Play keyboard. Window input ignores agent claims, like the
+other keys.
 
 Verified on 13.60 (2026-10-17, worktree app, User1 session): the keyboard handshake did not change connection or
 streaming; a 100 ms tap opened and closed the control center; a 1 s hold went home from Search (where padd's
@@ -52,7 +67,7 @@ streaming; a 100 ms tap opened and closed the control center; a 1 s hold went ho
 reject showed the PS5's own keyboard with the text kept; padd input worked before and after. While the handshake is
 on, a text field shows "Use the keyboard on your Remote Play device" in place of the PS5 keyboard.
 
-This is a narrow exception to "padd is the only input route", not a migration: only these two inputs use the
+This is a narrow exception to "padd is the only input route", not a migration: only these inputs use the
 Remote Play controller. The input is sent as the Remote Play user's controller (User1 on the test console). Whether
 pressing PS there changes which controller a running game listens to is not yet measured; see the open items in
 [Remote Play](remote-play.md#validation-status).
@@ -64,8 +79,3 @@ so enabling it does not add the exposure. The upstream code is unchanged here.
 
 ## Ruled out / not covered
 
-- **The PS button itself, and the quick menu (control center), through padd.** The pad can't send the button
-  (above); with Remote Play as the source, use `ps_button()`. No
-  payload-callable service for the quick menu was found. `sceSystemServiceShowImposeMenuForPs2Emu` is
-  PS2-emulator specific and was not tried. Without Remote Play, a short-press equivalent stays unavailable; the
-  home and close commands cover going home and switching apps.
