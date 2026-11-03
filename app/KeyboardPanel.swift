@@ -7,6 +7,7 @@ import Carbon.HIToolbox
 
 let keyboardPanelShownKey = "keyboardPanelShown"
 let keyboardPanelFloatsKey = "keyboardPanelFloats"
+let keyboardPanelTopLeftKey = "keyboardPanelTopLeft"
 
 final class KeyboardPanel: NSObject, NSWindowDelegate {
     private let panel: NSPanel
@@ -35,8 +36,6 @@ final class KeyboardPanel: NSObject, NSWindowDelegate {
         panel.isMovableByWindowBackground = true
         panel.level = .floating
         panel.delegate = self
-        placed = UserDefaults.standard.string(forKey: "NSWindow Frame keyboardPanel") != nil
-        panel.setFrameAutosaveName("keyboardPanel")
         let content = build()
         panel.contentView = content
         panel.setContentSize(content.fittingSize)
@@ -73,12 +72,33 @@ final class KeyboardPanel: NSObject, NSWindowDelegate {
     }
 
     private func show() {
-        if !placed, let screen = NSScreen.main {  // top right the first time, then where it was left
+        if !placed {
+            // Where it was left, else top right. A default position is not saved: the display it was on may come back.
+            let fallback = NSScreen.main.map { NSPoint(x: $0.visibleFrame.maxX - panel.frame.width - 24, y: $0.visibleFrame.maxY - 24) }
+            if let point = Self.savedTopLeft() ?? fallback { panel.setFrameTopLeftPoint(point) }
             placed = true
-            panel.setFrameTopLeftPoint(NSPoint(x: screen.visibleFrame.maxX - panel.frame.width - 24,
-                                               y: screen.visibleFrame.maxY - 24))
         }
         panel.orderFrontRegardless()
+    }
+
+    /// The saved corner, if its title bar would still be on a screen. AppKit's frame autosave is not used: it moved the
+    /// panel to another display on relaunch. Its last value is the starting point for people who already placed the panel.
+    private static func savedTopLeft() -> NSPoint? {
+        let defaults = UserDefaults.standard
+        var saved = defaults.string(forKey: keyboardPanelTopLeftKey).map(NSPointFromString)
+        if saved == nil, let old = defaults.string(forKey: "NSWindow Frame keyboardPanel") {
+            let numbers = old.split(separator: " ").compactMap { Double($0) }
+            if numbers.count >= 4 { saved = NSPoint(x: numbers[0], y: numbers[1] + numbers[3]) }
+        }
+        guard let saved else { return nil }
+        let titleBar = NSPoint(x: saved.x + 20, y: saved.y - 10)
+        return NSScreen.screens.contains { $0.frame.contains(titleBar) } ? saved : nil
+    }
+
+    func windowDidMove(_ notification: Notification) {
+        guard placed else { return }
+        let frame = panel.frame
+        UserDefaults.standard.set(NSStringFromPoint(NSPoint(x: frame.minX, y: frame.maxY)), forKey: keyboardPanelTopLeftKey)
     }
 
     func setKeysActive(_ active: Bool) {
