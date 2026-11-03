@@ -73,7 +73,7 @@ final class Banner: NSBox {
         heading.font = .systemFont(ofSize: 12, weight: .semibold)
         heading.lineBreakMode = .byTruncatingTail
         heading.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        message.font = .systemFont(ofSize: 11)
+        message.font = .systemFont(ofSize: 12)  // 11 pt looks soft on a non-Retina monitor
         action.bezelStyle = .rounded
         action.controlSize = .small
         action.refusesFirstResponder = true  // keys stay with the video
