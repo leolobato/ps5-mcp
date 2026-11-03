@@ -36,6 +36,17 @@ func bindUnix(_ path: String) -> Int32 {
     return fd
 }
 
+/// Takes the lock that makes this the state directory's one app, for the life of the process. Returns false when another
+/// copy holds it. A lock that cannot be opened counts as taken by nobody: the socket check still applies.
+func takeAppLock(_ path: String) -> Bool {
+    let fd = open(path, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)  // close-on-exec: padd helpers must not keep the lock
+    guard fd >= 0 else {
+        say("app lock \(path): \(errnoText())")
+        return true
+    }
+    return flock(fd, LOCK_EX | LOCK_NB) == 0
+}
+
 /// Sends one JSON line to a running app's control socket and returns its first reply line, or nil when nothing
 /// answers within a second (no socket, or a stale one left by a crash).
 func askRunningApp(_ path: String, _ line: String) -> String? {
@@ -247,7 +258,9 @@ extension Hub {
                 } catch { self.fail(conn, request, error) }
             }
         case "show", "hide":
-            DispatchQueue.main.async { self.ui?.setVisible(cmd == "show") }
+            DispatchQueue.main.async {
+                if let ui = self.ui { ui.setVisible(cmd == "show") } else { self.visibilityRequest = cmd == "show" }
+            }
             reply(conn, request, ["ok": true])
         case "watch_change":
             // Arms change detection; answers twice: once armed, then when the frame changes or after `timeout_s`.

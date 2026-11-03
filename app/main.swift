@@ -105,7 +105,23 @@ if let path = config.dialogScore ?? config.dialogUsers {
 try? FileManager.default.createDirectory(atPath: config.stateDir, withIntermediateDirectories: true)
 // One app per state directory: a second copy (another build, or the one in /Applications) would take over the
 // control socket and compete with the first for the console's only padd connection. Show the running one instead.
-if askRunningApp(config.stateDir + "/capture.sock", config.headless ? #"{"cmd":"status"}"# : #"{"cmd":"show"}"#) != nil {
+// The lock closes the gap before a starting copy answers on its socket. The socket check still finds older builds, which
+// take no lock. The system drops the lock when the process ends, however it ends.
+let ownsAppLock = takeAppLock(config.stateDir + "/app.lock")
+let appRequest = config.headless ? #"{"cmd":"status"}"# : #"{"cmd":"show"}"#
+var appAnswered = askRunningApp(config.stateDir + "/capture.sock", appRequest) != nil
+if !ownsAppLock {
+    let deadline = uptimeSeconds() + 20
+    while !appAnswered && uptimeSeconds() < deadline {
+        usleep(200_000)
+        appAnswered = askRunningApp(config.stateDir + "/capture.sock", appRequest) != nil
+    }
+    if !appAnswered {
+        say("Another PS5 MCP is starting for \(config.stateDir) but does not answer; not starting a second one")
+        exit(3)
+    }
+}
+if appAnswered {
     say("PS5 MCP is already running for \(config.stateDir); \(config.headless ? "leaving it as it is" : "showing its window")")
     exit(0)
 }

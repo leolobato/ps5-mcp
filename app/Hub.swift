@@ -40,6 +40,8 @@ final class Hub {
         set { lock.lock(); currentSource = newValue; lock.unlock() }
     }
     weak var ui: HubUI?
+    /// A `show` or `hide` that came before the window existed. Main thread.
+    var visibilityRequest: Bool?
     private(set) var assigner: Assigner?
     private(set) var visible = false
 

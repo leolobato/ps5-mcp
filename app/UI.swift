@@ -624,7 +624,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         window.isRestorable = false
         window.delegate = self
         restoreFrame()
-        setVisible(!hub.config.headless)
+        setVisible(hub.visibilityRequest ?? !hub.config.headless)
         keyboardPanel.onChange = { [weak self] in self?.updateKeyboardControls() }
         updateKeyboardControls()
         Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in self?.refresh() }

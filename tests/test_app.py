@@ -154,6 +154,50 @@ def test_missing_capture_card_keeps_app_and_api_running(padd, video_flag):
                     process.wait(5)
 
 
+def test_copies_started_together_leave_one_app(padd):
+    """The MCP servers restart the app the moment it goes away, often while another copy is still starting."""
+    for _ in range(3):
+        with tempfile.TemporaryDirectory(prefix="a", dir="/tmp") as directory:
+            root = Path(directory)
+            frame = root / "frame.png"
+            put_frame(frame, Image.new("RGB", (1920, 1080), (90, 90, 90)))
+            command = [str(APP), "--state-dir", directory, "--video", f"file:{frame}", "--audio", "none", "--headless",
+                       "--host", "127.0.0.1", "--port", str(padd.port)]
+            with (root / "app.log").open("w") as log:
+                copies = [subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT) for _ in range(4)]
+            try:
+                assert wait_for(lambda copies=copies: sum(copy.poll() is None for copy in copies) == 1, timeout=25)
+                running = next(copy for copy in copies if copy.poll() is None)
+                assert all(copy.returncode == 0 for copy in copies if copy is not running)
+                assert capture.NativeApp(root).pid() == running.pid
+            finally:
+                for copy in copies:
+                    if copy.poll() is None:
+                        copy.terminate()
+                        copy.wait(5)
+
+
+def test_a_failed_app_does_not_block_the_next_one(padd):
+    """The lock goes with the process, so a crash never keeps the app from starting."""
+    with tempfile.TemporaryDirectory(prefix="a", dir="/tmp") as directory:
+        root = Path(directory)
+        frame = root / "frame.png"
+        put_frame(frame, Image.new("RGB", (1920, 1080), (90, 90, 90)))
+        command = [str(APP), "--state-dir", directory, "--video", f"file:{frame}", "--audio", "none", "--headless",
+                   "--host", "127.0.0.1", "--port", str(padd.port)]
+        first = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        native = capture.NativeApp(root)
+        assert wait_for(lambda: native.status() is not None)
+        first.kill()
+        first.wait(5)
+        second = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            assert wait_for(lambda: (status := native.status()) is not None and status["pid"] == second.pid)
+        finally:
+            second.terminate()
+            second.wait(5)
+
+
 def test_legacy_capture_socket_still_works(app):
     native = capture.NativeApp(app.root)
     assert native.pid() == app.process.pid and native.frame_age() < 1
