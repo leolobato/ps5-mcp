@@ -200,6 +200,7 @@ final class KeyboardPanel: NSObject, NSWindowDelegate {
         grid.rowSpacing = 3
         grid.columnSpacing = 3
         grid.xPlacement = .fill
+        grid.setContentHuggingPriority(.required, for: .vertical)
         for index in 0..<3 { grid.column(at: index).width = 26 }
         for index in 0..<2 { grid.row(at: index).height = 22 }
         return grid
@@ -215,6 +216,10 @@ final class KeyboardPanel: NSObject, NSWindowDelegate {
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 5
+        // Next to the taller face buttons: the title stays right above its keys, not stretched apart from them.
+        stack.setHuggingPriority(.required, for: .vertical)
+        stack.setContentHuggingPriority(.required, for: .vertical)
+        if extra == nil { heading.setHuggingPriority(.required, for: .vertical) }
         return stack
     }
 }

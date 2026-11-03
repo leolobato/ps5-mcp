@@ -109,7 +109,7 @@ Play is the video source the MCP has `type_text` and `close_keyboard`, and the w
 has **Type…**. They follow the same rules as padd input and need live video. The PS
 button goes through padd now, and the app's `rp_button` remains for older MCP servers;
 a press held there is released when the hold is cancelled. All other input stays on padd. See [PS button](ps-button.md)
-and the [API](app-api.md#remote-play-controller-ps-button-and-on-screen-keyboard).
+and the [API](app-api.md#remote-play-controller-on-screen-keyboard-and-rp_button).
 
 ## Console state and rollback
 

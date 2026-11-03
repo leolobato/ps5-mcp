@@ -8,7 +8,7 @@ See and control a jailbroken PS5 from an MCP agent or your keyboard, with live v
 **macOS only for now,** Windows and Linux support is planned.
 
 <p align="center">
-  <img src="assets/screenshots/app.png" width="1000" alt="The PS5 MCP app: the PS5 home screen with PS5 OpenGL Showcase selected, next to the status and controls sidebar">
+  <img src="assets/screenshots/app.png" width="1000" alt="The PS5 MCP app: live video of the Playden library on the PS5, next to a sidebar with capture, console, launch and controller controls">
 </p>
 
 ## Requirements
@@ -153,6 +153,10 @@ The menu bar has every command, in the Console, Capture, Controllers, Video Sour
 The toolbar's keyboard button, **⌃⌥K** from any app, or View › Show Keyboard Panel shows a floating panel with the controller's
 keys. It floats over all windows unless you turn that off in Settings. Keys reach the PS5 only while the video has focus, and the
 panel says when they do not. Dimmed keys (Share, touchpad left and right) are not mapped yet.
+
+<p align="center">
+  <img src="assets/screenshots/keyboard-panel.png" width="446" alt="The floating keyboard panel: each controller button with its key, laid out from the shoulder buttons down to the sticks">
+</p>
 
 Holding a key holds its button and gives you priority over agents; releasing it returns control.
 
