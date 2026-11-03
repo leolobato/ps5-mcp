@@ -15,6 +15,9 @@ protocol HubUI: AnyObject {
 final class Hub {
     let config: Config
     private var currentSink: FrameSink
+    private let frameDiffLog: FrameDiffLog?
+    /// What wants the frame meter on ("overlay", "agent"). It outlives the sink, which is replaced with the source.
+    private var frameMeterReasons = Set<String>()
     var sink: FrameSink {
         lock.lock(); defer { lock.unlock() }; return currentSink
     }
@@ -72,7 +75,9 @@ final class Hub {
 
     init(config: Config) {
         self.config = config
-        currentSink = FrameSink(path: config.stateDir + "/latest.jpg", fps: config.snapshotFPS)
+        frameDiffLog = config.frameDiffLog.flatMap { FrameDiffLog(path: $0) }
+        if let path = config.frameDiffLog, frameDiffLog == nil { say("cannot write the frame diff log at \(path)") }
+        currentSink = FrameSink(path: config.stateDir + "/latest.jpg", fps: config.snapshotFPS, diffLog: frameDiffLog)
         controller = PadController(host: config.host, port: config.port)
         padd = PaddRunner(config: config)
         padd.hub = self
@@ -138,7 +143,8 @@ final class Hub {
         captureIssue = nil
         sink.invalidate()
         lock.lock()
-        currentSink = FrameSink(path: stateDir + "/latest.jpg", fps: config.snapshotFPS)
+        currentSink = FrameSink(path: stateDir + "/latest.jpg", fps: config.snapshotFPS, diffLog: frameDiffLog)
+        currentSink.setFrameMeter(reasons: frameMeterReasons, supported: Self.frameMeterSupported(video))
         lock.unlock()
         try? FileManager.default.removeItem(atPath: stateDir + "/latest.jpg")
         switch video {
@@ -377,6 +383,26 @@ final class Hub {
     /// The process behind API connection `conn`, while it is connected.
     func clientPID(conn: Int) -> pid_t? { lock.lock(); defer { lock.unlock() }; return connections[conn]?.peerPID }
 
+    /// Network sources are a compressed stream: whether a frame repeats says nothing about the game.
+    private static func frameMeterSupported(_ video: String) -> Bool { video != "remoteplay" && video != "pbs" }
+
+    var frameMeterSupported: Bool { Self.frameMeterSupported(captureVideo) }
+
+    func setFrameMeter(_ reason: String, on: Bool) {
+        let supported = frameMeterSupported
+        lock.lock(); defer { lock.unlock() }
+        if on { frameMeterReasons.insert(reason) } else { frameMeterReasons.remove(reason) }
+        currentSink.setFrameMeter(reasons: frameMeterReasons, supported: supported)
+    }
+
+    /// Blocks for the period. Its own reason keeps the meter on, and leaves anyone else's meter running afterwards.
+    func measureFrameRate(seconds: Double) -> FrameMeterSummary {
+        let reason = "measure-\(UUID().uuidString)"
+        setFrameMeter(reason, on: true)
+        defer { setFrameMeter(reason, on: false) }
+        return sink.measureFrames(seconds: seconds, patience: 3)
+    }
+
     func status() -> [String: Any] {
         let link = controller.status()
         lock.lock()
@@ -384,6 +410,7 @@ final class Hub {
         let sink = currentSink, source = currentSource
         lock.unlock()
         return ["ok": true, "api": apiVersion, "version": AppVersion.short, "build": AppVersion.build, "pid": Int(getpid()), "frames": sink.frames, "preview_frames": sink.previewFrames, "frame_age": sink.frameAge,
+                "frame_meter": sink.frameMeterReading()?.json as Any? ?? NSNull(),
                 "visible": shown, "now": uptimeSeconds(), "source": source?.name ?? "none", "clients": clients,
                 "pad": link.json, "title": link.title, "notice": note ?? NSNull(), "padd": padd.json,
                 "remote_play": (source as? RemotePlaySource)?.json as Any? ?? (captureVideo == "remoteplay"

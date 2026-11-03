@@ -73,7 +73,8 @@ class App:
         self.log = self.root / "app.log"
         self.process = subprocess.Popen(
             [str(binary), "--state-dir", str(self.root), "--video", f"file:{self.frame}", "--audio", "none",
-             "--headless", "--host", "127.0.0.1", "--port", str(padd.port), "--padd-cli", str(cli), *args],
+             "--headless", "--host", "127.0.0.1", "--port", str(padd.port), "--padd-cli", str(cli),
+             "-frameMeterShown", "NO", *args],  # the View menu's choice is saved per user, not per state directory
             stdout=self.log.open("ab"), stderr=subprocess.STDOUT,
             env={**os.environ, "FAKE_PADD_PORT": str(padd.port), "PS5MCP_STATE": str(self.root)})
         self.clients: list[AppClient] = []
@@ -1154,3 +1155,86 @@ def test_second_controller_without_a_second_user_changes_nothing(app):
     status = client.status()
     assert status["controllers"]["active"] == 1 and not status["controllers"]["second"]
     assert status["pad"]["hello"]["pad_handle"] == 1000 and not (app.root / "controllers").exists()
+
+
+def _meter(client, predicate, timeout=6.0):
+    deadline = time.monotonic() + timeout
+    while True:
+        meter = client.status()["frame_meter"]
+        if predicate(meter) or time.monotonic() > deadline:
+            return meter
+        time.sleep(0.1)
+
+
+def test_frame_meter_reads_a_still_picture_and_turns_off(app):
+    client = app.client()
+    assert client.status()["frame_meter"] is None
+    assert client.call("frame_meter", on=True)["ok"]
+    meter = _meter(client, lambda m: m and m["state"] == "static")
+    assert meter["state"] == "static" and meter["fps"] is None and meter["frame_times_ms"] == []
+    client.call("frame_meter", on=False)
+    assert client.status()["frame_meter"] is None
+
+
+def test_frame_meter_measures_a_moving_source(app):
+    client = app.client()
+    client.call("frame_meter", on=True)
+    client.call("capture_restart", video="synthetic")
+    meter = _meter(client, lambda m: m and m["state"] == "measuring" and m["fps"])
+    assert meter["state"] == "measuring"
+    assert 25 <= meter["fps"] <= 35  # the synthetic source runs at 30 fps and every frame changes
+    assert 30 <= meter["refresh_ms"] <= 37
+    assert meter["frame_times_ms"]
+
+
+def test_frame_meter_refuses_remote_play(app):
+    client = app.client()
+    client.call("capture_restart", video="remoteplay")
+    with pytest.raises(AppError) as error:
+        client.call("frame_meter", on=True)
+    assert error.value.code == "bad_request" and "capture card" in str(error.value)
+    assert client.status()["frame_meter"] is None
+
+
+def test_frame_meter_needs_its_argument(app):
+    with pytest.raises(AppError) as error:
+        app.client().call("frame_meter")
+    assert error.value.code == "bad_request"
+
+
+def test_measure_frame_rate_counts_a_moving_source_for_the_period(app):
+    client = app.client()
+    client.call("capture_restart", video="synthetic")
+    started = time.monotonic()
+    result = client.call("measure_frame_rate", seconds=3.0, timeout=12.0)
+    assert 3.0 <= time.monotonic() - started < 7.0
+    assert result["complete"] and result["state"] == "measuring"
+    assert result["seconds"] == pytest.approx(3.0, abs=0.2)
+    assert 25 <= result["fps"] <= 35  # the synthetic source runs at 30 fps and every frame changes
+    assert result["new_frames"] > 60 and result["frame_times"][0]["count"] > 60
+    assert client.status()["frame_meter"] is None  # the meter does not stay on after the run
+
+
+def test_measure_frame_rate_leaves_a_running_meter_on(app):
+    client = app.client()
+    client.call("capture_restart", video="synthetic")
+    client.call("frame_meter", on=True)
+    assert client.call("measure_frame_rate", seconds=1.0, timeout=8.0)["complete"]
+    assert client.status()["frame_meter"] is not None
+
+
+def test_measure_frame_rate_reads_a_still_picture_as_static(app):
+    result = app.client().call("measure_frame_rate", seconds=1.0, timeout=8.0)
+    assert result["state"] == "static" and result["fps"] is None and result["frame_times"] == []
+
+
+def test_measure_frame_rate_refuses_bad_input_and_remote_play(app):
+    client = app.client()
+    for seconds in (0.5, 601.0, "ten", None):
+        with pytest.raises(AppError) as error:
+            client.call("measure_frame_rate", seconds=seconds)
+        assert error.value.code == "bad_request"
+    client.call("capture_restart", video="remoteplay")
+    with pytest.raises(AppError) as error:
+        client.call("measure_frame_rate", seconds=1.0)
+    assert "capture card" in str(error.value)

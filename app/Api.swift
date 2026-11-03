@@ -11,6 +11,7 @@ let maxHoldMS = 10_000
 let maxRemoteHoldMS = 2_000
 /// The PS5 drops a press that follows a release too closely, so every press ends with this much neutral.
 let releaseGapSeconds = 0.06
+let maxMeasureSeconds = 600.0
 
 func bindUnix(_ path: String) -> Int32 {
     unlink(path)
@@ -184,7 +185,7 @@ extension Hub {
     /// Quick commands run in order on the connection's thread; blocking ones run concurrently.
     private func handle(_ cmd: String, _ request: [String: Any], _ conn: Connection) {
         let blocking: Set<String> = ["press", "status", "watch_change", "command", "ping", "padd_start", "padd_stop", "padd_update", "snapshot",
-                                     "rp_button", "rp_text", "rp_keyboard_close"]
+                                     "rp_button", "rp_text", "rp_keyboard_close", "measure_frame_rate"]
         lease.touch(conn: conn.id)
         let work = {
             do {
@@ -217,6 +218,23 @@ extension Hub {
             reply(conn, request, status())
         case "snapshot":
             reply(conn, request, ["ok": sink.writeNow(), "path": stateDir + "/latest.jpg"])
+        case "frame_meter":
+            guard let on = request["on"] as? Bool else { throw BadInput("missing on") }
+            guard frameMeterSupported || !on else {
+                throw BadInput("the frame meter works only with the capture card, not with \(captureVideo)")
+            }
+            setFrameMeter("agent", on: on)
+            reply(conn, request, ["ok": true, "frame_meter": sink.frameMeterReading()?.json as Any? ?? NSNull()])
+        case "measure_frame_rate":
+            guard let seconds = request["seconds"] as? Double, seconds >= 1, seconds <= maxMeasureSeconds else {
+                throw BadInput("seconds must be from 1 to \(Int(maxMeasureSeconds))")
+            }
+            guard frameMeterSupported else {
+                throw BadInput("the frame meter works only with the capture card, not with \(captureVideo)")
+            }
+            var body = measureFrameRate(seconds: seconds).json
+            body["ok"] = true
+            reply(conn, request, body)
         case "capture_restart":
             guard let video = request["video"] as? String else { throw BadInput("missing video") }
             let audio = request["audio"] as? String

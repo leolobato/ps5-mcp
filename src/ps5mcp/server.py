@@ -181,6 +181,33 @@ async def snapshot(max_width: int = 1280) -> Image:
 
 @mcp.tool(structured_output=False)
 @_errors
+async def frame_meter(on: bool = True) -> dict:
+    """Turn the game frame rate meter on or off. Capture card only. While it is on, status() has capture.frame_meter:
+    state (starting, measuring, static, no_signal), fps, low_1pct_fps, gaps (frames lost on the Mac side, not measured),
+    refresh_ms and the recent frame_times_ms. It compares captured frames, so it cannot see above 60 fps, frame times are
+    multiples of about 16.7 ms, a game without vsync reads high, and a very slow scene may read low."""
+    app = await _app()
+    reply = await asyncio.to_thread(app.call, "frame_meter", on=on)
+    return {"on": on, "frame_meter": reply["frame_meter"]}
+
+
+@mcp.tool(structured_output=False)
+@_errors
+async def measure_frame_rate(seconds: float = 10.0) -> dict:
+    """Measure the game's frame rate for a fixed period (1 to 600 seconds) and return once it ends, about a second later
+    if the meter was off. Capture card only. It sends no input and needs no claim, so run it beside the actions that
+    keep the picture moving. Returns fps (average over the moving time), low_1pct_fps (null under 100 frame times),
+    new_frames, frame_times (count per frame time in ms), static_seconds (a still picture is not counted in fps), gaps
+    (frames lost on the Mac side), state (measuring, static, no_signal), seconds and complete (false if the signal ended
+    early). Same limits as frame_meter: nothing above 60 fps, and frame times are multiples of about 16.7 ms."""
+    app = await _app()
+    reply = await asyncio.to_thread(app.call, "measure_frame_rate", seconds=float(seconds), timeout=seconds + 10)
+    reply.pop("ok", None)
+    return reply
+
+
+@mcp.tool(structured_output=False)
+@_errors
 async def press(button: str, hold_ms: int = 80, snapshot_after_ms: int | None = None):
     """Press and release one button (e.g. cross, circle, up, options). Optionally return a frame afterwards."""
     await _apply_for(PadState(buttons=p.button_mask([button])), hold_ms)
@@ -680,6 +707,8 @@ async def status() -> dict:
                        "frame_age_s": hub["frame_age"] if hub["frame_age"] >= 0 else None}
     if hub.get("remote_play"):
         info["capture"]["remote_play"] = hub["remote_play"]  # state, readiness, keyboard.open for type_text
+    if hub.get("frame_meter"):
+        info["capture"]["frame_meter"] = hub["frame_meter"]
     info["app"] = {"version": hub.get("version"), "build": hub.get("build"), "server_version": version("ps5-mcp"),
                    "pid": hub["pid"], "clients": hub["clients"], "agents_holding": link["agent_layers"],
                    "visible": hub["visible"], "notice": hub["notice"], "padd": hub["padd"]}

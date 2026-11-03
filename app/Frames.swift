@@ -3,8 +3,8 @@
 // - camera:     AVCaptureSession; the window draws it with AVCaptureVideoPreviewLayer, audio plays directly.
 // - file:PATH   the image at PATH (re-read when it changes), scaled to 1920x1080, fed at 30 fps.
 // - synthetic   a moving bar on gray, 1920x1080 at 30 fps.
-// Every frame goes to FrameSink: newest frame, <state>/latest.jpg at the snapshot rate, change detection and the
-// video recorder (with the capture card's audio).
+// Every frame goes to FrameSink: newest frame, <state>/latest.jpg at the snapshot rate, change detection, the frame
+// meter and the video recorder (with the capture card's audio).
 
 import AVFoundation
 import CoreImage
@@ -44,9 +44,31 @@ final class FrameSink: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate,
     private var watchThreshold = 0.0
     private var watchCallback: ((Double, Double) -> Void)?
 
-    init(path: String, fps: Double) {
+    // The frame meter runs while something wants it (`meterReasons`) or a recording is going: nothing is compared
+    // otherwise. The differ belongs to the frame queue. --frame-diff-log also logs every comparison, for calibration.
+    private let diffLog: FrameDiffLog?
+    private let differ = FrameDiffer()
+    private let meter = FrameMeter()
+    private var differNeedsReset = false
+    private var meterReasons = Set<String>()
+    /// False for network sources: their frames arrive from a compressed stream, so repeats say nothing about the game.
+    private(set) var meterSupported = true
+
+    init(path: String, fps: Double, diffLog: FrameDiffLog? = nil) {
         self.path = path
         self.interval = fps > 0 ? 1.0 / fps : .infinity
+        self.diffLog = diffLog
+    }
+
+    func captureOutput(_ output: AVCaptureOutput, didDrop sampleBuffer: CMSampleBuffer,
+                       from connection: AVCaptureConnection) {
+        guard !(output is AVCaptureAudioDataOutput) else { return }
+        lock.lock(); let measuring = meterActive; lock.unlock()
+        if measuring { meter.noteDrop() }
+        guard let diffLog else { return }
+        let reason = CMGetAttachment(sampleBuffer, key: kCMSampleBufferAttachmentKey_DroppedFrameReason,
+                                     attachmentModeOut: nil) as? String
+        diffLog.drop(pts: CMSampleBufferGetPresentationTimeStamp(sampleBuffer).seconds, reason: reason ?? "unknown")
     }
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer,
@@ -81,6 +103,8 @@ final class FrameSink: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate,
         audioFormat = nil
         recorder = nil
         reference = nil
+        meter.reset()
+        differNeedsReset = true
         try? FileManager.default.removeItem(atPath: path)
     }
 
@@ -97,15 +121,80 @@ final class FrameSink: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate,
         let timeline = timeline
         let shouldWrite = now - lastWrite >= interval
         if shouldWrite { lastWrite = now }
+        let measuring = meterActive
+        let resetDiffer = differNeedsReset
+        differNeedsReset = false
         lock.unlock()
         recorder?.append(buffer, at: time)
         if callback != nil { checkChange(buffer, at: now, timeline: timeline) }
-        if shouldWrite { write(buffer, timeline: timeline) }
+        var difference: FrameDifference?
+        var compareMicros = 0
+        if measuring || diffLog != nil {
+            if resetDiffer { differ.reset() }
+            let started = uptimeSeconds()
+            difference = differ.compare(buffer)
+            compareMicros = Int((uptimeSeconds() - started) * 1_000_000)
+        }
+        if measuring {
+            let frame = meter.add(pts: time.seconds, difference: difference)
+            recorder?.append(frame, at: time)
+        }
+        var snapshotMicros: Int?
+        if shouldWrite {
+            let started = uptimeSeconds()
+            write(buffer, timeline: timeline)
+            snapshotMicros = Int((uptimeSeconds() - started) * 1_000_000)
+        }
+        diffLog?.frame(pts: time.seconds, difference: difference, compareMicros: compareMicros,
+                       snapshotMicros: snapshotMicros)
+    }
+
+    /// Call with `lock` held.
+    private var meterActive: Bool { meterSupported && (!meterReasons.isEmpty || recorder != nil) }
+
+    /// Call with `lock` held. A meter that was off starts from nothing.
+    private func changingMeter(_ change: () -> Void) {
+        let before = meterActive
+        change()
+        if meterActive && !before {
+            meter.reset()
+            differNeedsReset = true
+        }
+    }
+
+    func setFrameMeter(reasons: Set<String>, supported: Bool) {
+        lock.lock(); defer { lock.unlock() }
+        changingMeter {
+            meterReasons = reasons
+            meterSupported = supported
+        }
+    }
+
+    /// The meter's numbers while it runs, else nil.
+    func frameMeterReading() -> FrameMeterReading? {
+        lock.lock()
+        let measuring = meterActive, age = lastFrameAt > 0 ? uptimeSeconds() - lastFrameAt : -1
+        lock.unlock()
+        guard measuring else { return nil }
+        var reading = meter.reading()
+        if age < 0 || age > 1 {
+            reading.state = .noSignal
+            reading.fps = nil
+        }
+        return reading
+    }
+
+    /// Counts `seconds` of signal, then returns. It gives up `patience` seconds later and reports what it has.
+    func measureFrames(seconds: Double, patience: Double) -> FrameMeterSummary {
+        let run = meter.begin(seconds: seconds)
+        _ = run.done.wait(timeout: .now() + seconds + patience)
+        return meter.finish(run)
     }
 
     /// Frames (and audio) go to `recorder` from the next one on; nil stops feeding it.
     func record(_ recorder: VideoRecorder?) {
-        lock.lock(); self.recorder = recorder; lock.unlock()
+        lock.lock(); defer { lock.unlock() }
+        changingMeter { self.recorder = recorder }
     }
 
     func previewDrawn() { lock.lock(); previewFrames += 1; lock.unlock() }

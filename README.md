@@ -182,7 +182,7 @@ Quit with **⌘Q** or `uv run ps5mcp capture stop`.
 
 | Feature | Tools |
 |---|---|
-| Capture and status | `snapshot`, `status`, `show_viewer` |
+| Capture and status | `snapshot`, `status`, `show_viewer`, `frame_meter`, `measure_frame_rate` |
 | Controller input | `press`, `hold`, `stick`, `trigger`, `touchpad`, `sequence`, `release_all` |
 | Console apps | `home`, `close_app`, `launch`, `list_apps`, `install`, `uninstall_apps` |
 | More players | `connect_controller`, `disconnect_controller`, `use_controller` |
@@ -269,6 +269,21 @@ Existing titles are not changed automatically. A read-only permission audit can 
 | `PS5MCP_FTP_AUTOSTART=0` | Never start zftpd (for example, during experiments that must not load extra payloads) |
 | `PS5MCP_FTP_PORT` | zftpd's port (default 2120) |
 | `PS5MCP_SMP_PORT` | ShadowMount's API port for native-title registration checks (default 10101) |
+
+### Frame meter
+
+**View → Show Frame Meter** (⌥⌘F) draws the frame rate, the 1% low, and a scrolling frame-time graph over the video.
+A video recorded while it runs also gets a CSV of the same numbers with the same name. The graph itself is not in the
+video. Agents use the `frame_meter` tool, then read `capture.frame_meter` from `status`. To get one result for a fixed
+period, agents use `measure_frame_rate(seconds)`.
+
+The capture card delivers a fixed 60 fps, so the meter compares each frame with the one before: a frame counts only if
+the picture changed. It works only with the capture card, and it has these limits:
+
+- It cannot see above 60 fps, so it cannot measure 120 fps or 40 fps modes. Frame times are multiples of about 16.7 ms.
+- A game without vsync reads too high, because nearly every captured frame contains new content.
+- A very slow scene may read too low, because its small changes are hard to tell from compression noise.
+- A screen that barely changes reads "static", and so does a real stall longer than about a second.
 
 ### Browser viewing
 

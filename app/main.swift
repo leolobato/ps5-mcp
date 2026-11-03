@@ -6,6 +6,7 @@
 //
 // Usage: PS5 [--state-dir DIR] [--video NAME|remoteplay|pbs|file:PATH|synthetic] [--audio NAME|none] [--headless]
 //            [--host H] [--port N] [--pbs-port N (PBS=1 builds)] [--features] [--no-auto-assign] [--padd-cli EXE] [--snapshot-fps N]
+//            [--frame-diff-log PATH]
 //        PS5 --dialog-score IMAGE   (prints the assignment-dialog match score and exits)
 //        PS5 --dialog-users IMAGE   (prints the dialog's profile names, left to right, and exits)
 
@@ -18,6 +19,8 @@ struct Config {
     var audio: String? = UserDefaults.standard.string(forKey: captureAudioKey)
     var headless = false
     var snapshotFPS = 5.0
+    /// A CSV of every frame's difference from the one before, for calibrating the frame meter.
+    var frameDiffLog: String?
     /// --host, else PS5_HOST, else the address saved in Settings. No default: see missingHost.
     var host = ProcessInfo.processInfo.environment["PS5_HOST"] ?? ""
     /// Where `host` came from: "--host", "PS5_HOST", "settings" or "none".
@@ -49,6 +52,7 @@ struct Config {
             case "--video": video = value; i += 1
             case "--audio": audio = value == "none" ? nil : value; i += 1
             case "--snapshot-fps": snapshotFPS = Double(value) ?? 5; i += 1
+            case "--frame-diff-log": frameDiffLog = value; i += 1
             case "--host": host = value; hostSource = "--host"; i += 1
             case "--port": port = UInt16(value) ?? PMCP.port; i += 1
             #if PS5MCP_PBS

@@ -46,6 +46,7 @@ final class VideoRecorder {
     var done: ((String?) -> Void)?
     func append(_ buffer: CVPixelBuffer, at time: CMTime) {}
     func append(audio: CMSampleBuffer) {}
+    func append(_ frame: FrameMeterFrame, at time: CMTime) {}
     func finish(_ done: @escaping (String?) -> Void) { self.done=done }
 }
 final class SnapshotTestLock {
@@ -180,7 +181,7 @@ func drain(until condition: () -> Bool, timeout: Double=2) {
 '''.replace("HOST_CHANGE", host_change).replace("METHODS", methods).replace("PLAYBACK", playback)
     (directory / "Harness.swift").write_text(source)
     binary = directory / "recovery-tests"
-    compiled = subprocess.run(["swiftc", str(directory / "Frames.swift"), str(directory / "Harness.swift"), "-framework", "AVFoundation", "-framework", "CoreImage", "-o", str(binary)], capture_output=True, text=True, check=False)
+    compiled = subprocess.run(["swiftc", str(directory / "Frames.swift"), str(ROOT / "app/FrameDiff.swift"), str(ROOT / "app/FrameMeter.swift"), str(directory / "Harness.swift"), "-framework", "AVFoundation", "-framework", "CoreImage", "-o", str(binary)], capture_output=True, text=True, check=False)
     assert compiled.returncode == 0, compiled.stderr
     return binary
 

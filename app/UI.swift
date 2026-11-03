@@ -503,6 +503,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
     private var videoToolbarItem: NSToolbarItem?
     private var audioToolbarItem: NSToolbarItem?
     private var videoHidden = UserDefaults.standard.bool(forKey: "videoHidden")
+    private var frameMeterShown = UserDefaults.standard.bool(forKey: "frameMeterShown")
+    private let frameMeterOverlay = FrameMeterOverlay()
+    private var frameMeterMenuItem: NSMenuItem!
+    private static let startingFrameMeter = FrameMeterReading(state: .starting, gaps: 0, refreshMs: 1000.0 / 60, samples: [], now: 0)
     private var audioMuted = UserDefaults.standard.bool(forKey: "audioMuted")
     private var previewLayer: CALayer!
     private let hiddenVideoLabel = NSTextField(labelWithString: "Video hidden")
@@ -555,6 +559,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         video.layer = CALayer()
         video.layer?.backgroundColor = NSColor.black.cgColor
         attachCapturePreview()
+        video.layer?.addSublayer(frameMeterOverlay.layer)
+        frameMeterOverlay.layer.isHidden = !frameMeterShown
+        if frameMeterShown { hub.setFrameMeter("overlay", on: true) }
         hiddenVideoLabel.textColor = .secondaryLabelColor
         hiddenVideoLabel.translatesAutoresizingMaskIntoConstraints = false
         hiddenVideoLabel.isHidden = !videoHidden
@@ -697,6 +704,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         audioMenuItem.keyEquivalentModifierMask = [.command, .option]
         audioMenuItem.target = self
         viewMenu.addItem(audioMenuItem)
+        frameMeterMenuItem = NSMenuItem(title: frameMeterShown ? "Hide Frame Meter" : "Show Frame Meter",
+                                        action: #selector(toggleFrameMeter), keyEquivalent: "f")
+        frameMeterMenuItem.keyEquivalentModifierMask = [.command, .option]
+        frameMeterMenuItem.target = self
+        viewMenu.addItem(frameMeterMenuItem)
         viewMenu.addItem(.separator())
         keyboardMenuItem = NSMenuItem(title: "Show Keyboard Panel", action: #selector(toggleKeyboardPanel), keyEquivalent: "k")
         keyboardMenuItem.keyEquivalentModifierMask = [.control, .option]
@@ -834,6 +846,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         window.makeFirstResponder(video)
     }
 
+    @objc func toggleFrameMeter() {
+        frameMeterShown.toggle()
+        UserDefaults.standard.set(frameMeterShown, forKey: "frameMeterShown")
+        hub.setFrameMeter("overlay", on: frameMeterShown)
+        frameMeterMenuItem.title = frameMeterShown ? "Hide Frame Meter" : "Show Frame Meter"
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        frameMeterOverlay.layer.isHidden = !frameMeterShown
+        CATransaction.commit()
+        drawFrame()
+        window.makeFirstResponder(video)
+    }
+
     @objc func toggleAudio() {
         audioMuted.toggle()
         UserDefaults.standard.set(audioMuted, forKey: "audioMuted")
@@ -864,6 +889,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
 
     /// Shows the newest frame of a source that has no preview layer of its own (all but the capture card).
     @objc private func drawFrame() {
+        if frameMeterShown, window.isVisible {
+            frameMeterOverlay.update(hub.frameMeterSupported ? hub.sink.frameMeterReading() ?? Self.startingFrameMeter : nil,
+                                     in: video.bounds, scale: window.backingScaleFactor)
+        }
         guard imageLayer != nil, !videoHidden, window.isVisible else { return }
         let buffer = hub.sink.latestBuffer()
         if buffer === shownBuffer { return }
@@ -1856,6 +1885,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
                 defer { self.window.makeFirstResponder(self.video) }
                 guard response == .OK, let url = panel.url else {
                     try? FileManager.default.removeItem(at: recorder.url)
+                    try? FileManager.default.removeItem(at: VideoRecorder.meterCSV(for: recorder.url))
                     self.videoSaved("Video discarded.")
                     return
                 }
@@ -1905,13 +1935,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
 
     /// Moves the finished file into place; returns the notice to show.
     private func moveVideo(_ from: URL, to url: URL) -> String {
+        let csv = VideoRecorder.meterCSV(for: from)
         do {
             try? FileManager.default.removeItem(at: url)  // the save panel already asked to replace it
             try FileManager.default.moveItem(at: from, to: url)
-            return "Saved video to \(url.lastPathComponent)."
         } catch {
             try? FileManager.default.removeItem(at: from)
+            try? FileManager.default.removeItem(at: csv)
             return "Video not saved: \(error.localizedDescription)"
+        }
+        // Frame times from a video this one replaced would no longer match it.
+        let target = VideoRecorder.meterCSV(for: url)
+        try? FileManager.default.removeItem(at: target)
+        guard FileManager.default.fileExists(atPath: csv.path) else { return "Saved video to \(url.lastPathComponent)." }
+        // The video is safe by now: a CSV that cannot move stays where it is and does not undo the save.
+        do {
+            try FileManager.default.moveItem(at: csv, to: target)
+            return "Saved video and frame times to \(url.lastPathComponent)."
+        } catch {
+            return "Saved video to \(url.lastPathComponent). Frame times stayed at \(csv.path)."
         }
     }
 

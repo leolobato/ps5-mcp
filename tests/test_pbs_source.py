@@ -281,7 +281,8 @@ def test_load_reconnect_and_stop_payload(pbs, tmp_path):
     binary = tmp_path / "pbs-tests"
     compiled = subprocess.run([
         "swiftc", *(str(ROOT / "app" / name) for name in ("PBSSource.swift", "RemotePlayDecoder.swift",
-                                                         "RemotePlayAudio.swift", "Frames.swift", "Video.swift")),
+                                                         "RemotePlayAudio.swift", "Frames.swift", "FrameDiff.swift", "FrameMeter.swift",
+                                                         "Video.swift")),
         str(ROOT / "tests/native/PBSSourceTests.swift"), "-parse-as-library", "-D", "PS5MCP_PBS", "-framework", "VideoToolbox",
         "-framework", "AVFoundation", "-framework", "CoreImage", "-framework", "AppKit", "-o", str(binary),
     ], check=False, capture_output=True, text=True)

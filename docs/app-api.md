@@ -116,12 +116,14 @@ free, every client drives it as before.
 
 | cmd | fields | reply |
 |---|---|---|
-| `status` | `wait?` (seconds to wait for the padd link) | `pid`, `frames`, `preview_frames` (frames the window has shown; the capture card's own preview does not count), `frame_age`, `visible`, `now` (uptime clock = Python `time.monotonic`), `source`, `clients`, `pad` (link, hello, counters, `human_has_control`, `agent_layers`, `paused`), `title`, `notice`, `padd`, `auto_assign`, `controllers` (`active` 1 or 2, `second` (controller 2 connected), `supported` (padd 1.7), `list` [{`controller`, `handle`, `user_id`, `user_name`}], `signed_out` [{`user_id`, `name`}]: users seen signed in before who are not now), `login_users` (padd 1.7: `status`, `foreground`, `second` (the user controller 2 is for, or null), `users` [{`user_id`, `name`}]; null before padd 1.7) |
+| `status` | `wait?` (seconds to wait for the padd link) | `pid`, `frames`, `preview_frames` (frames the window has shown; the capture card's own preview does not count), `frame_age`, `visible`, `now` (uptime clock = Python `time.monotonic`), `source`, `clients`, `pad` (link, hello, counters, `human_has_control`, `agent_layers`, `paused`), `title`, `notice`, `padd`, `auto_assign`, `frame_meter` (see the `frame_meter` command; null while off), `controllers` (`active` 1 or 2, `second` (controller 2 connected), `supported` (padd 1.7), `list` [{`controller`, `handle`, `user_id`, `user_name`}], `signed_out` [{`user_id`, `name`}]: users seen signed in before who are not now), `login_users` (padd 1.7: `status`, `foreground`, `second` (the user controller 2 is for, or null), `users` [{`user_id`, `name`}]; null before padd 1.7) |
 | `snapshot` | | Writes `<state>/latest.jpg` now and returns `path` (it is also rewritten at 5 fps). |
 | `capture_restart` | `video` (device ID/name, `file:PATH`, `synthetic`, `remoteplay`, or empty to disable), `audio?` (device ID/name or `none`) | Restarts capture without closing API clients. Blocked by another client's lease or an active video recording. Does not save preferences; Settings saves selected device IDs. |
 | `watch_change` | `threshold` (6), `timeout_s` (2) | Two replies: `armed_at`, then `changed_at` and `diff`, or `ok: false` on timeout. |
 | `show` / `hide` | | Shows or hides the window. |
 | `quit` | | Releases input, drops the padd link (padd keeps running) and exits. |
+| `frame_meter` | `on` (bool) | Turns the frame meter on or off for agents, independently of the window's View menu. It stays on after the client disconnects, until a client turns it off. Returns `frame_meter`, as `status` does while it runs: `state` (`starting`, `measuring`, `static`, `no_signal`), `fps` and `low_1pct_fps` (null when not measurable), `gaps` (frames lost on the Mac side, which nothing is measured across), `refresh_ms` and `frame_times_ms` (up to the latest 120). `bad_request` on Remote Play. |
+| `measure_frame_rate` | `seconds` (1 to 600) | Replies when the period ends. The meter's first second does not count, so turning it on adds about a second. It does not disturb a meter that is already on. Returns `complete` (false if the signal did not last: the reply then comes 3 s after the period and holds what was counted), `seconds`, `static_seconds`, `state` (`measuring`, `static`, `no_signal`), `fps` (average over the moving time, else null), `low_1pct_fps` (null under 100 frame times), `new_frames`, `gaps`, `refresh_ms`, `frame_times` [{`ms`, `count`}]. `bad_request` on Remote Play. |
 | `subscribe` | `events`: `status`, `state` | `state` events are `{"t": uptime, "state": {...}}` for every change of the merged state. `status` events carry the `status` body. |
 
 ## Auto-assign
@@ -139,7 +141,7 @@ Disable it with `--no-auto-assign` or `PS5MCP_AUTO_ASSIGN=0`.
 ## Launch options
 
 `"PS5 MCP" [--state-dir DIR] [--video NAME|file:PATH|synthetic|remoteplay] [--audio NAME|none] [--headless] [--host H] [--port N]
-[--no-auto-assign] [--padd-cli EXE] [--snapshot-fps N]`
+[--no-auto-assign] [--padd-cli EXE] [--snapshot-fps N] [--frame-diff-log PATH]`
 
 - The console address is `--host`, else `PS5_HOST`, else the address saved in Settings (UserDefaults key
   `consoleHost`). Saving in Settings also switches the running app to it.
