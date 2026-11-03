@@ -33,7 +33,7 @@ struct FrameMeterReading {
     let gaps: Int
     let refreshMs: Double
     let samples: [FrameMeterSample]
-    /// The graph's right edge. It stops moving on a still picture, which pauses the graph.
+    /// The graph's right edge. It keeps moving on a still picture, so the line scrolls off and leaves a break.
     let now: Double
 
     var json: [String: Any] {
@@ -102,7 +102,6 @@ final class FrameMeter {
     private var dropPending = false
     private var gaps = 0
     private var state = FrameMeterState.starting
-    private var frozenAt: Double?
     private var period = 1.0 / 60
     private var deltas: [Double] = []
     private var deltaCount = 0
@@ -193,15 +192,11 @@ final class FrameMeter {
         let full = pts - started >= Self.window
         if full {
             if changedInWindow < Self.stillBelow {
-                if state != .stillPicture {
-                    frozenAt = pts
-                    recountWindowAsStill()
-                }
+                if state != .stillPicture { recountWindowAsStill() }
                 state = .stillPicture
                 lastChanged = nil
             } else {
                 state = .measuring
-                frozenAt = nil
             }
         }
         var frameTime: Double?
@@ -225,7 +220,7 @@ final class FrameMeter {
     /// The trailing `seconds` of frame times, and the current numbers.
     func reading(seconds: Double = 10) -> FrameMeterReading {
         lock.lock(); defer { lock.unlock() }
-        let now = frozenAt ?? lastPTS ?? 0
+        let now = lastPTS ?? 0
         var first = samples.count
         while first > samplesHead, samples[first - 1].time >= now - seconds { first -= 1 }
         return FrameMeterReading(state: state, fps: state == .measuring ? currentFps() : nil,
@@ -273,7 +268,6 @@ final class FrameMeter {
         started = 0
         dropPending = false
         state = .starting
-        frozenAt = nil
         recent.removeAll(keepingCapacity: true)
         recentHead = 0
         changedInWindow = 0

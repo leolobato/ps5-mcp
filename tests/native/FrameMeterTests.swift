@@ -78,7 +78,7 @@ func feed(_ meter: FrameMeter, _ pattern: String, seconds: Double, from start: i
         require(gapped.gaps == 1, "a drop is a gap, got \(gapped.gaps)")
         require(near(gapped.fps, 60, 0.5), "lost frames do not lower the frame rate")
 
-        // A still picture: stops measuring, freezes the graph, and survives an on-screen counter changing each second.
+        // A still picture: stops measuring, keeps the graph moving, and survives an on-screen counter changing each second.
         meter = FrameMeter()
         time = 0
         feed(meter, "X.", seconds: 2, from: &time)
@@ -89,8 +89,10 @@ func feed(_ meter: FrameMeter, _ pattern: String, seconds: Double, from start: i
         require(still.state == .stillPicture, "a counter ticking on a still screen reads static")
         require(still.fps == nil, "a still picture has no frame rate")
         require(still.samples.count <= before + 30, "the graph stops gaining samples")
-        require(still.now < time - 3, "the graph's clock stops")
+        require(still.now > time - 0.1, "the graph's clock keeps running")
         let longest = still.samples.map(\.milliseconds).max() ?? 0
+        feed(meter, pattern, seconds: 11, from: &time)
+        require(meter.reading().samples.isEmpty, "the old line scrolls off the graph")
         require(longest < 100, "the wait is not a frame time, got \(longest)")
         feed(meter, "X.", seconds: 2, from: &time)
         let recovered = meter.reading()
