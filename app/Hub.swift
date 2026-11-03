@@ -119,6 +119,18 @@ final class Hub {
 
     /// Called on the main thread after the previous source and preview have been stopped and detached.
     func configureCapture(video: String, audio: String?) {
+        #if !PS5MCP_PBS
+        // Saved by a build with PBS, or asked for by name or through the API: this build has no such source.
+        var video = video, audio = audio
+        if video == "pbs" {
+            let card = CaptureDevices.video.first { $0.deviceType == .external }
+            video = card?.uniqueID ?? ""
+            audio = card.flatMap { card in
+                CaptureDevices.audio.first { $0.localizedName == card.localizedName }?.uniqueID
+            }
+            say("this build has no PBS source (make app PBS=1); using \(card?.localizedName ?? "no capture device")")
+        }
+        #endif
         captureGeneration &+= 1
         controller.setInputBlock(video == "remoteplay" ? "Remote Play is not delivering video; reconnect before sending input." : nil)
         captureVideo = video
@@ -189,10 +201,6 @@ final class Hub {
                 }
                 source = pbs
             }
-        #else
-        case "pbs":
-            source = UnavailableSource()
-            captureIssue = "This build has no PBS source: build with make app PBS=1."
         #endif
         case "synthetic":
             source = SyntheticSource(sink: sink)
@@ -305,6 +313,33 @@ final class Hub {
         }
         if notice == missingHost { notice = nil }
         statusChanged()
+    }
+
+    static let assignNoticePrefix = "The PS5 asks"
+    private var assignCheckRunning = false
+    /// The request being watched: the dialog can reach the video after the request, so it ends only once it was seen.
+    private var assignWatch: (notice: String?, seen: Bool, since: Double) = (nil, false, 0)
+
+    /// Someone answered the dialog on the console: stop asking. Only with a live picture, since no video proves nothing.
+    func clearAnsweredAssignNotice() {
+        lock.lock(); let busy = assignCheckRunning; assignCheckRunning = true; lock.unlock()
+        guard !busy else { return }
+        let asked = notice
+        DispatchQueue.global().async { [self] in
+            defer { lock.lock(); assignCheckRunning = false; lock.unlock() }
+            guard let assigner, sink.frameAge >= 0, sink.frameAge < 2, let frame = sink.latestBuffer() else { return }
+            let open = assigner.score(frame) >= Assigner.minScore
+            lock.lock()
+            if assignWatch.notice != asked { assignWatch = (asked, false, uptimeSeconds()) }
+            if open { assignWatch.seen = true }
+            // Answered before a frame showed it: give up after a while rather than ask forever.
+            let over = !open && (assignWatch.seen || uptimeSeconds() - assignWatch.since > 30)
+            let unchanged = noticeText == asked
+            if over && unchanged { noticeText = nil }
+            lock.unlock()
+            guard over else { return }
+            if unchanged { statusChanged() }
+        }
     }
 
     #if PS5MCP_PBS

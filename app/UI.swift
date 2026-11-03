@@ -35,27 +35,209 @@ final class VideoView: NSView {
     override func mouseDown(with event: NSEvent) { window?.makeFirstResponder(self) }
 }
 
-final class Sidebar: NSStackView {
-    let fields = ["Link", "padd", "Pad", "User", "Reports", "Frame age", "Clients", "Control", "In use by"]
-    private var values: [String: NSTextField] = [:]
-    let notice = NSTextField(wrappingLabelWithString: "")
-    /// Keyed by id, not title: titles change ("Record" / "Stop") and repeat across sections.
-    var buttons: [String: NSButton] = [:]
-    let titles = NSPopUpButton(frame: .zero, pullsDown: false)
-    let recordings = NSPopUpButton(frame: .zero, pullsDown: false)
-    /// The controller keyboard, API and MCP input drive: 1 (foreground user) or 2 (second user, when connected).
-    let controllerPicker = NSPopUpButton(frame: .zero, pullsDown: false)
-    private let keyboard = NSGridView()
-    private let keyboardToggle = NSButton()
+extension NSBox {
+    /// A box's own content view has no constraints, so a box sized by its content needs one pinned inside it.
+    func pin(_ view: NSView) {
+        let holder = NSView()
+        contentView = holder
+        contentViewMargins = .zero
+        view.translatesAutoresizingMaskIntoConstraints = false
+        holder.addSubview(view)
+        NSLayoutConstraint.activate([
+            view.topAnchor.constraint(equalTo: holder.topAnchor),
+            view.bottomAnchor.constraint(equalTo: holder.bottomAnchor),
+            view.leadingAnchor.constraint(equalTo: holder.leadingAnchor),
+            view.trailingAnchor.constraint(equalTo: holder.trailingAnchor),
+        ])
+    }
+}
+
+/// A tinted message at the top of the sidebar, shown only while something needs attention.
+final class Banner: NSBox {
+    enum Tone { case neutral, info, attention, error }
+    private let heading = NSTextField(labelWithString: "")
+    private let message = NSTextField(wrappingLabelWithString: "")
+    private let action = NSButton(title: "", target: nil, action: nil)
+    private let stack: NSStackView
+    private weak var actionTarget: AnyObject?
 
     init(target: AnyObject) {
+        actionTarget = target
+        stack = NSStackView(views: [heading, message, action])
+        super.init(frame: .zero)
+        boxType = .custom
+        titlePosition = .noTitle
+        cornerRadius = 8
+        borderWidth = 1
+        contentViewMargins = .zero
+        heading.font = .systemFont(ofSize: 12, weight: .semibold)
+        heading.lineBreakMode = .byTruncatingTail
+        heading.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        message.font = .systemFont(ofSize: 11)
+        action.bezelStyle = .rounded
+        action.controlSize = .small
+        action.refusesFirstResponder = true  // keys stay with the video
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 3
+        stack.edgeInsets = NSEdgeInsets(top: 8, left: 10, bottom: 8, right: 10)
+        stack.setCustomSpacing(6, after: message)
+        pin(stack)
+        isHidden = true
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func show(_ tone: Tone, title: String, body: String, actionTitle: String? = nil, selector: Selector? = nil,
+              enabled: Bool = true, wrap: CGFloat = 250) {
+        let color: NSColor = tone == .info ? .systemBlue : tone == .attention ? .systemOrange : tone == .error ? .systemRed : .gray
+        fillColor = color.withAlphaComponent(0.13)
+        borderColor = color.withAlphaComponent(0.4)
+        heading.stringValue = title
+        heading.toolTip = title
+        heading.isHidden = title.isEmpty
+        message.stringValue = body
+        message.toolTip = body
+        message.preferredMaxLayoutWidth = wrap
+        action.isHidden = actionTitle == nil
+        action.title = actionTitle ?? ""
+        action.target = actionTarget
+        action.action = selector
+        action.isEnabled = enabled
+        isHidden = false
+    }
+
+    func hide() { isHidden = true }
+
+    /// Buttons that stay under the message, for a box with its own controls.
+    func addButtons(_ buttons: [NSButton]) {
+        let row = NSStackView(views: buttons)
+        row.spacing = 6
+        buttons.forEach { $0.controlSize = .small }
+        stack.addArrangedSubview(row)
+    }
+}
+
+/// One connected controller. With several, the selected row is the one that gets the input.
+final class ControllerRow: NSBox {
+    private let select = NSButton(title: "", target: nil, action: nil)
+    private let tagLabel = NSTextField(labelWithString: "Input")
+    let remove = NSButton(title: "", target: nil, action: nil)
+
+    init(target: AnyObject) {
+        super.init(frame: .zero)
+        boxType = .custom
+        titlePosition = .noTitle
+        cornerRadius = 6
+        borderWidth = 0
+        contentViewMargins = .zero
+        select.isBordered = false
+        select.alignment = .left
+        select.refusesFirstResponder = true  // keys stay with the video
+        select.target = target
+        select.action = #selector(AppDelegate.chooseController(_:))
+        select.setContentHuggingPriority(.init(1), for: .horizontal)
+        select.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        select.lineBreakMode = .byTruncatingTail
+        tagLabel.font = .systemFont(ofSize: 11)
+        remove.isBordered = false
+        remove.image = NSImage(systemSymbolName: "minus.circle", accessibilityDescription: "Remove this controller")
+        remove.imagePosition = .imageOnly
+        remove.refusesFirstResponder = true
+        remove.target = target
+        remove.action = #selector(AppDelegate.removeController)
+        remove.toolTip = "Remove this controller; input goes back to controller 1"
+        remove.setContentHuggingPriority(.required, for: .horizontal)
+        let stack = NSStackView(views: [select, tagLabel, remove])
+        stack.spacing = 6
+        stack.edgeInsets = NSEdgeInsets(top: 0, left: 8, bottom: 0, right: 6)
+        pin(stack)
+        translatesAutoresizingMaskIntoConstraints = false
+        heightAnchor.constraint(equalToConstant: 26).isActive = true
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func show(pad: Int, name: String?, selected: Bool, several: Bool, enabled: Bool) {
+        let on = selected && several
+        fillColor = on ? .controlAccentColor : .clear
+        let ink: NSColor = on ? .white : enabled ? .labelColor : .tertiaryLabelColor
+        let title = NSMutableAttributedString(string: "\(pad)   ", attributes: [
+            .font: NSFont.systemFont(ofSize: 13, weight: .bold), .foregroundColor: on ? ink : NSColor.secondaryLabelColor])
+        title.append(NSAttributedString(string: name ?? "Controller \(pad)", attributes: [
+            .font: NSFont.systemFont(ofSize: 13, weight: on ? .semibold : .regular), .foregroundColor: ink]))
+        select.attributedTitle = title
+        select.tag = pad
+        select.isEnabled = enabled && several
+        select.setAccessibilityLabel("Controller \(pad)" + (name.map { ", \($0)" } ?? ""))
+        select.toolTip = several ? "Send the keyboard, the API and MCP agents' input to controller \(pad)" : nil
+        tagLabel.isHidden = !on
+        tagLabel.textColor = ink
+        remove.isHidden = !on || pad == 1
+        remove.contentTintColor = ink
+        isHidden = false
+    }
+}
+
+final class Sidebar: NSStackView {
+    static let width: CGFloat = 300
+    let fields = ["Link", "padd", "Pad", "User", "Reports", "Frame age", "Clients", "Control", "In use by"]
+    private var values: [String: NSTextField] = [:]
+    /// Keyed by id, not title: titles change ("Record" / "Stop") and repeat across sections.
+    var buttons: [String: NSButton] = [:]
+    /// Whether each command can run now. Rarely used ones have no button: only the More and main menus show them.
+    private var commands: [String: Bool] = [:]
+    var tips: [String: String] = [:]
+    let titles = NSPopUpButton(frame: .zero, pullsDown: false)
+    let recordings = NSPopUpButton(frame: .zero, pullsDown: false)
+    let connectionBanner: Banner
+    let agentBanner: Banner
+    let noticeBanner: Banner
+    let remotePlayBox: Banner
+    private let statusDot = NSTextField(labelWithString: "●")
+    private let statusButton = NSButton(title: "", target: nil, action: nil)
+    private let details = NSStackView()
+    private let detailsSource = NSTextField(labelWithString: "")
+    private let pressesStatus = NSTextField(labelWithString: "")
+    private let controllersHeading: NSTextField
+    private var controllerRows: [ControllerRow] = []
+
+    init(target: AnyObject) {
+        connectionBanner = Banner(target: target)
+        agentBanner = Banner(target: target)
+        noticeBanner = Banner(target: target)
+        remotePlayBox = Banner(target: target)
+        controllersHeading = Self.header("Controller")
         super.init(frame: .zero)
         orientation = .vertical
         alignment = .leading
         spacing = 6
-        edgeInsets = NSEdgeInsets(top: 14, left: 14, bottom: 14, right: 14)
+        edgeInsets = NSEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
+
+        // What is going on, then what is used most: capture, the console, launching. Controllers come last, since
+        // almost every session has one. Rare commands are in the More menu.
+        statusDot.font = .systemFont(ofSize: 11)
+        statusDot.setContentHuggingPriority(.required, for: .horizontal)
+        statusButton.isBordered = false
+        statusButton.alignment = .left
+        statusButton.font = .systemFont(ofSize: 13, weight: .semibold)
+        statusButton.imagePosition = .imageTrailing
+        statusButton.refusesFirstResponder = true
+        statusButton.lineBreakMode = .byTruncatingTail
+        statusButton.target = self
+        statusButton.action = #selector(toggleDetails)
+        statusButton.setContentHuggingPriority(.init(1), for: .horizontal)
+        statusButton.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        statusButton.toolTip = "Show or hide the connection details"
+        let more = button("more", "", "ellipsis.circle", #selector(AppDelegate.showMoreMenu(_:)), target)
+        more.setAccessibilityLabel("More: input, agents, games, install, padd")
+        more.toolTip = "Release input, agents, reload games, install and padd"
+        more.setContentHuggingPriority(.required, for: .horizontal)
+        full(row([statusDot, statusButton, more], equal: false, spacing: 6))
+        setCustomSpacing(10, after: arrangedSubviews.last!)
+
         let grid = NSGridView()
-        grid.rowSpacing = 4
+        grid.rowSpacing = 3
         grid.columnSpacing = 8
         for field in fields {
             let label = NSTextField(labelWithString: field)
@@ -76,180 +258,185 @@ final class Sidebar: NSStackView {
             holder.cell?.truncatesLastVisibleLine = true
             let labelWidth = (0..<grid.numberOfRows).compactMap { grid.cell(atColumnIndex: 0, rowIndex: $0).contentView }
                 .map(\.fittingSize.width).max() ?? 0
-            holder.preferredMaxLayoutWidth = 260 - 28 - grid.columnSpacing - ceil(labelWidth)
+            holder.preferredMaxLayoutWidth = Self.width - 28 - grid.columnSpacing - ceil(labelWidth)
             grid.row(at: fields.firstIndex(of: "In use by")!).yPlacement = .top
         }
-        // Status, then padd, then what acts on the console as it is now (Console), on a chosen game (Launch),
-        // on the picture (Capture), on recorded input (Recordings) and on what is installed (Install).
-        addArrangedSubview(header("Status"))
-        addArrangedSubview(grid)
-        section("padd")
-        full(row([button("paddStart", "Start", "play.fill", #selector(AppDelegate.startPadd), target),
-                  button("paddUpdate", "Update", "arrow.triangle.2.circlepath", #selector(AppDelegate.updatePadd),
-                         target),
-                  button("paddStop", "Stop", "stop.fill", #selector(AppDelegate.stopPadd), target)]))
-        controllerPicker.refusesFirstResponder = true  // keys stay with the video
-        controllerPicker.addItem(withTitle: "Controller 1")
-        controllerPicker.target = target
-        controllerPicker.action = #selector(AppDelegate.chooseController)
-        controllerPicker.toolTip = "The virtual controller that the keyboard, the API and MCP agents drive"
-        controllerPicker.setAccessibilityLabel("Controlled controller")
-        let pickerLabel = NSTextField(labelWithString: "Input to")
-        pickerLabel.font = .systemFont(ofSize: 11)
-        pickerLabel.textColor = .secondaryLabelColor
-        pickerLabel.setContentHuggingPriority(.required, for: .horizontal)
-        // One row however many controllers there are: the menu lists them, + adds one, − removes the selected one.
-        let add = button("addController", "", "plus", #selector(AppDelegate.addController(_:)), target)
-        let remove = button("removeController", "", "minus", #selector(AppDelegate.removeController), target)
-        add.setAccessibilityLabel("Add a controller")
-        remove.setAccessibilityLabel("Remove the selected controller")
-        for view in [add, remove] { view.setContentHuggingPriority(.required, for: .horizontal) }
-        controllerPicker.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        controllerPicker.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        full(row([pickerLabel, controllerPicker, add, remove], equal: false, spacing: 4))
+        detailsSource.font = .systemFont(ofSize: 11)
+        detailsSource.textColor = .secondaryLabelColor
+        detailsSource.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        detailsSource.setContentHuggingPriority(.init(1), for: .horizontal)
+        let settings = button("detailsSettings", "Settings…", nil, #selector(AppDelegate.showSettings), target)
+        settings.controlSize = .small
+        settings.setContentHuggingPriority(.required, for: .horizontal)
+        details.orientation = .vertical
+        details.alignment = .leading
+        details.spacing = 6
+        details.addArrangedSubview(grid)
+        details.addArrangedSubview(row([detailsSource, settings], equal: false))
+        details.arrangedSubviews.last?.translatesAutoresizingMaskIntoConstraints = false
+        details.arrangedSubviews.last?.widthAnchor.constraint(equalTo: details.widthAnchor).isActive = true
+        full(details)
+        details.isHidden = !UserDefaults.standard.bool(forKey: "statusDetailsShown")
+        setCustomSpacing(10, after: details)
+        updateStatusImage()
 
-        section("Console")
-        let close = button("closeApp", "Close game/app", "xmark.circle", #selector(AppDelegate.closeApp), target)
-        close.toolTip = "Close the game or app that is running now"
-        full(row([button("home", "Home", "house", #selector(AppDelegate.home), target), close]))
-        let ps = button("psButton", "PS", "playstation.logo", #selector(AppDelegate.psButton), target)
-        ps.toolTip = "Press the PS button: the control center (P). ⌥-click holds it, which goes home."
-        ps.setAccessibilityLabel("PS button")
-        let type = button("typeText", "Type…", "keyboard", #selector(AppDelegate.typeText), target)
-        type.toolTip = "Type into the PS5 text field whose keyboard is open (Remote Play)"
-        full(row([ps, type]))
-        let release = button("releaseAll", "Release all input", "hand.raised", #selector(AppDelegate.releaseAll), target)
-        release.toolTip = "Release every held button, stick and trigger (⌘.)"
-        full(release)
-        let kick = button("forceRelease", "Force release agent…", "person.crop.circle.badge.xmark",
-                          #selector(AppDelegate.forceRelease), target)
-        kick.toolTip = "Take the console from the agent that claimed it and pass it to the next one in the queue"
-        full(kick)
-        let claims = button("claimDetails", "Claim and queue…", "person.2", #selector(AppDelegate.showClaims), target)
-        claims.toolTip = "Who holds the PS5, their full reason and process, and who is waiting"
-        full(claims)
+        for banner in [remotePlayBox, connectionBanner, agentBanner, noticeBanner] {
+            full(banner)
+            setCustomSpacing(10, after: banner)
+        }
+        let reconnect = button("reconnect", "Reconnect", nil, #selector(AppDelegate.reconnectRemotePlay), target)
+        let type = button("typeText", "Type…", nil, #selector(AppDelegate.typeText), target)
+        type.toolTip = "Type into the PS5 text field whose keyboard is open"
+        remotePlayBox.addButtons([reconnect, type])
 
-        section("Launch")
+        addArrangedSubview(Self.header("Capture"))
+        let snapshot = button("snapshot", "Snapshot", "camera", #selector(AppDelegate.saveSnapshot), target)
+        snapshot.toolTip = "Save the current frame as a PNG to the folder set in Settings (⌘S)"
+        let video = button("video", "Record video", "video", #selector(AppDelegate.toggleVideoRecording), target)
+        video.toolTip = "Record the picture and sound to an MP4 until you press Stop (⇧⌘R)"
+        for view in [snapshot, video] {
+            view.controlSize = .large
+            view.font = .systemFont(ofSize: 13, weight: .semibold)
+        }
+        full(row([snapshot, video], spacing: 6))
         for popup in [titles, recordings] {
             popup.refusesFirstResponder = true  // keys stay with the video
             popup.lineBreakMode = .byTruncatingTail
             popup.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
             popup.setContentHuggingPriority(.defaultLow, for: .horizontal)
         }
-        titles.setAccessibilityLabel("Game or app to launch")
-        let reload = button("reloadTitles", "", "arrow.clockwise", #selector(AppDelegate.reloadTitles), target)
-        reload.toolTip = "Reload the installed games and apps from the console"
-        reload.setAccessibilityLabel("Reload games and apps")
-        reload.setContentHuggingPriority(.required, for: .horizontal)
-        full(row([titles, reload], equal: false))
-        let launch = button("launch", "Launch", "play.circle", #selector(AppDelegate.launchTitle), target)
-        launch.toolTip = "Launch the selected game or app (⌘L)"
-        full(launch)
-
-        section("Capture")
-        let snapshot = button("snapshot", "Snapshot", "camera", #selector(AppDelegate.saveSnapshot), target)
-        snapshot.toolTip = "Save the current frame as a PNG to the folder set in Settings (⌘S)"
-        let video = button("video", "Record video", "video", #selector(AppDelegate.toggleVideoRecording), target)
-        video.toolTip = "Record the picture and sound to an MP4 until you press Stop (⇧⌘R)"
-        full(row([snapshot, video]))
-
-        section("Recordings")
-        recordings.setAccessibilityLabel("Recording to play")
-        let play = button("play", "Play", "play.fill", #selector(AppDelegate.togglePlayback), target)
-        play.setContentHuggingPriority(.required, for: .horizontal)
-        full(row([recordings, play], equal: false))
-        let record = button("record", "Record button presses", "record.circle",
-                            #selector(AppDelegate.toggleRecording), target)
+        recordings.setAccessibilityLabel("Button recording to play")
+        let play = button("play", "", "play.fill", #selector(AppDelegate.togglePlayback), target)
+        play.setAccessibilityLabel("Play the button recording")
+        play.toolTip = "Play the chosen button recording"
+        let record = button("record", "", "record.circle", #selector(AppDelegate.toggleRecording), target)
+        record.setAccessibilityLabel("Record button presses")
         record.toolTip = "Record the button presses sent to the console (keyboard and agents) until you press Stop (⌘R)"
-        full(record)
+        for view in [play, record] { view.setContentHuggingPriority(.required, for: .horizontal) }
+        pressesStatus.font = .systemFont(ofSize: 11)
+        pressesStatus.textColor = .systemRed
+        pressesStatus.isHidden = true
+        let presses = NSStackView(views: [row([recordings, play, record], equal: false, spacing: 6), pressesStatus])
+        presses.orientation = .vertical
+        presses.alignment = .leading
+        presses.spacing = 4
+        presses.arrangedSubviews[0].translatesAutoresizingMaskIntoConstraints = false
+        presses.arrangedSubviews[0].widthAnchor.constraint(equalTo: presses.widthAnchor).isActive = true
+        full(presses)
 
-        section("Install")
-        let install = button("install", "Install…", "square.and.arrow.down", #selector(AppDelegate.installFile), target)
-        install.toolTip = "Install a .pkg package or an .elf payload from this Mac"
-        let uninstall = button("uninstall", "Uninstall…", "trash", #selector(AppDelegate.showUninstall), target)
-        uninstall.toolTip = "Choose installed games/apps to uninstall (needs padd 1.3)"
-        full(row([install, uninstall]))
+        section("Console")
+        let close = button("closeApp", "Close…", nil, #selector(AppDelegate.closeApp), target)
+        close.toolTip = "Close the game or app that is running now"
+        let ps = button("psButton", "PS", nil, #selector(AppDelegate.psButton), target)
+        ps.toolTip = "Press the PS button: the control center (P). ⌥-click holds it, which goes home."
+        ps.setAccessibilityLabel("PS button")
+        full(row([button("home", "Home", nil, #selector(AppDelegate.home), target), ps, close], spacing: 6))
 
-        notice.font = .systemFont(ofSize: 11)
-        notice.textColor = .secondaryLabelColor
-        notice.preferredMaxLayoutWidth = 232
-        setCustomSpacing(10, after: arrangedSubviews.last!)
-        addArrangedSubview(notice)
+        section("Launch")
+        titles.setAccessibilityLabel("Game or app to launch")
+        let launch = button("launch", "Launch", nil, #selector(AppDelegate.launchTitle), target)
+        launch.toolTip = "Launch the selected game or app (⌘L)"
+        launch.bezelColor = .controlAccentColor
+        launch.setContentHuggingPriority(.required, for: .horizontal)
+        full(row([titles, launch], equal: false, spacing: 6))
+
         let spacer = NSView()
         spacer.setContentHuggingPriority(.init(1), for: .vertical)
         addArrangedSubview(spacer)
 
-        keyboardToggle.setButtonType(.pushOnPushOff)
-        keyboardToggle.bezelStyle = .disclosure
-        keyboardToggle.title = ""
-        keyboardToggle.refusesFirstResponder = true
-        keyboardToggle.target = self
-        keyboardToggle.action = #selector(toggleKeyboard)
-        keyboardToggle.setAccessibilityLabel("Keyboard controls")
-        let keyboardHeader = header("Keyboard controls")
-        let click = NSClickGestureRecognizer(target: self, action: #selector(toggleKeyboardFromLabel))
-        keyboardHeader.addGestureRecognizer(click)
-        addArrangedSubview(row([keyboardToggle, keyboardHeader], equal: false, spacing: 2))
-        keyboard.rowSpacing = 5
-        keyboard.columnSpacing = 12
-        for (key, action) in [
-            ("↑ ↓ ← →", "D-pad"),
-            ("Enter / Space", "✕ Cross"),
-            ("Esc / Backspace", "○ Circle"),
-            ("[", "□ Square"),
-            ("]", "△ Triangle"),
-            ("Q", "L1"), ("E", "R1"),
-            ("Z", "L2"), ("C", "R2"),
-            ("W A S D", "Left stick"),
-            ("I J K L", "Right stick"),
-            ("Tab", "Options"),
-            ("T", "Touchpad"),
-            ("H", "Home screen"),
-            ("P", "PS button"),
-        ] {
-            let keyLabel = NSTextField(labelWithString: key)
-            keyLabel.font = .monospacedSystemFont(ofSize: 11, weight: .medium)
-            let actionLabel = NSTextField(labelWithString: action)
-            actionLabel.font = .systemFont(ofSize: 11)
-            actionLabel.textColor = .secondaryLabelColor
-            keyboard.addRow(with: [keyLabel, actionLabel])
+        let divider = NSBox()
+        divider.boxType = .separator
+        full(divider)
+        let add = button("addController", "", "plus", #selector(AppDelegate.addController(_:)), target)
+        add.isBordered = false
+        add.setAccessibilityLabel("Add a controller")
+        add.setContentHuggingPriority(.required, for: .horizontal)
+        let headingSpacer = NSView()
+        headingSpacer.setContentHuggingPriority(.init(1), for: .horizontal)
+        full(row([controllersHeading, headingSpacer, add], equal: false))
+        for _ in 0..<Hub.maxControllers {
+            let controller = ControllerRow(target: target)
+            controller.isHidden = true
+            controllerRows.append(controller)
+            full(controller)
+            setCustomSpacing(2, after: controller)
         }
-        addArrangedSubview(keyboard)
-        let shown = UserDefaults.standard.bool(forKey: "keyboardHelpShown")
-        keyboardToggle.state = shown ? .on : .off
-        keyboard.isHidden = !shown
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
     override var isFlipped: Bool { true }  // the scroll view starts at the top
 
-    @objc private func toggleKeyboard() {
-        keyboard.isHidden = keyboardToggle.state == .off
-        UserDefaults.standard.set(!keyboard.isHidden, forKey: "keyboardHelpShown")
+    @objc private func toggleDetails() {
+        details.isHidden.toggle()
+        UserDefaults.standard.set(!details.isHidden, forKey: "statusDetailsShown")
+        updateStatusImage()
     }
 
-    @objc private func toggleKeyboardFromLabel() {
-        keyboardToggle.state = keyboardToggle.state == .on ? .off : .on
-        toggleKeyboard()
+    private func updateStatusImage() {
+        statusButton.image = NSImage(systemSymbolName: details.isHidden ? "chevron.right" : "chevron.down",
+                                     accessibilityDescription: details.isHidden ? "Show details" : "Hide details")?
+            .withSymbolConfiguration(.init(pointSize: 9, weight: .semibold))
+        statusButton.setAccessibilityExpanded(!details.isHidden)
     }
 
-    private func header(_ text: String) -> NSTextField {
+    func setStatus(_ text: String, color: NSColor) {
+        if statusButton.title != text { statusButton.title = text }
+        statusDot.textColor = color
+    }
+
+    func setSource(_ text: String) { detailsSource.stringValue = text }
+
+    func setPressesStatus(_ text: String?) {
+        pressesStatus.stringValue = text ?? ""
+        pressesStatus.isHidden = text == nil
+    }
+
+    func showControllers(_ pads: [(pad: Int, name: String?)], active: Int, enabled: Bool) {
+        controllersHeading.stringValue = pads.count > 1 ? "CONTROLLERS" : "CONTROLLER"
+        for (index, row) in controllerRows.enumerated() {
+            guard index < pads.count else { row.isHidden = true; continue }
+            row.show(pad: pads[index].pad, name: pads[index].name, selected: pads[index].pad == active,
+                     several: pads.count > 1, enabled: enabled)
+        }
+    }
+
+    func setEnabled(_ id: String, _ enabled: Bool) {
+        commands[id] = enabled
+        buttons[id]?.isEnabled = enabled
+    }
+
+    func isEnabled(_ id: String) -> Bool { commands[id] ?? buttons[id]?.isEnabled ?? false }
+
+    func setTip(_ id: String, _ tip: String?) {
+        tips[id] = tip
+        buttons[id]?.toolTip = tip
+    }
+
+    /// Red while it records, so the way to stop stands out.
+    func setRecording(_ id: String, _ recording: Bool) {
+        guard let button = buttons[id] else { return }
+        button.bezelColor = recording ? .systemRed : nil
+        button.contentTintColor = recording ? .white : nil
+    }
+
+    private static func header(_ text: String) -> NSTextField {
         let label = NSTextField(labelWithString: text.uppercased())
         label.font = .systemFont(ofSize: 10, weight: .semibold)
-        label.textColor = .tertiaryLabelColor
+        label.textColor = .secondaryLabelColor
         return label
     }
 
     /// A header with more room above it than between the rows of a section.
     private func section(_ text: String) {
         if let last = arrangedSubviews.last { setCustomSpacing(14, after: last) }
-        addArrangedSubview(header(text))
+        addArrangedSubview(Self.header(text))
     }
 
     /// Adds a row that spans the sidebar's content width.
     private func full(_ view: NSView) {
         addArrangedSubview(view)
+        view.translatesAutoresizingMaskIntoConstraints = false
         view.widthAnchor.constraint(equalTo: widthAnchor, constant: -(edgeInsets.left + edgeInsets.right)).isActive = true
     }
 
@@ -266,6 +453,7 @@ final class Sidebar: NSStackView {
         button.bezelStyle = .rounded
         button.refusesFirstResponder = true  // keys stay with the video
         if let symbol {
+            button.identifier = NSUserInterfaceItemIdentifier(symbol)
             button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title.isEmpty ? nil : title)
             button.imagePosition = title.isEmpty ? .imageOnly : .imageLeading
         }
@@ -273,11 +461,10 @@ final class Sidebar: NSStackView {
         return button
     }
 
-    func setButton(_ id: String, title: String, symbol: String) {
-        guard let button = buttons[id], button.title != title else { return }
-        let symbolChanged = button.identifier?.rawValue != symbol
-        button.title = title
-        if symbolChanged {
+    func setButton(_ id: String, title: String? = nil, symbol: String) {
+        guard let button = buttons[id] else { return }
+        if let title, button.title != title { button.title = title }
+        if button.identifier?.rawValue != symbol {
             button.identifier = NSUserInterfaceItemIdentifier(symbol)
             button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
         }
@@ -303,7 +490,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
     private let sidebarItemID = NSToolbarItem.Identifier("toggleSidebar")
     private let videoItemID = NSToolbarItem.Identifier("toggleVideo")
     private let audioItemID = NSToolbarItem.Identifier("toggleAudio")
-    private let snapshotItemID = NSToolbarItem.Identifier("snapshot")
+    private let keyboardItemID = NSToolbarItem.Identifier("toggleKeyboardPanel")
+    private var keyboardMenuItem: NSMenuItem!
+    private var keyboardToolbarItem: NSToolbarItem?
+    private let keyboardPanel = KeyboardPanel()
+    /// The current notice and when it appeared: most fade out, so the sidebar is quiet when nothing needs attention.
+    private var shownNotice: String?
+    private var shownNoticeAt = 0.0
+    private var claimsSheet: ClaimsSheet?
     private var videoMenuItem: NSMenuItem!
     private var audioMenuItem: NSMenuItem!
     private var videoToolbarItem: NSToolbarItem?
@@ -329,6 +523,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         return fresh
     }
     private var settings: SettingsWindow?
+    private var controllerList: [Int] = [1]
     private var titleList: [Title] = []
     private var titlesFetched = false
     private var titlesLoading = false
@@ -401,7 +596,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         sidebarScroll.drawsBackground = false
         sidebarScroll.documentView = sidebar
         NSLayoutConstraint.activate([
-            sidebarScroll.widthAnchor.constraint(equalToConstant: 260),
+            sidebarScroll.widthAnchor.constraint(equalToConstant: Sidebar.width),
             sidebar.widthAnchor.constraint(equalTo: sidebarScroll.contentView.widthAnchor),
             sidebar.heightAnchor.constraint(greaterThanOrEqualTo: sidebarScroll.contentView.heightAnchor),
         ])
@@ -409,11 +604,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         content.spacing = 0
         content.setHuggingPriority(.defaultLow, for: .horizontal)
         video.setContentHuggingPriority(.init(1), for: .horizontal)
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280 + 260, height: 720),
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280 + Sidebar.width, height: 720),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.title = "PS5 MCP"
         window.contentView = content
-        window.contentMinSize = NSSize(width: 640 + 260, height: 360)
+        window.contentMinSize = NSSize(width: 640 + Sidebar.width, height: 360)
         let toolbar = NSToolbar(identifier: "PS5Toolbar")
         toolbar.delegate = self
         toolbar.displayMode = .iconOnly
@@ -423,6 +618,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         window.delegate = self
         restoreFrame()
         setVisible(!hub.config.headless)
+        keyboardPanel.onChange = { [weak self] in self?.updateKeyboardControls() }
+        updateKeyboardControls()
         Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in self?.refresh() }
         // Follows the window's display and stops while the window cannot be seen.
         let link = video.displayLink(target: self, selector: #selector(drawFrame))
@@ -500,41 +697,77 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         audioMenuItem.keyEquivalentModifierMask = [.command, .option]
         audioMenuItem.target = self
         viewMenu.addItem(audioMenuItem)
+        viewMenu.addItem(.separator())
+        keyboardMenuItem = NSMenuItem(title: "Show Keyboard Panel", action: #selector(toggleKeyboardPanel), keyEquivalent: "k")
+        keyboardMenuItem.keyEquivalentModifierMask = [.control, .option]
+        keyboardMenuItem.target = self
+        viewMenu.addItem(keyboardMenuItem)
         viewItem.submenu = viewMenu
         main.addItem(viewItem)
-        let consoleItem = NSMenuItem()
-        let consoleMenu = NSMenu(title: "Console")
-        for (title, action, key) in [
-            ("Launch Game/App", #selector(launchTitle), "l"),
-            ("Close Running Game/App…", #selector(closeApp), ""),
-            ("Home", #selector(home), ""),
-            ("Release All Input", #selector(releaseAll), "."),
-            ("Force Release Agent…", #selector(forceRelease), ""),
-            ("Claim and Queue…", #selector(showClaims), ""),
-            ("-", nil, ""),
-            ("Record Button Presses", #selector(toggleRecording), "r"),
-            ("Play Recording", #selector(togglePlayback), ""),
-            ("Save Snapshot", #selector(saveSnapshot), "s"),
-            ("Record Video", #selector(toggleVideoRecording), "R"),
-            ("-", nil, ""),
-            ("Install…", #selector(installFile), ""),
-            ("Uninstall…", #selector(showUninstall), ""),
-            ("Reload Games/Apps", #selector(reloadTitles), ""),
-        ] as [(String, Selector?, String)] {
-            guard let action else { consoleMenu.addItem(.separator()); continue }
-            consoleMenu.addItem(withTitle: title, action: action, keyEquivalent: key).target = self
+        func menu(_ title: String, _ items: [(String, Selector?, String, NSEvent.ModifierFlags)]) {
+            let holder = NSMenuItem()
+            let submenu = NSMenu(title: title)
+            for (name, action, key, modifiers) in items {
+                guard let action else { submenu.addItem(.separator()); continue }
+                let item = submenu.addItem(withTitle: name, action: action, keyEquivalent: key)
+                item.keyEquivalentModifierMask = modifiers
+                item.target = self
+            }
+            holder.submenu = submenu
+            main.addItem(holder)
         }
-        consoleItem.submenu = consoleMenu
-        main.addItem(consoleItem)
+        menu("Console", [
+            ("Launch Game/App", #selector(launchTitle), "l", .command),
+            ("Close Running Game/App…", #selector(closeApp), "", .command),
+            ("Home", #selector(home), "", .command),
+            ("PS Button", #selector(psButton), "", .command),
+            ("Type…", #selector(typeText), "t", .command),
+            ("Release All Input", #selector(releaseAll), ".", .command),
+            ("-", nil, "", .command),
+            ("Force Release Agent…", #selector(forceRelease), "", .command),
+            ("Claim and Queue…", #selector(showClaims), "", .command),
+            ("-", nil, "", .command),
+            ("Reload Games/Apps", #selector(reloadTitles), "l", [.command, .shift]),
+            ("Install…", #selector(installFile), "", .command),
+            ("Uninstall…", #selector(showUninstall), "", .command),
+            ("-", nil, "", .command),
+            ("Start padd…", #selector(startPadd), "", .command),
+            ("Update padd…", #selector(updatePadd), "", .command),
+            ("Stop padd…", #selector(stopPadd), "", .command),
+        ])
+        menu("Capture", [
+            ("Save Snapshot", #selector(saveSnapshot), "s", .command),
+            ("Record Video", #selector(toggleVideoRecording), "r", [.command, .shift]),
+            ("Record Button Presses", #selector(toggleRecording), "r", .command),
+            ("Play Recording", #selector(togglePlayback), "", .command),
+        ])
+        menu("Controllers", [
+            ("Controller 1", #selector(chooseController(_:)), "1", .command),
+            ("Controller 2", #selector(chooseController(_:)), "2", .command),
+            ("Controller 3", #selector(chooseController(_:)), "3", .command),
+            ("Controller 4", #selector(chooseController(_:)), "4", .command),
+            ("-", nil, "", .command),
+            ("Add Controller", #selector(addController(_:)), "n", [.command, .option]),
+            ("Remove Controller", #selector(removeController), "\u{8}", [.command, .option]),
+        ])
+        for (index, item) in (main.items.last?.submenu?.items.prefix(4) ?? []).enumerated() { item.tag = index + 1 }
+        var sources: [(String, Selector?, String, NSEvent.ModifierFlags)] = [
+            ("Reconnect Remote Play", #selector(reconnectRemotePlay), "", .command),
+            ("Set Up Remote Play…", #selector(setUpRemotePlay), "", .command),
+        ]
+        #if PS5MCP_PBS
+        sources.append(("PBS Controls…", #selector(showSettings), "", .command))
+        #endif
+        menu("Video Source", sources)
         NSApp.mainMenu = main
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [videoItemID, audioItemID, snapshotItemID, .flexibleSpace, sidebarItemID]
+        [videoItemID, audioItemID, keyboardItemID, .flexibleSpace, sidebarItemID]
     }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [videoItemID, audioItemID, snapshotItemID, .flexibleSpace, sidebarItemID]
+        [videoItemID, audioItemID, keyboardItemID, .flexibleSpace, sidebarItemID]
     }
 
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
@@ -552,13 +785,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
             updatePlaybackControls()
             return item
         }
-        if itemIdentifier == snapshotItemID {
+        if itemIdentifier == keyboardItemID {
             let item = NSToolbarItem(itemIdentifier: itemIdentifier)
-            item.label = "Save Snapshot"
-            item.toolTip = "Save Snapshot (⌘S)"
-            item.image = NSImage(systemSymbolName: "camera", accessibilityDescription: "Save Snapshot")
+            item.image = NSImage(systemSymbolName: "keyboard", accessibilityDescription: "Keyboard panel")
             item.target = self
-            item.action = #selector(saveSnapshot)
+            item.action = #selector(toggleKeyboardPanel)
+            keyboardToolbarItem = item
+            updateKeyboardControls()
             return item
         }
         guard itemIdentifier == sidebarItemID else { return nil }
@@ -578,8 +811,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         sidebarMenuItem.title = title
         sidebarToolbarItem?.label = title
         sidebarToolbarItem?.toolTip = "\(title) (⌥⌘S)"
-        window.contentMinSize = NSSize(width: sidebarScroll.isHidden ? 640 : 900, height: 360)
+        window.contentMinSize = NSSize(width: sidebarScroll.isHidden ? 640 : 640 + Sidebar.width, height: 360)
         window.makeFirstResponder(video)
+    }
+
+    @objc func toggleKeyboardPanel() { keyboardPanel.toggle() }
+
+    private func updateKeyboardControls() {
+        let title = keyboardPanel.isVisible ? "Hide Keyboard Panel" : "Show Keyboard Panel"
+        keyboardMenuItem?.title = title
+        keyboardToolbarItem?.label = title
+        keyboardToolbarItem?.toolTip = "\(title) (⌃⌥K)"
+        keyboardToolbarItem?.image = NSImage(systemSymbolName: keyboardPanel.isVisible ? "keyboard.fill" : "keyboard",
+                                             accessibilityDescription: title)
     }
 
     @objc func toggleVideo() {
@@ -647,11 +891,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
             window.makeFirstResponder(video)
             NSApp.activate(ignoringOtherApps: true)
             if !titlesFetched { loadTitles() }
+            keyboardPanel.enableHotKey()
         } else {
             keys?.releaseHeld()
             window.orderOut(nil)
             if !dock { NSApp.setActivationPolicy(.accessory) }
         }
+        keyboardPanel.windowVisibilityChanged(visible)
         updatePlaybackControls()
         refresh()
     }
@@ -728,33 +974,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         if !link.connected { pong = nil }
         do {
             // Name each controller's user: the foreground user changes when another controller takes over.
-            let popup = sidebar.controllerPicker
             let pads = hub.pads, supported = link.connected && (link.hello?.flags ?? 0) & PMCP.flagPads != 0
             let connected = pads?.connected ?? [1]
-            while popup.numberOfItems > connected.count { popup.removeItem(at: popup.numberOfItems - 1) }
-            while popup.numberOfItems < connected.count { popup.addItem(withTitle: "") }
-            for (index, pad) in connected.enumerated() {
-                let item = popup.item(at: index)
-                item?.title = "Controller \(pad)" + (hub.controllerName(pad).map { " (\($0))" } ?? "")
-                item?.tag = pad
-            }
             let active = pads?.active ?? 1
-            popup.selectItem(withTag: active)
-            popup.isEnabled = supported && connected.count > 1
+            sidebar.showControllers(connected.map { (pad: $0, name: hub.controllerName($0)) }, active: active,
+                                    enabled: link.connected)
             let available = hub.availableUsers, signedOut = hub.signedOutUsers
             let full = connected.count >= (pads?.capacity ?? 1)
             let unknown = hub.loginUsers.map { $0.status != 0 } ?? true
-            sidebar.buttons["addController"]?.isEnabled = supported && !full
-                && (!available.isEmpty || !signedOut.isEmpty || unknown)
-            sidebar.buttons["addController"]?.toolTip = !supported ? "Needs a newer padd: press Update"
+            sidebar.setEnabled("addController", supported && !full && (!available.isEmpty || !signedOut.isEmpty || unknown))
+            sidebar.setTip("addController", !supported ? "Needs a newer padd: press Update"
                 : full ? ((pads?.capacity ?? 0) < Hub.maxControllers ? "Press Update for up to \(Hub.maxControllers) controllers"
                           : "All \(Hub.maxControllers) controllers are connected")
                 : !available.isEmpty ? "Add a controller for another signed-in user and send input to it"
                 : !signedOut.isEmpty ? "Nobody else is signed in: sign someone in with a new controller"
-                : "Sign another user (or a guest) in on the console first"
-            sidebar.buttons["removeController"]?.isEnabled = supported && active != 1
-            sidebar.buttons["removeController"]?.toolTip = active != 1 ? "Remove controller \(active); input goes back to controller 1"
-                : connected.count > 1 ? "Select the controller to remove" : "Only controller 1 is connected"
+                : "Sign another user (or a guest) in on the console first")
+            sidebar.setEnabled("removeController", supported && active != 1)
+            sidebar.setEnabled("selectController", supported)
+            controllerList = connected
         }
         if let pong {
             sidebar.set("Reports", "\(pong.reportsSent) sent, \(pong.reportFailures) failed",
@@ -783,46 +1020,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         } else {
             sidebar.set("In use by", "nobody")
         }
-        sidebar.buttons["forceRelease"]?.isEnabled = lease["owner"] is [String: Any]
-        sidebar.buttons["claimDetails"]?.isEnabled = lease["owner"] is [String: Any] || queued > 0
-        sidebar.notice.stringValue = hub.notice ?? (hub.source as? RemotePlaySource)?.status.summary
-            ?? hub.pbsSummary ?? ""
+        sidebar.setEnabled("forceRelease", lease["owner"] is [String: Any])
+        sidebar.setEnabled("claimDetails", lease["owner"] is [String: Any] || queued > 0)
         let canRun = busy == nil && hub.padd.json["available"] as? Bool == true
         let fileManagerBusy = titlesLoading || installing != nil  // Web File Manager runs one task at a time
-        sidebar.buttons["paddStart"]?.isEnabled = canRun && !link.connected && !fileManagerBusy
-        sidebar.buttons["paddStop"]?.isEnabled = canRun && !fileManagerBusy
+        sidebar.setEnabled("paddStart", canRun && !link.connected && !fileManagerBusy)
+        sidebar.setEnabled("paddStop", canRun && !fileManagerBusy)
         // Only a running padd with another version than the build needs it; with padd down, Start deploys the build.
         let outdated = bundled.error == nil && link.hello.map { $0.payloadVersion != bundled.number } == true
-        sidebar.buttons["paddUpdate"]?.isEnabled = canRun && !fileManagerBusy && outdated
+        sidebar.setEnabled("paddUpdate", canRun && !fileManagerBusy && outdated)
         let build = bundled.name
-        sidebar.buttons["paddUpdate"]?.toolTip = bundled.error
+        sidebar.setTip("paddUpdate", bundled.error
             ?? (link.hello == nil ? "padd is not running; Start deploys \(build)"
                 : outdated ? "Stop padd and start \(build) from \(hub.config.repo ?? "the checkout")"
-                : "padd is up to date with \(build)")
-        sidebar.buttons["install"]?.isEnabled = installing == nil && busy == nil && !titlesLoading
-            && !hub.padd.cli.isEmpty
-        sidebar.buttons["uninstall"]?.isEnabled = link.connected && uninstallSheet == nil
-            && (link.hello?.flags ?? 0) & PMCP.flagUninstall != 0
-        sidebar.setButton("install", title: installing == nil ? "Install…" : "Installing…",
-                          symbol: "square.and.arrow.down")
-        for id in ["home", "closeApp", "releaseAll"] { sidebar.buttons[id]?.isEnabled = link.connected }
+                : "padd is up to date with \(build)"))
+        sidebar.setEnabled("install", installing == nil && busy == nil && !titlesLoading && !hub.padd.cli.isEmpty)
+        sidebar.setEnabled("uninstall", link.connected && uninstallSheet == nil
+            && (link.hello?.flags ?? 0) & PMCP.flagUninstall != 0)
+        for id in ["home", "closeApp", "releaseAll"] { sidebar.setEnabled(id, link.connected) }
         let remote = (hub.source as? RemotePlaySource)?.status
         let live = remote.map { $0.phase == .streaming && $0.videoReady } ?? false
-        sidebar.buttons["psButton"]?.isEnabled = link.connected
-        sidebar.buttons["typeText"]?.isEnabled = live && remote?.keyboardOpen == true && typeSheet == nil
-        sidebar.buttons["launch"]?.isEnabled = link.connected && selectedTitle != nil
-        sidebar.buttons["reloadTitles"]?.isEnabled = !titlesLoading && busy == nil && installing == nil
+        sidebar.setEnabled("psButton", link.connected)
+        sidebar.setEnabled("typeText", live && remote?.keyboardOpen == true && typeSheet == nil)
+        sidebar.setEnabled("launch", link.connected && selectedTitle != nil)
+        sidebar.buttons["launch"]?.bezelColor = sidebar.isEnabled("launch") ? .controlAccentColor : nil
+        sidebar.setEnabled("reloadTitles", !titlesLoading && busy == nil && installing == nil)
         sidebar.titles.isEnabled = !titleList.isEmpty
         let recorder = hub.recorder
         if let recorder {
             let seconds = Int(uptimeSeconds() - recorder.started)
-            sidebar.setButton("record", title: String(format: "Stop recording %d:%02d", seconds / 60, seconds % 60),
-                              symbol: "stop.circle.fill")
+            sidebar.setPressesStatus(String(format: "Recording button presses %d:%02d", seconds / 60, seconds % 60))
+            sidebar.setButton("record", symbol: "stop.circle.fill")
         } else {
-            sidebar.setButton("record", title: "Record button presses", symbol: "record.circle")
+            sidebar.setPressesStatus(nil)
+            sidebar.setButton("record", symbol: "record.circle")
         }
         sidebar.buttons["record"]?.contentTintColor = recorder == nil ? nil : .systemRed
-        sidebar.buttons["record"]?.isEnabled = playing == nil
+        sidebar.setEnabled("record", playing == nil)
         if let videoRecorder {
             let seconds = Int(uptimeSeconds() - videoRecorder.started)
             sidebar.setButton("video", title: String(format: "Stop %d:%02d", seconds / 60, seconds % 60),
@@ -830,25 +1064,148 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         } else {
             sidebar.setButton("video", title: videoSaving ? "Saving…" : "Record video", symbol: "video")
         }
-        sidebar.buttons["video"]?.contentTintColor = videoRecorder == nil ? nil : .systemRed
-        sidebar.buttons["video"]?.isEnabled = !videoSaving
-        sidebar.setButton("play", title: playing == nil ? "Play" : "Stop",
-                          symbol: playing == nil ? "play.fill" : "stop.fill")
-        sidebar.buttons["play"]?.isEnabled = playing != nil
-            || (link.connected && recorder == nil && sidebar.recordings.selectedItem?.representedObject != nil)
+        sidebar.setRecording("video", videoRecorder != nil)
+        sidebar.setEnabled("video", !videoSaving)
+        sidebar.setButton("play", symbol: playing == nil ? "play.fill" : "stop.fill")
+        sidebar.setEnabled("play", playing != nil
+            || (link.connected && recorder == nil && sidebar.recordings.selectedItem?.representedObject != nil))
         sidebar.recordings.isEnabled = playing == nil && sidebar.recordings.numberOfItems > 0
             && sidebar.recordings.itemArray.contains { $0.representedObject != nil }
+        refreshStatus(link: link, canRun: canRun && !fileManagerBusy, remote: remote, owner: lease["owner"] as? [String: Any],
+                      queued: queued, age: age, camera: camera)
+        keyboardPanel.setKeysActive(NSApp.isActive && window.isKeyWindow && window.firstResponder === video)
+    }
+
+    /// The top of the sidebar: one line, then a message only for what needs attention.
+    private func refreshStatus(link: LinkStatus, canRun: Bool, remote: RemotePlayStatus?, owner: [String: Any]?,
+                               queued: Int, age: Double, camera: String) {
+        let isRemote = hub.captureVideo == "remoteplay"
+        let isCamera = hub.source is CameraSource
+        let issue = hub.captureIssue
+        let noSignal = !hub.config.headless && isCamera && age > 2
+        let denied = camera == "denied"
+        let padd = hub.padd.busy.map { "padd \($0)…" }
+        if let padd {
+            sidebar.setStatus(padd, color: .systemOrange)
+        } else if !link.connected {
+            sidebar.setStatus("padd not connected", color: .systemRed)
+        } else if denied || noSignal || issue != nil || hub.pbsIssue != nil || (isRemote && remote?.phase != .streaming) {
+            sidebar.setStatus("Connected · " + (noSignal ? "no HDMI signal" : "no video"), color: .systemOrange)
+        } else {
+            let version = link.hello?.versionString ?? "?"
+            let bundled = hub.padd.bundled
+            if let number = bundled.number, let running = link.hello?.payloadVersion, number != running {
+                sidebar.setStatus("Connected · padd \(version) · update available", color: .systemOrange)
+            } else {
+                sidebar.setStatus("Connected · padd \(version)", color: .systemGreen)
+            }
+        }
+        sidebar.setSource(isRemote ? "Video from Remote Play" : hub.captureVideo == "pbs" ? "Video from PBS"
+                          : isCamera ? "Video from the capture card" : "No video source")
+
+        if !link.connected, hub.padd.busy == nil {
+            sidebar.connectionBanner.show(.error, title: "padd is not connected",
+                                          body: "Video still works. The console takes no input until padd runs."
+                                            + (link.error.map { "\n\($0)" } ?? ""),
+                                          actionTitle: "Start padd…", selector: #selector(startPadd), enabled: canRun)
+        } else if denied {
+            sidebar.connectionBanner.show(.attention, title: "No camera permission",
+                                          body: "Allow PS5 MCP in System Settings, under Privacy & Security, Camera.")
+        } else if let issue, !isRemote {
+            sidebar.connectionBanner.show(.attention, title: "No video", body: issue, actionTitle: "Settings…",
+                                          selector: #selector(showSettings))
+        } else if noSignal {
+            sidebar.connectionBanner.show(.attention, title: "No HDMI signal",
+                                          body: "This console screen drops HDMI. The picture returns when the console leaves it.")
+        } else {
+            sidebar.connectionBanner.hide()
+        }
+
+        if isRemote {
+            let streaming = remote?.phase == .streaming
+            sidebar.remotePlayBox.show(streaming ? .neutral : .attention, title: "Remote Play",
+                                       body: remote?.summary ?? issue ?? "Set up Remote Play.")
+        } else {
+            sidebar.remotePlayBox.hide()
+        }
+        sidebar.setEnabled("reconnect", remotePlayCanReconnect)
+
+        if let owner {
+            let reason = owner["reason"] as? String ?? ""
+            sidebar.agentBanner.show(.info, title: "\(owner["client"] as? String ?? "An agent") holds the console",
+                                     body: (reason.isEmpty ? "" : reason + " · ") + (queued > 0 ? "\(queued) waiting. " : "")
+                                        + "Your keyboard still works.",
+                                     actionTitle: "Claim and Queue…", selector: #selector(showClaims))
+        } else {
+            sidebar.agentBanner.hide()
+        }
+
+        // captureIssue also comes through hub.notice: it has its own message above.
+        let text = hub.notice == issue ? nil : hub.notice
+        if text != shownNotice {
+            shownNotice = text
+            shownNoticeAt = uptimeSeconds()
+        }
+        let asks = text?.hasPrefix(Hub.assignNoticePrefix) == true
+        if let text, asks || uptimeSeconds() - shownNoticeAt < 10 {
+            sidebar.noticeBanner.show(asks ? .attention : .neutral, title: asks ? "The PS5 needs an answer" : "", body: text)
+        } else {
+            sidebar.noticeBanner.hide()
+        }
+        if asks { hub.clearAnsweredAssignNotice() }
+    }
+
+    private var remotePlayCanReconnect: Bool {
+        guard hub.captureVideo == "remoteplay", let remote = hub.source as? RemotePlaySource else { return false }
+        return ![.connecting, .applyingAdmission, .waitingForVideo].contains(remote.status.phase)
+    }
+
+    @objc func reconnectRemotePlay() {
+        do {
+            guard hub.captureVideo == "remoteplay" else { return }
+            if let owner = hub.lease.json["owner"] as? [String: Any] {
+                throw RemotePlaySetupError("The console is claimed by \(owner["client"] as? String ?? "another client"). Wait for its claim to be released.")
+            }
+            try restartCapture(video: "remoteplay", audio: "remoteplay")
+        } catch { hub.notice = (error as? BadInput)?.description ?? error.localizedDescription }
+        window.makeFirstResponder(video)
+    }
+
+    @objc func setUpRemotePlay() {
+        showSettings()
+        settings?.setUpRemotePlay()
+    }
+
+    /// The commands that have no button of their own, and the rare ones.
+    @objc func showMoreMenu(_ sender: NSButton) {
+        let menu = NSMenu()
+        for (title, action) in [
+            ("Release All Input", #selector(releaseAll)), ("-", nil),
+            ("Force Release Agent…", #selector(forceRelease)), ("Claim and Queue…", #selector(showClaims)), ("-", nil),
+            ("Reload Games/Apps", #selector(reloadTitles)), ("Install…", #selector(installFile)),
+            ("Uninstall…", #selector(showUninstall)), ("-", nil),
+            ("Start padd…", #selector(startPadd)), ("Update padd…", #selector(updatePadd)), ("Stop padd…", #selector(stopPadd)),
+        ] as [(String, Selector?)] {
+            guard let action else { menu.addItem(.separator()); continue }
+            menu.addItem(withTitle: title, action: action, keyEquivalent: "").target = self
+        }
+        menu.items.first?.keyEquivalent = "."
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height + 4), in: sender)
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         guard let sidebar else { return true }
-        func enabled(_ id: String) -> Bool { sidebar.buttons[id]?.isEnabled ?? false }
+        func enabled(_ id: String) -> Bool { sidebar.isEnabled(id) }
         switch menuItem.action {
         case #selector(launchTitle):
             menuItem.title = selectedTitle.map { "Launch \($0.name)" } ?? "Launch Game/App"
             return enabled("launch")
         case #selector(closeApp): return enabled("closeApp")
         case #selector(home): return enabled("home")
+        case #selector(psButton): return enabled("psButton")
+        case #selector(typeText):
+            menuItem.toolTip = hub.captureVideo == "remoteplay" ? nil : "Needs Remote Play as the video source"
+            return enabled("typeText")
         case #selector(releaseAll): return enabled("releaseAll")
         case #selector(forceRelease): return enabled("forceRelease")
         case #selector(showClaims): return enabled("claimDetails")
@@ -862,18 +1219,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
             menuItem.title = playing == nil ? "Play Recording" : "Stop Playback"
             return enabled("play")
         case #selector(reloadTitles): return enabled("reloadTitles")
-        case #selector(installFile): return enabled("install")
+        case #selector(installFile):
+            menuItem.title = installing == nil ? "Install…" : "Installing…"
+            return enabled("install")
         case #selector(showUninstall): return enabled("uninstall")
+        case #selector(startPadd): return enabled("paddStart")
+        case #selector(updatePadd):
+            menuItem.toolTip = sidebar.tips["paddUpdate"]
+            return enabled("paddUpdate")
+        case #selector(stopPadd): return enabled("paddStop")
+        case #selector(addController(_:)):
+            menuItem.toolTip = sidebar.tips["addController"]
+            return enabled("addController")
+        case #selector(removeController): return enabled("removeController")
+        case #selector(chooseController(_:)):
+            let pad = menuItem.tag
+            menuItem.title = "Controller \(pad)" + (hub.controllerName(pad).map { " (\($0))" } ?? "")
+            menuItem.state = controllerList.count > 1 && hub.pads?.active == pad ? .on : .off
+            return enabled("selectController") && controllerList.contains(pad)
+        case #selector(reconnectRemotePlay): return remotePlayCanReconnect
+        case #selector(setUpRemotePlay): return !hub.host.isEmpty
         default: return true
         }
     }
 
-    private func confirm(_ title: String, _ text: String, _ action: String) -> Bool {
+    private func confirm(_ title: String, _ text: String, _ action: String, destructive: Bool = false,
+                         warning: String? = nil) -> Bool {
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = text
-        alert.addButton(withTitle: action)
+        let button = alert.addButton(withTitle: action)
+        button.hasDestructiveAction = destructive
         alert.addButton(withTitle: "Cancel")
+        if let warning {
+            let box = Banner(target: self)
+            box.show(.attention, title: "Your DualSense may turn off", body: warning, wrap: 290)
+            box.frame = NSRect(origin: .zero, size: NSSize(width: 310, height: box.fittingSize.height))
+            alert.accessoryView = box
+        }
         defer { window.makeFirstResponder(video) }
         return alert.runModal() == .alertFirstButtonReturn
     }
@@ -905,16 +1288,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
             settings = SettingsWindow(hub: hub) { [weak self] in
                 self?.reloadTitles()  // another console: fetch its games/apps
                 self?.refresh()
+            } onFloatingChanged: { [weak self] in
+                self?.keyboardPanel.applyFloating()
             }
         }
         settings?.show()
     }
 
+    private static let dualSenseWarning = "If the PS5 asks \"Who's using this controller?\", the virtual pad answers it. "
+        + "Then press the DualSense's PS button and pick the same user."
+
     @objc func startPadd() {
         guard confirm("Start padd on \(hub.host)?",
-                      "This uploads \(hub.padd.bundled.name) through Payload Manager, launches it once and archives the run "
-                      + "under results/. If the PS5 asks \"Who's using this controller?\", the virtual pad answers it, "
-                      + "and that turns your DualSense off: press its PS button and pick the same user.", "Start")
+                      "This uploads \(hub.padd.bundled.name) through Payload Manager and starts it once. "
+                      + "The run is archived under results/.", "Start", warning: Self.dualSenseWarning)
         else { return }
         hub.notice = "Starting padd…"
         background { _ = try self.hub.padd.run("start", firmware: nil) }
@@ -924,10 +1311,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         let bundled = hub.padd.bundled.version ?? "?"
         let running = hub.controller.status().hello.map { "padd v\($0.versionString)" } ?? "padd, if it runs,"
         guard confirm("Update padd on \(hub.host) to v\(bundled)?",
-                      "This stops \(running) (input is released and the virtual pad removed), then uploads \(hub.padd.bundled.name) "
-                      + "through Payload Manager and starts it once; both runs are archived under results/. If the PS5 "
-                      + "asks \"Who's using this controller?\", the virtual pad answers it, and that turns your DualSense "
-                      + "off: press its PS button and pick the same user.", "Update")
+                      "\(running.prefix(1).uppercased() + running.dropFirst()) stops, which releases input and removes the "
+                      + "virtual pad. Then \(hub.padd.bundled.name) uploads through Payload Manager and starts once. "
+                      + "Both runs are archived under results/.", "Update", warning: Self.dualSenseWarning)
         else { return }
         hub.notice = "Updating padd…"
         background { _ = try self.hub.padd.run("update", firmware: nil) }
@@ -935,7 +1321,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
 
     @objc func stopPadd() {
         guard confirm("Stop padd?", "padd releases input, removes the virtual pad and exits. The run is archived.",
-                      "Stop") else { return }
+                      "Stop", destructive: true) else { return }
         hub.notice = "Stopping padd…"
         background { _ = try self.hub.padd.run("stop", firmware: nil) }
     }
@@ -1005,9 +1391,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         }
     }
 
-    /// Sidebar's controller picker: input goes to controller 1 or 2.
-    @objc func chooseController() {
-        guard let pad = sidebar?.controllerPicker.selectedItem?.tag, pad >= 1, pad != hub.pads?.active else { return }
+    /// A row of the sidebar's controller list, or the Controllers menu: input goes to that controller.
+    @objc func chooseController(_ sender: Any?) {
+        let pad = (sender as? NSButton)?.tag ?? (sender as? NSMenuItem)?.tag ?? 0
+        guard pad >= 1, pad != hub.pads?.active else { return }
         background {
             let status = try self.hub.selectPad(pad, link: self.hub.controller.currentLink())
             if status != 0 { self.hub.notice = "Controller \(pad): \(PMCP.padsText(.selectPad, status))" }
@@ -1015,7 +1402,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
     }
 
     /// Sidebar's +. A menu only when there is a choice: signed-in users first, then profiles a controller can sign in.
-    @objc func addController(_ sender: NSButton) {
+    @objc func addController(_ sender: Any?) {
         let available = hub.availableUsers, signedOut = hub.signedOutUsers
         if available.count + signedOut.count <= 1 {
             // The one free signed-in user is who padd picks anyway, and padd before 1.8 takes no user id.
@@ -1032,7 +1419,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         for user in available { add("Add controller for \(LoginUsers.label(user))", user.id) }
         if !available.isEmpty, !signedOut.isEmpty { menu.addItem(.separator()) }
         for user in signedOut { add("Sign in \(user.name) with a new controller", user.id) }
-        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height + 4), in: sender)
+        if let button = sender as? NSButton {
+            menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height + 4), in: button)
+        } else {
+            menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+        }
     }
 
     @objc func connectControllerUser(_ item: NSMenuItem) { connectController(user: Int32(item.tag)) }
@@ -1044,7 +1435,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         }
     }
 
-    /// Sidebar's −: the selected controller.
+    /// The − on the selected controller's row.
     @objc func removeController() {
         guard let pad = hub.pads?.active, pad != 1 else { return }
         background {
@@ -1055,7 +1446,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
 
     @objc func closeApp() {
         guard confirm("Close the running game or app?", "Unsaved progress is lost. The console returns to the home screen.",
-                      "Close") else { return }
+                      "Close", destructive: true) else { return }
         background { _ = try self.hub.command("close", "", link: self.hub.controller.currentLink()) }
     }
 
@@ -1236,7 +1627,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
             + (chosen.count > 8 ? "\n…and \(chosen.count - 8) more" : "")
         guard confirm("Uninstall \(chosen.count == 1 ? chosen[0].name : "\(chosen.count) games/apps")?",
                       "\(names)\n\nTheir data on the console is deleted. For titles ShadowMountPlus manages, their "
-                      + "source folder or image is deleted too. This cannot be undone.", "Uninstall")
+                      + "source folder or image is deleted too. This cannot be undone.", "Uninstall", destructive: true)
         else { return }
         hub.notice = "Uninstalling \(chosen.count) game(s)/app(s)…"
         background {
@@ -1273,7 +1664,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         popup.removeAllItems()
         let saved = Recordings.list(hub.stateDir)
         guard !saved.isEmpty else { popup.addItem(withTitle: "No recordings yet"); return }
-        popup.addItem(withTitle: "Choose…")  // nothing plays until one is picked
+        popup.addItem(withTitle: "Button recordings…")  // nothing plays until one is picked
         popup.menu?.addItem(.separator())
         for recording in saved {
             let item = NSMenuItem(title: recording.name, action: nil, keyEquivalent: "")
@@ -1329,7 +1720,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         alert.accessoryView = field
         alert.window.initialFirstResponder = field
         alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Discard")
+        alert.addButton(withTitle: "Discard").hasDestructiveAction = true
         defer { window.makeFirstResponder(video) }
         while alert.runModal() == .alertFirstButtonReturn {
             let name = field.stringValue.trimmingCharacters(in: .whitespaces)
@@ -1399,13 +1790,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
 
     // MARK: snapshot
 
-    /// Saves the current frame straight to the snapshot folder from Settings (Desktop by default), no dialog.
+    /// Saves the current frame straight to the capture folder from Settings (Desktop by default), no dialog.
     @objc func saveSnapshot() {
         guard let image = hub.sink.latestImage() else {
             hub.notice = "No frame to save yet."
             return
         }
-        let folder = snapshotFolder
+        let folder = captureFolder
         let name = "PS5 \(Self.stamp())"
         var url = folder.appendingPathComponent(name + ".png")
         var copy = 2
@@ -1460,7 +1851,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
             let panel = NSSavePanel()
             panel.allowedContentTypes = [.mpeg4Movie]
             panel.nameFieldStringValue = name
-            panel.directoryURL = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask).first
+            panel.directoryURL = captureFolder
             panel.beginSheetModal(for: self.window) { response in
                 defer { self.window.makeFirstResponder(self.video) }
                 guard response == .OK, let url = panel.url else {
@@ -1535,7 +1926,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
             ?? "Nobody is waiting for it."
         guard confirm("Force release \(client)?",
                       "\(client) has held the PS5 for \(held < 60 ? "\(held) s" : "\(held / 60) min").\n\(next)",
-                      "Force Release") else { return }
+                      "Force Release", destructive: true) else { return }
         guard let evicted = hub.forceRelease(client: owner["client"] as? String) else {
             hub.notice = "\(client) no longer holds the PS5; nothing released."
             return refresh()
@@ -1544,55 +1935,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         refresh()
     }
 
-    /// The holder's full reason and process, and the queue in order. Refresh shows the state as it is then.
+    /// The holder's reason and process, and the queue in order, up to date while it is open.
     @objc func showClaims() {
-        func duration(_ seconds: Double) -> String {
-            let s = Int(seconds)
-            return s < 60 ? "\(s) s" : s < 3600 ? "\(s / 60) min \(s % 60) s" : "\(s / 3600) h \(s % 3600 / 60) min"
-        }
-        func section(_ entry: Lease.Entry, _ heading: String, _ timing: String) -> String {
-            "\(heading): \(entry.client)\n  reason: \(entry.reason.isEmpty ? "(none given)" : entry.reason)\n  \(timing)\n"
-                + agentDescription(pid: hub.clientPID(conn: entry.conn)).split(separator: "\n")
-                    .map { "  " + $0 }.joined(separator: "\n")
-        }
-        let (owner, queue, now) = hub.lease.entries()
-        var parts: [String] = []
-        if let owner {
-            parts.append(section(owner, "Holding the PS5", "held for \(duration(now - owner.since)), "
-                + "lapses in \(duration(max(0, owner.idle - (now - owner.active)))) without a request"))
-        } else {
-            parts.append("Nobody holds the PS5.")
-        }
-        parts.append(queue.isEmpty ? "Queue: empty" : "Queue (\(queue.count)):")
-        for (index, entry) in queue.enumerated() {
-            parts.append(section(entry, "#\(index + 1)", "waiting for \(duration(now - entry.since))"))
-        }
-        let text = NSTextView(frame: NSRect(x: 0, y: 0, width: 560, height: 320))
-        text.isEditable = false
-        text.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-        text.string = parts.joined(separator: "\n\n")
-        text.setAccessibilityLabel("Claim and queue details")
-        let scroll = NSScrollView(frame: text.frame)
-        scroll.hasVerticalScroller = true
-        scroll.borderType = .bezelBorder
-        scroll.documentView = text
-        text.autoresizingMask = [.width]
-        let alert = NSAlert()
-        alert.messageText = "Claim and queue"
-        alert.informativeText = "Agents claim the PS5 with claim_console; the others wait in this order."
-        alert.accessoryView = scroll
-        alert.addButton(withTitle: "Close")
-        alert.addButton(withTitle: "Refresh")
-        alert.addButton(withTitle: "Copy")
-        alert.beginSheetModal(for: window) { response in
-            switch response {
-            case .alertSecondButtonReturn: DispatchQueue.main.async { self.showClaims() }
-            case .alertThirdButtonReturn:
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(text.string, forType: .string)
-                self.window.makeFirstResponder(self.video)
-            default: self.window.makeFirstResponder(self.video)
-            }
+        guard claimsSheet == nil else { return }
+        let sheet = ClaimsSheet(hub: hub) { [weak self] in self?.forceRelease() }
+        claimsSheet = sheet
+        sheet.present(on: window) { [weak self] in
+            self?.claimsSheet = nil
+            if let self { self.window.makeFirstResponder(self.video) }
         }
     }
 
@@ -1619,10 +1969,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        // Quitting mid-recording keeps the video: it goes to ~/Movies without asking.
-        if let recorder = videoRecorder,
-           let movies = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask).first {
-            let url = movies.appendingPathComponent("PS5 \(Self.stamp()).mp4")
+        // Quitting mid-recording keeps the video: it goes to the capture folder without asking.
+        if let recorder = videoRecorder {
+            let folder = captureFolder
+            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let url = folder.appendingPathComponent("PS5 \(Self.stamp()).mp4")
             stopVideo(recorder) { [weak self] reason in
                 if reason == nil { _ = self?.moveVideo(recorder.url, to: url) }
                 self?.hub.quit()

@@ -66,17 +66,6 @@ struct Config {
             }
             i += 1
         }
-        #if !PS5MCP_PBS
-        // Saved by a build with PBS, or asked for by name: this build has no such source.
-        if video == "pbs" {
-            let card = CaptureDevices.video.first { $0.deviceType == .external }
-            video = card?.uniqueID ?? ""
-            audio = card.flatMap { card in
-                CaptureDevices.audio.first { $0.localizedName == card.localizedName }?.uniqueID
-            }
-            say("this build has no PBS source (make app PBS=1); using \(card?.localizedName ?? "no capture device")")
-        }
-        #endif
         if host.isEmpty, let saved = UserDefaults.standard.string(forKey: savedHostKey), !saved.isEmpty {
             host = saved
             hostSource = "settings"

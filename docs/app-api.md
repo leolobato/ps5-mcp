@@ -75,7 +75,7 @@ free, every client drives it as before.
   `padd_stop` and `padd_update` fail with `leased`. Neutral `set`, `release`, `release_all`, `key` and the read-only commands still work.
 - **Lapses:** closing the connection gives up its claim. So do `idle_s` seconds without a request from the holder's
   connection. The next connection in the queue then gets the claim.
-- **Force release:** the window's Force release agent… button (or `force_release`) takes the claim from a holder that
+- **Force release:** the window's Force release agent… command (or `force_release`) takes the claim from a holder that
   will not let go. The next in the queue gets it and the holder's held input is released. The holder's next driving
   command fails once with a message that says its claim was force-released; it can `claim` again to queue.
 - **People win:** the keyboard, the window's buttons and auto-assign are never blocked. A held key still blocks the
@@ -108,7 +108,7 @@ free, every client drives it as before.
   users with no controller, and `controllers.max` how many this padd runs. The app keeps the users and the selected one in
   `<state>/controllers` and restores them after every (re)connect, one dialog at a time: a restarted padd has controller 1
   only, so numbers follow the saved order. A user who can no longer come back keeps the choice saved and sets `notice`. The
-  window's **Input to** menu and its **+** and **−** buttons do the same, without the lease check.
+  window's controller list and its **+** and **−** buttons do the same, without the lease check.
 - `padd_start` and `padd_update` deploy to the console. Nothing calls it on its own, and it never retries.
 - The CLI writes the archive exactly as it does without the app.
 

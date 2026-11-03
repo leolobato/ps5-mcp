@@ -21,11 +21,10 @@ final class UninstallSheet: NSObject, NSTableViewDataSource, NSTableViewDelegate
 
         let heading = NSTextField(labelWithString: "Uninstall games/apps")
         heading.font = .boldSystemFont(ofSize: 13)
-        let detail = NSTextField(wrappingLabelWithString:
-            "Their data on the console is deleted, and for ShadowMountPlus titles their source too. "
-            + "The console refuses while a game is running; close it first.")
-        detail.font = .systemFont(ofSize: 11)
-        detail.textColor = .secondaryLabelColor
+        let detail = Banner(target: self)
+        detail.show(.error, title: "This cannot be undone",
+                    body: "Their data on the console is deleted, and for ShadowMountPlus titles their source too. "
+                        + "The console refuses while a game is running; close it first.", wrap: 400)
 
         for (id, title, width) in [("check", "", 24.0), ("name", "Name", 260.0), ("id", "ID", 90.0)] {
             let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id))

@@ -77,12 +77,12 @@ No `make` target contacts the console.
    (or **No audio**) and click **Apply & Restart Capture**. Device selections are saved by ID; no capture hardware
    is selected by default. **Refresh Devices** updates the list after plugging in a card. You can restart capture
    without disconnecting MCP clients; stop and save any video recording first.
-3. **Start `padd`** with **Start** or `uv run ps5mcp padd start`, once per console boot. The app answers
+3. **Start `padd`** with **Start padd…** in the sidebar or `uv run ps5mcp padd start`, once per console boot. The app answers
    the user-selection dialog automatically. If your DualSense turns off, press its PS button and select your user again.
-   The sidebar shows the running padd version and, when `make` built a newer one, "v1.4 available": **Update** (or
+   The sidebar's status line shows the running padd version and, when `make` built a newer one, "update available": **Update** in the `⋯` menu (or
    `uv run ps5mcp padd update`) stops padd and starts the new build.
 4. **Control the console** from the app window or connect an MCP client (see [MCP clients](#mcp-clients)).
-5. **Stop `padd`** with **Stop** or `uv run ps5mcp padd stop` before turning off the console. Killing it
+5. **Stop `padd`** with **Stop padd…** in the `⋯` menu or `uv run ps5mcp padd stop` before turning off the console. Killing it
    through Payload Manager can leave a phantom controller until reboot.
 
 The MCP server starts the app when needed, headless by default (`PS5MCP_VIEW=1` shows the window).
@@ -128,22 +128,31 @@ keeps the server code it started with; restart it after updating this checkout.
 
 ### Live window and keyboard
 
-The window shows live video, audio, and connection status. The sidebar has these controls:
+The window shows live video and audio. The sidebar shows what is used most, and a message only when something needs you:
 
-- **padd:** Start, Update (stop, then start the padd built into the app; enabled only when padd runs another version), and Stop.
-  **+** and **−** add and remove virtual controllers, up to four, and **Input to** chooses which one the keyboard and
-  agents drive (see [More players](#more-players)).
-- **Console:** Home, close the running game/app, Release all input (**⌘.**), and Force release agent… to take the
-  console from an agent that claimed it and will not let go (the next agent in the queue gets it).
+- **Status line:** the connection and `padd` version. Click it for the details and the video source. Under it, messages
+  appear for an agent holding the console, a controller dialog, no signal, or `padd` not connected, with the action to take.
+- **Remote Play:** only when Remote Play is the video source: its status, Reconnect and Type…. Set Up and Forget are in
+  Settings.
+- **Capture:** save a snapshot as PNG (**⌘S**), and record the picture and sound to an MP4 (**⇧⌘R**). Under them, pick a
+  saved button recording and play it, or record your button presses (**⌘R**). These are the same files that agents use with
+  `play_recording`. Snapshots and videos use one folder, set in Settings. Stop asks where to save the video, starting in
+  that folder; quitting while recording saves it there.
+- **Console:** Home, the PS button, and close the running game/app.
 - **Launch:** pick an installed game/app and launch it (**⌘L**). The list comes from PS5 Web File Manager and is cached
-  in `titles/`; ↻ reloads it.
-- **Capture:** save a snapshot as PNG (**⌘S**), and record the picture and sound to an MP4 (**⇧⌘R**). Stop asks where
-  to save the video; quitting while recording saves it to `~/Movies`.
-- **Recordings:** record your button presses (**⌘R**), then pick a saved recording and play it. These are the same
-  files that agents use with `play_recording`.
-- **Install:** install a `.pkg` package or add an `.elf` payload to Payload Manager (and run it), and uninstall
-  checked games/apps (padd 1.3). For titles ShadowMountPlus manages, uninstalling also deletes their source folder or
-  image through ShadowMountPlus, so its next scan does not install them again.
+  in `titles/`.
+- **Controller:** the bottom row. **+** adds a virtual controller, up to four (see [More players](#more-players)). With
+  several, click one to send the keyboard's and agents' input to it (**⌘1** to **⌘4**), and **−** on the selected one removes it.
+- **`⋯` (More):** Release all input (**⌘.**), Force release agent…, Claim and queue…, reload games/apps (**⇧⌘L**), install a
+  `.pkg` package or add an `.elf` payload to Payload Manager, uninstall checked games/apps (padd 1.3), and Start, Update and Stop
+  `padd`. Update is enabled only when `padd` runs another version. For titles ShadowMountPlus manages, uninstalling also deletes
+  their source folder or image through ShadowMountPlus, so its next scan does not install them again.
+
+The menu bar has every command, in the Console, Capture, Controllers, Video Source and View menus.
+
+The toolbar's keyboard button, **⌃⌥K** from any app, or View › Show Keyboard Panel shows a floating panel with the controller's
+keys. It floats over all windows unless you turn that off in Settings. Keys reach the PS5 only while the video has focus, and the
+panel says when they do not. Dimmed keys (Share, touchpad left and right) are not mapped yet.
 
 Holding a key holds its button and gives you priority over agents; releasing it returns control.
 
@@ -159,6 +168,7 @@ Quit with **⌘Q** or `uv run ps5mcp capture stop`.
 | `[` / `]` | Square / Triangle |
 | Q / E, Z / C | L1 / R1, L2 / R2 |
 | WASD, IJKL | Left stick, right stick |
+| X, M | L3, R3 |
 | Tab, T | Options, touchpad click |
 | H | Home screen |
 
@@ -193,11 +203,11 @@ keyboard, the API and MCP agents goes to the selected one.
    with no controller yet under `payload.controllers.available`. Without a real controller, a new controller can sign
    someone in: **+** offers the users the app has seen signed in before, or call `connect_controller(user_id=<id>)`. The
    console opens its sign-in picker with that user selected; press Cross (Enter in the window) to confirm.
-2. Click **+** next to **Input to** in the sidebar, or call `connect_controller()`, or run
+2. Click **+** next to **Controller** in the sidebar (**⌥⌘N**), or call `connect_controller()`, or run
    `uv run ps5mcp pad controller connect`. With a choice of users, **+** shows a menu. The new controller is selected, so
    the next input goes to it.
 3. The console asks "Who's using this controller?" for it. The app moves to that user's profile and answers it there.
-4. Pick the controller to drive under **Input to**, or call `use_controller(1)` to `use_controller(4)`, or run
+4. Click the controller to drive in the sidebar (**⌘1** to **⌘4**), or call `use_controller(1)` to `use_controller(4)`, or run
    `uv run ps5mcp pad use 1`. The others are released.
 5. Launch the game with `launch`. It always starts the game for the foreground user, so controller 1 owns it.
 
@@ -212,7 +222,7 @@ Several agents can use the console. An agent calls `claim_console(reason)` so th
 buttons, run console commands, or install until it calls `release_console()`. Another agent that calls
 `claim_console` joins a queue. With `wait_s`, the call returns when the console is free for that agent.
 A claim ends when its session closes, or after 10 minutes without a tool call. The sidebar shows the agent that has
-the console and the number of agents in the queue; **Claim and queue…** shows the holder's full reason, its
+the console and the number of agents in the queue; **Claim and queue…** (kept up to date while open) shows the holder's full reason, its
 process and agent (folder, session, command), and everyone waiting. The keyboard and the window's buttons always work. The CLI (`ps5mcp pad`, `ps5mcp padd`) is blocked like any agent.
 
 ### File transfer

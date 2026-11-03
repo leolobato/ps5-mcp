@@ -359,6 +359,7 @@ let defaultKeymap: [String: KeyAction] = {
         "w": axis { $0.ly = 0 }, "s": axis { $0.ly = 255 }, "a": axis { $0.lx = 0 }, "d": axis { $0.lx = 255 },
         "i": axis { $0.ry = 0 }, "k": axis { $0.ry = 255 }, "j": axis { $0.rx = 0 }, "l": axis { $0.rx = 255 },
         "tab": b("options"), "t": b("touchpad"), "h": .command("home"), "p": b("ps"),
+        "x": b("l3"), "m": b("r3"),
     ]
 }()
 

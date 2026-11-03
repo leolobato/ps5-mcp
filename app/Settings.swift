@@ -1,5 +1,5 @@
-// The Settings window (⌘,): the PS5's IP address, saved for the next launches and applied at once, and the folder
-// snapshots are saved to (Desktop by default), which applies as soon as it is chosen.
+// The Settings window (⌘,): the PS5's IP address, saved for the next launches and applied at once, the video source
+// with only that source's controls, the folder snapshots and videos go to (Desktop by default), and the keyboard panel.
 //
 // --host and PS5_HOST still win at launch (the MCP server passes PS5_HOST), so the window says when one of them set
 // this launch's address. Saving here switches the running app to the new address either way.
@@ -10,12 +10,12 @@ import AVFoundation
 let captureVideoKey = "captureVideoID"
 let captureAudioKey = "captureAudioID"
 
-/// The UserDefaults key for the snapshot folder chosen in Settings.
-let snapshotFolderKey = "snapshotFolder"
+/// The UserDefaults key for the capture folder chosen in Settings (its name is from when only snapshots used it).
+let captureFolderKey = "snapshotFolder"
 
-/// Where Snapshot saves its PNGs: the folder chosen in Settings, else the Desktop.
-var snapshotFolder: URL {
-    if let path = UserDefaults.standard.string(forKey: snapshotFolderKey), !path.isEmpty {
+/// Where snapshots are saved, and where saving a video starts: the folder chosen in Settings, else the Desktop.
+var captureFolder: URL {
+    if let path = UserDefaults.standard.string(forKey: captureFolderKey), !path.isEmpty {
         return URL(fileURLWithPath: path, isDirectory: true)
     }
     return FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first
@@ -30,6 +30,13 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
     private let save = NSButton(title: "Save", target: nil, action: nil)
     private let folder = NSPathControl()
     private let onSaved: () -> Void
+    private let onFloatingChanged: () -> Void
+    private let sourcePicker = NSSegmentedControl()
+    private var sources = ["", "remoteplay"]
+    private let useSource = NSButton(title: "", target: nil, action: nil)
+    private let captureControls = NSStackView()
+    private let remoteControls = NSStackView()
+    private let floatOverAll = NSButton(checkboxWithTitle: "Float over all windows, on every Space", target: nil, action: nil)
     private let videoDevice = NSPopUpButton()
     private let audioDevice = NSPopUpButton()
     private let captureNote = NSTextField(wrappingLabelWithString: "")
@@ -47,12 +54,14 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
     private var pbsBusy = false
     private var pbsMessage: String?
     private var pbsWasStreaming = false
+    private let pbsControls = NSStackView()
     #endif
 
-    init(hub: Hub, onSaved: @escaping () -> Void) {
+    init(hub: Hub, onSaved: @escaping () -> Void, onFloatingChanged: @escaping () -> Void) {
         self.hub = hub
         self.onSaved = onSaved
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 440), styleMask: [.titled, .closable],
+        self.onFloatingChanged = onFloatingChanged
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 440), styleMask: [.titled, .closable],
                           backing: .buffered, defer: false)
         super.init()
         window.title = "Settings"
@@ -66,8 +75,6 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
         save.target = self
         save.action = #selector(saved)
         save.keyEquivalent = "\r"
-        let addressRow = NSStackView(views: [address, save])
-        addressRow.spacing = 8
 
         for popup in [videoDevice, audioDevice] {
             popup.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -75,29 +82,30 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
         }
         let refresh = NSButton(title: "Refresh Devices", target: self, action: #selector(refreshDevices))
         let apply = NSButton(title: "Apply & Restart Capture", target: self, action: #selector(applyCapture))
-        let captureButtons = NSStackView(views: [refresh, apply])
-        captureButtons.spacing = 8
-        videoDevice.target = self
-        videoDevice.action = #selector(sourceChanged)
         setupRemotePlay.target = self; setupRemotePlay.action = #selector(setUpRemotePlay)
         forgetRemotePlay.target = self; forgetRemotePlay.action = #selector(forgetPairing)
+        forgetRemotePlay.hasDestructiveAction = true
         reconnectRemotePlay.target = self; reconnectRemotePlay.action = #selector(reconnect)
-        let remotePlayButtons = NSStackView(views: [setupRemotePlay, reconnectRemotePlay, forgetRemotePlay])
-        remotePlayButtons.spacing = 8
+        useSource.target = self; useSource.action = #selector(applyCapture)
+        useSource.keyEquivalent = ""
+
+        var labels = ["Capture card", "Remote Play"]
         #if PS5MCP_PBS
-        stopPBS.target = self; stopPBS.action = #selector(stopPBSPayload)
-        reconnectPBS.target = self; reconnectPBS.action = #selector(reconnectToPBS)
-        loadPBS.target = self; loadPBS.action = #selector(loadPBSPayload)
-        let pbsButtons = NSStackView(views: [loadPBS, reconnectPBS, stopPBS])
-        pbsButtons.spacing = 8
+        labels.append("PBS")
+        sources.append("pbs")
         #endif
+        sourcePicker.segmentCount = labels.count
+        for (index, label) in labels.enumerated() { sourcePicker.setLabel(label, forSegment: index) }
+        sourcePicker.segmentDistribution = .fillEqually
+        sourcePicker.trackingMode = .selectOne
+        sourcePicker.target = self
+        sourcePicker.action = #selector(sourceChanged)
+        sourcePicker.setAccessibilityLabel("Video source")
 
         folder.pathStyle = .popUp
         folder.isEditable = false
         folder.setContentHuggingPriority(.defaultLow, for: .horizontal)
         let choose = NSButton(title: "Choose…", target: self, action: #selector(chooseFolder))
-        let folderRow = NSStackView(views: [folder, choose])
-        folderRow.spacing = 8
 
         var notes = [note, captureNote, remotePlayNote, connectionNote]
         #if PS5MCP_PBS
@@ -106,63 +114,111 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
         for text in notes {
             text.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
             text.textColor = .secondaryLabelColor
-            text.preferredMaxLayoutWidth = 380
+            text.preferredMaxLayoutWidth = Self.innerWidth
         }
 
-        // A standard macOS form: right-aligned labels, controls in one column, a line between the sections.
-        func label(_ title: String) -> NSTextField { NSTextField(labelWithString: title) }
-        func separator() -> NSBox { let box = NSBox(); box.boxType = .separator; return box }
-        let empty = NSGridCell.emptyContentView
-        var rows: [[NSView]] = [
-            [label("PS5 IP address:"), addressRow],
-            [empty, note],
-            [separator(), empty],
-            [label("Video source:"), videoDevice],
-            [label("Audio device:"), audioDevice],
-            [empty, captureNote],
-            [empty, captureButtons],
-            [label("Remote Play:"), remotePlayButtons],
-            [empty, remotePlayNote],
-            [label("Connection:"), connectionNote],
-        ]
-        #if PS5MCP_PBS
-        rows += [[label("PBS:"), pbsButtons], [empty, pbsNote]]
-        #endif
-        rows += [[separator(), empty], [label("Save snapshots to:"), folderRow]]
-        let grid = NSGridView(views: rows)
-        grid.rowSpacing = 8
-        grid.columnSpacing = 8
-        grid.rowAlignment = .firstBaseline
-        grid.column(at: 0).xPlacement = .trailing
-        grid.column(at: 1).xPlacement = .fill
-        grid.column(at: 1).width = 380
-        for row in [2, rows.count - 2] {
-            grid.row(at: row).mergeCells(in: NSRange(location: 0, length: 2))
-            grid.cell(atColumnIndex: 0, rowIndex: row).xPlacement = .fill
-            grid.row(at: row).topPadding = 6
-            grid.row(at: row).bottomPadding = 6
+        func row(_ views: [NSView], spacing: CGFloat = 8) -> NSStackView {
+            let stack = NSStackView(views: views)
+            stack.spacing = spacing
+            stack.distribution = .fill
+            return stack
         }
-        grid.cell(for: captureButtons)?.xPlacement = .leading
-        grid.cell(for: remotePlayButtons)?.xPlacement = .leading
-        #if PS5MCP_PBS
-        grid.cell(for: pbsButtons)?.xPlacement = .leading
-        #endif
-
-        grid.translatesAutoresizingMaskIntoConstraints = false
-        let content = NSView()
-        content.addSubview(grid)
-        NSLayoutConstraint.activate([
-            grid.topAnchor.constraint(equalTo: content.topAnchor, constant: 20),
-            grid.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -20),
-            grid.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
-            grid.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
+        func spacer() -> NSView {
+            let view = NSView()
+            view.setContentHuggingPriority(.init(1), for: .horizontal)
+            return view
+        }
+        func column(_ views: [NSView], into stack: NSStackView = NSStackView(), spacing: CGFloat = 8,
+                    inset: CGFloat = 0) -> NSStackView {
+            stack.orientation = .vertical
+            stack.alignment = .leading
+            stack.spacing = spacing
+            for view in views {
+                stack.addArrangedSubview(view)
+                if view is NSStackView || view is NSGridView {
+                    view.translatesAutoresizingMaskIntoConstraints = false
+                    view.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -inset).isActive = true
+                }
+            }
+            return stack
+        }
+        let devices = NSGridView(views: [
+            [NSTextField(labelWithString: "Video device"), videoDevice],
+            [NSTextField(labelWithString: "Audio device"), audioDevice],
         ])
-        window.contentView = content
+        devices.rowSpacing = 8
+        devices.columnSpacing = 8
+        devices.rowAlignment = .firstBaseline
+        devices.column(at: 1).xPlacement = .fill
+        _ = column([devices, captureNote, row([spacer(), refresh, apply])], into: captureControls)
+        _ = column([connectionNote, remotePlayNote,
+                    row([forgetRemotePlay, spacer(), setupRemotePlay, reconnectRemotePlay])], into: remoteControls)
+        var panes: [NSView] = [captureControls, remoteControls]
+        #if PS5MCP_PBS
+        stopPBS.target = self; stopPBS.action = #selector(stopPBSPayload)
+        reconnectPBS.target = self; reconnectPBS.action = #selector(reconnectToPBS)
+        loadPBS.target = self; loadPBS.action = #selector(loadPBSPayload)
+        _ = column([pbsNote, row([spacer(), loadPBS, reconnectPBS, stopPBS])], into: pbsControls)
+        panes.append(pbsControls)
+        #endif
+
+        floatOverAll.target = self
+        floatOverAll.action = #selector(floatChanged)
+        let hotKey = NSTextField(labelWithString: "Show or hide it from any app with ⌃⌥K, or with the toolbar's keyboard button.")
+        hotKey.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        hotKey.textColor = .secondaryLabelColor
+
+        let body = column([
+            section("Console", [row([NSTextField(labelWithString: "PS5 IP address"), address, save]), note]),
+            section("Video and audio", [sourcePicker] + panes + [row([spacer(), useSource])]),
+            section("Capture files", [row([NSTextField(labelWithString: "Save snapshots and videos to"), folder, choose])]),
+            section("Keyboard panel", [floatOverAll, hotKey]),
+        ], spacing: 14, inset: 48)
+        body.edgeInsets = NSEdgeInsets(top: 18, left: 24, bottom: 20, right: 24)
+        body.translatesAutoresizingMaskIntoConstraints = false
+        body.widthAnchor.constraint(equalToConstant: 600).isActive = true
+        window.contentView = body
+    }
+
+    private static let innerWidth: CGFloat = 600 - 48 - 28
+
+    private func section(_ title: String, _ views: [NSView]) -> NSStackView {
+        let heading = NSTextField(labelWithString: title)
+        heading.font = .systemFont(ofSize: 11, weight: .semibold)
+        heading.textColor = .secondaryLabelColor
+        let inner = NSStackView()
+        inner.orientation = .vertical
+        inner.alignment = .leading
+        inner.spacing = 10
+        inner.edgeInsets = NSEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
+        let box = NSBox()
+        box.boxType = .custom
+        box.titlePosition = .noTitle
+        box.cornerRadius = 10
+        box.borderWidth = 1
+        box.borderColor = .separatorColor
+        box.fillColor = .controlBackgroundColor
+        box.pin(inner)
+        for view in views {
+            inner.addArrangedSubview(view)
+            if !(view is NSButton) && !(view is NSTextField) || view === sourcePicker {
+                view.translatesAutoresizingMaskIntoConstraints = false
+                view.widthAnchor.constraint(equalTo: inner.widthAnchor, constant: -28).isActive = true
+            }
+        }
+        let stack = NSStackView(views: [heading, box])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 6
+        box.translatesAutoresizingMaskIntoConstraints = false
+        box.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        return stack
     }
 
     func show() {
         address.stringValue = hub.host
-        folder.url = snapshotFolder
+        folder.url = captureFolder
+        floatOverAll.state = KeyboardPanel.floats ? .on : .off
         fillDevices(video: hub.captureVideo, audio: hub.captureAudio)
         refreshCaptureStatus()
         update()
@@ -195,23 +251,19 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
     }
 
     private func fillDevices(video: String?, audio: String?) {
-        var network = ["remoteplay": "Remote Play (network)"]
-        #if PS5MCP_PBS
-        network["pbs"] = "PBS payload (network)"
-        #endif
-        fill(videoDevice, devices: CaptureDevices.video, selection: network[video ?? ""] == nil ? video : nil, empty: "Choose a video device…")
-        for id in ["remoteplay", "pbs"] where network[id] != nil {
-            videoDevice.addItem(withTitle: network[id]!)
-            videoDevice.lastItem?.representedObject = id
-            if video == id { videoDevice.select(videoDevice.lastItem) }
-        }
-        fill(audioDevice, devices: CaptureDevices.audio, selection: network[audio ?? ""] == nil ? audio : nil, empty: "No audio")
+        let network = sources.contains(video ?? "") && !(video ?? "").isEmpty
+        fill(videoDevice, devices: CaptureDevices.video, selection: network ? nil : video, empty: "Choose a video device…")
+        fill(audioDevice, devices: CaptureDevices.audio, selection: network ? nil : audio, empty: "No audio")
+        sourcePicker.selectedSegment = sources.firstIndex(of: network ? video ?? "" : "") ?? 0
         sourceChanged()
     }
 
     @objc private func refreshDevices() {
+        let source = selectedSource
         fillDevices(video: videoDevice.selectedItem?.representedObject as? String,
                     audio: audioDevice.selectedItem?.representedObject as? String)
+        sourcePicker.selectedSegment = sources.firstIndex(of: source) ?? 0
+        sourceChanged()
         refreshCaptureStatus()
     }
 
@@ -221,6 +273,7 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
             .replacingOccurrences(of: " in Settings", with: "")
             ?? "Selections are saved for future launches. Restarting capture keeps connected MCP clients running."
         refreshRemotePlayStatus()
+        updateUseSource()
         #if PS5MCP_PBS
         refreshPBSStatus()
         #endif
@@ -313,30 +366,43 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
         } catch { connectionNote.stringValue = error.localizedDescription }
     }
 
+    /// "" is the capture card; the others are network sources, with their own id.
+    private var selectedSource: String { sources[max(0, sourcePicker.selectedSegment)] }
+
+    /// Only the chosen source's controls show, and the window fits them.
     @objc private func sourceChanged() {
-        let selected = videoDevice.selectedItem?.representedObject as? String
-        var labels = ["remoteplay": "Remote Play"]
+        let source = selectedSource
+        captureControls.isHidden = source != ""
+        remoteControls.isHidden = source != "remoteplay"
         #if PS5MCP_PBS
-        labels["pbs"] = "PBS"
+        pbsControls.isHidden = source != "pbs"
         #endif
-        for item in audioDevice.itemArray where (item.representedObject as? String).map({ labels[$0] != nil && $0 != selected }) == true {
-            audioDevice.removeItem(at: audioDevice.index(of: item))
-        }
-        let label = selected.flatMap { labels[$0] }
-        if let selected, let label {
-            if !audioDevice.itemArray.contains(where: { $0.representedObject as? String == selected }) {
-                audioDevice.addItem(withTitle: "\(label) audio")
-                audioDevice.lastItem?.representedObject = selected
-            }
-            if let item = audioDevice.itemArray.first(where: { $0.representedObject as? String == selected }) {
-                audioDevice.select(item)
-            }
-        }
-        audioDevice.isEnabled = label == nil
-        audioDevice.toolTip = label.map { "\($0) supplies both video and audio." }
+        updateUseSource()
+        fitWindow()
     }
 
-    @objc private func setUpRemotePlay() {
+    /// A network source applies with one button: it has no devices to choose first.
+    private func updateUseSource() {
+        let source = selectedSource
+        useSource.isHidden = source == "" || hub.captureVideo == source
+        useSource.title = "Use \(sourcePicker.label(forSegment: max(0, sourcePicker.selectedSegment)) ?? "This Source")"
+    }
+
+    private func fitWindow() {
+        guard let content = window.contentView else { return }
+        content.layoutSubtreeIfNeeded()
+        let size = NSSize(width: 600, height: content.fittingSize.height)
+        var frame = window.frameRect(forContentRect: NSRect(origin: .zero, size: size))
+        frame.origin = NSPoint(x: window.frame.minX, y: window.frame.maxY - frame.height)
+        window.setFrame(frame, display: true)
+    }
+
+    @objc private func floatChanged() {
+        KeyboardPanel.floats = floatOverAll.state == .on
+        onFloatingChanged()
+    }
+
+    @objc func setUpRemotePlay() {
         do {
             if let existing = remotePlaySetupWindow, existing.window.isVisible {
                 existing.show(); return
@@ -389,8 +455,9 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
     }
 
     @objc private func applyCapture() {
-        let video = videoDevice.selectedItem?.representedObject as? String ?? ""
-        let audio = video == "remoteplay" ? "remoteplay" : audioDevice.selectedItem?.representedObject as? String ?? ""
+        let network = selectedSource
+        let video = network.isEmpty ? videoDevice.selectedItem?.representedObject as? String ?? "" : network
+        let audio = network.isEmpty ? audioDevice.selectedItem?.representedObject as? String ?? "" : network
         do {
             guard let ui = hub.ui else { throw BadInput("Capture is not ready.") }
             try ui.restartCapture(video: video, audio: audio.isEmpty ? nil : audio)
@@ -398,6 +465,7 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
             if audio.isEmpty { UserDefaults.standard.removeObject(forKey: captureAudioKey) }
             else { UserDefaults.standard.set(audio, forKey: captureAudioKey) }
             refreshCaptureStatus()
+            fitWindow()
         } catch {
             let alert = NSAlert()
             alert.messageText = "Could not restart capture"
@@ -430,10 +498,10 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
         panel.prompt = "Choose"
-        panel.directoryURL = snapshotFolder
+        panel.directoryURL = captureFolder
         panel.beginSheetModal(for: window) { response in
             guard response == .OK, let url = panel.url else { return }
-            UserDefaults.standard.set(url.path, forKey: snapshotFolderKey)
+            UserDefaults.standard.set(url.path, forKey: captureFolderKey)
             self.folder.url = url
         }
     }

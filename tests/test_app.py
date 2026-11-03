@@ -778,6 +778,24 @@ class DialogSim:
 LEFT = p.BUTTONS["left"]
 
 
+@pytest.mark.skipif(not USERS.exists() or not HOME.exists(), reason="test fixtures not present")
+def test_the_request_to_pick_a_user_ends_once_the_dialog_is_gone(tmp_path):
+    daemon = Padd(tmp_path, env={"PADD_LOGIN_USERS": f"{0x11ECF8B9},{GUEST}", "PADD_GUEST_NAME": "Nobody Here"})
+    hub = App(daemon, USERS)
+    try:
+        client = hub.client()
+        assert wait_for(lambda: CROSS in buttons(daemon) and buttons(daemon)[-1] == 0, 4)
+        assert client.command("pad", "connect") == 0
+        assert wait_for(lambda: "pick Nobody Here" in (client.status()["notice"] or ""), 15)
+        time.sleep(1.5)  # still asking while the dialog is on screen
+        assert "pick Nobody Here" in (client.status()["notice"] or "")
+        put_frame(hub.frame, HOME)  # answered on the console
+        assert wait_for(lambda: not client.status()["notice"], 6)
+    finally:
+        hub.stop()
+        daemon.stop()
+
+
 @pytest.mark.skipif(not USERS.exists() or not HOME.exists() or not Path(DialogSim.FONT).exists(), reason="fixtures")
 @pytest.mark.parametrize("names,focus,target,expected", [
     (["Add User", "leolobato-jb", "Other"], 1, "Other", [RIGHT, CROSS]),

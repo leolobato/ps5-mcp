@@ -17,6 +17,7 @@ import pytest
 from PIL import Image
 
 from ps5mcp import capture
+from ps5mcp.hub import AppClient
 
 from .test_app import APP, App
 from .test_padd_host import BINARY, Padd
@@ -338,6 +339,11 @@ def test_a_normal_build_has_no_pbs_and_leaves_a_saved_pbs_source(padd, tmp_path)
         status = wait(lambda: capture.NativeApp(root).status())
         assert status["source"] != "pbs" and status["pbs"] is None
         assert "no PBS source" in (root / "app.log").read_text()
+        client = AppClient(root / "capture.sock")
+        client.call("capture_restart", video="pbs", audio="pbs")
+        client.close()
+        assert capture.NativeApp(root).status()["source"] != "pbs"
+        assert (root / "app.log").read_text().count("no PBS source") == 2  # the API takes the same fallback
     finally:
         app.terminate()
         app.wait(5)
