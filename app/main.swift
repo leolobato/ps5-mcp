@@ -5,7 +5,7 @@
 // - Local API on <state>/capture.sock (docs/app-api.md); the MCP server is a thin client of it.
 //
 // Usage: PS5 [--state-dir DIR] [--video NAME|remoteplay|pbs|file:PATH|synthetic] [--audio NAME|none] [--headless]
-//            [--host H] [--port N] [--pbs-port N] [--no-auto-assign] [--padd-cli EXE] [--snapshot-fps N]
+//            [--host H] [--port N] [--pbs-port N (PBS=1 builds)] [--features] [--no-auto-assign] [--padd-cli EXE] [--snapshot-fps N]
 //        PS5 --dialog-score IMAGE   (prints the assignment-dialog match score and exits)
 //        PS5 --dialog-users IMAGE   (prints the dialog's profile names, left to right, and exits)
 
@@ -27,7 +27,9 @@ struct Config {
     var homeMethod = ProcessInfo.processInfo.environment["PS5MCP_HOME_METHOD"] ?? "suspend"
     var autoAssign = ProcessInfo.processInfo.environment["PS5MCP_AUTO_ASSIGN"] != "0"
     /// Remote Play asks the console for its on-screen keyboard (MCP type_text). PS5MCP_RP_KEYBOARD=0 turns it off.
+    #if PS5MCP_PBS
     var pbsPort = Int(ProcessInfo.processInfo.environment["PS5MCP_PBS_PORT"] ?? "") ?? PBSSource.defaultPort
+    #endif
     var remotePlayKeyboard = ProcessInfo.processInfo.environment["PS5MCP_RP_KEYBOARD"] != "0"
     /// Baked into Info.plist by the Makefile: the repo (for the padd CLI and its archive) and uv.
     var repo = Bundle.main.object(forInfoDictionaryKey: "PS5MCPRepo") as? String
@@ -49,7 +51,9 @@ struct Config {
             case "--snapshot-fps": snapshotFPS = Double(value) ?? 5; i += 1
             case "--host": host = value; hostSource = "--host"; i += 1
             case "--port": port = UInt16(value) ?? PMCP.port; i += 1
+            #if PS5MCP_PBS
             case "--pbs-port": pbsPort = Int(value) ?? PBSSource.defaultPort; i += 1
+            #endif
             case "--firmware": firmware = value; i += 1
             case "--repo": repo = value; i += 1
             case "--padd-cli": paddCLI = value; i += 1
@@ -62,6 +66,17 @@ struct Config {
             }
             i += 1
         }
+        #if !PS5MCP_PBS
+        // Saved by a build with PBS, or asked for by name: this build has no such source.
+        if video == "pbs" {
+            let card = CaptureDevices.video.first { $0.deviceType == .external }
+            video = card?.uniqueID ?? ""
+            audio = card.flatMap { card in
+                CaptureDevices.audio.first { $0.localizedName == card.localizedName }?.uniqueID
+            }
+            say("this build has no PBS source (make app PBS=1); using \(card?.localizedName ?? "no capture device")")
+        }
+        #endif
         if host.isEmpty, let saved = UserDefaults.standard.string(forKey: savedHostKey), !saved.isEmpty {
             host = saved
             hostSource = "settings"
@@ -69,6 +84,13 @@ struct Config {
         templatePath = Bundle.main.path(forResource: "assign-dialog", ofType: "png")
             ?? (repo ?? ".") + "/src/ps5mcp/assets/assign-dialog.png"
     }
+}
+
+if CommandLine.arguments.contains("--features") {
+    #if PS5MCP_PBS
+    print("pbs")
+    #endif
+    exit(0)
 }
 
 let config = Config(CommandLine.arguments)

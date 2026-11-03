@@ -764,8 +764,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         }
         let age = hub.sink.frameAge
         let camera = hub.cameraPermission
-        // PBS has its own message, including before the first frame, when the frame age is not a number of seconds yet.
-        let pbsIssue = (hub.source as? PBSSource)?.status.issue
+        let pbsIssue = hub.pbsIssue
         noSignalLabel.isHidden = videoHidden || (age <= 2 && pbsIssue == nil)
         noSignalLabel.stringValue = pbsIssue.map { "  \($0)  " } ?? (hub.source is CameraSource
             ? String(format: "  No HDMI signal for %.0f s · it returns when the console leaves this screen  ", age)
@@ -787,7 +786,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         sidebar.buttons["forceRelease"]?.isEnabled = lease["owner"] is [String: Any]
         sidebar.buttons["claimDetails"]?.isEnabled = lease["owner"] is [String: Any] || queued > 0
         sidebar.notice.stringValue = hub.notice ?? (hub.source as? RemotePlaySource)?.status.summary
-            ?? (hub.source as? PBSSource)?.status.summary ?? ""
+            ?? hub.pbsSummary ?? ""
         let canRun = busy == nil && hub.padd.json["available"] as? Bool == true
         let fileManagerBusy = titlesLoading || installing != nil  // Web File Manager runs one task at a time
         sidebar.buttons["paddStart"]?.isEnabled = canRun && !link.connected && !fileManagerBusy

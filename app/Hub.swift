@@ -170,6 +170,7 @@ final class Hub {
                 source = UnavailableSource()
                 captureIssue = error.localizedDescription
             }
+        #if PS5MCP_PBS
         case "pbs":
             captureAudio = "pbs"
             if host.isEmpty {
@@ -188,6 +189,11 @@ final class Hub {
                 }
                 source = pbs
             }
+        #else
+        case "pbs":
+            source = UnavailableSource()
+            captureIssue = "This build has no PBS source: build with make app PBS=1."
+        #endif
         case "synthetic":
             source = SyntheticSource(sink: sink)
         case let video where video.hasPrefix("file:"):
@@ -286,7 +292,9 @@ final class Hub {
             sink.invalidate()
         }
         controller.setHost(host)
+        #if PS5MCP_PBS
         if captureVideo == "pbs" { pbsHostChanged(host) }
+        #endif
         if captureVideo == "remoteplay" {
             ui?.remotePlayStreamLost { [weak self] in
                 guard let self, self.remotePlayHostChange == generation,
@@ -299,11 +307,22 @@ final class Hub {
         statusChanged()
     }
 
+    #if PS5MCP_PBS
     private func pbsHostChanged(_ host: String) {
         if let pbs = source as? PBSSource { pbs.setHost(host); return }
         do { try ui?.restartCapture(video: "pbs", audio: "pbs") }  // no address until now: the source did not exist
         catch { captureIssue = "PBS stopped after host change: \(error.localizedDescription)" }
     }
+
+    private var pbsJSON: Any { (source as? PBSSource)?.json as Any? ?? NSNull() }
+    /// PBS's message, also before the first frame, when the frame age is not a number of seconds yet.
+    var pbsIssue: String? { (source as? PBSSource)?.status.issue }
+    var pbsSummary: String? { (source as? PBSSource)?.status.summary }
+    #else
+    private var pbsJSON: Any { NSNull() }
+    var pbsIssue: String? { nil }
+    var pbsSummary: String? { nil }
+    #endif
 
     /// Takes the console from an agent that will not let go: the next in the queue gets it, and the evicted
     /// connection's held input is released. `client` limits it to that holder (the one the user confirmed).
@@ -334,7 +353,7 @@ final class Hub {
                 "pad": link.json, "title": link.title, "notice": note ?? NSNull(), "padd": padd.json,
                 "remote_play": (source as? RemotePlaySource)?.json as Any? ?? (captureVideo == "remoteplay"
                     ? RemotePlayStatus(phase: .setupNeeded, issue: note).json : NSNull()),
-                "pbs": (source as? PBSSource)?.json as Any? ?? NSNull(),
+                "pbs": pbsJSON,
                 "auto_assign": config.autoAssign && assigner != nil, "camera": cameraPermission, "lease": lease.json,
                 "controllers": controllersJSON, "login_users": loginUsers?.json as Any? ?? NSNull()]
     }

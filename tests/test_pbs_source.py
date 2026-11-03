@@ -8,6 +8,7 @@ import shutil
 import socket
 import struct
 import subprocess
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -26,6 +27,17 @@ pytestmark = [
     pytest.mark.skipif(not (BINARY.exists() and APP.exists()), reason="run make (padd-host and the app)"),
     pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg generates the H.264 frames"),
 ]
+
+
+def _has_pbs() -> bool:
+    if not APP.exists():
+        return False
+    return "pbs" in subprocess.run([str(APP), "--features"], capture_output=True, text=True, timeout=10,
+                                check=False).stdout
+
+
+# Only `make app PBS=1` has the source; PBSSource.swift itself is compiled and tested below either way.
+needs_pbs_build = pytest.mark.skipif(not _has_pbs(), reason="the app was built without PBS (make app PBS=1)")
 
 
 def blue_frame(tmp_path) -> tuple[bytes, bytes, bytes]:
@@ -165,6 +177,7 @@ def start(padd, port: int) -> App:
     return App(padd, None, "--video", "pbs", "--pbs-port", str(port))
 
 
+@needs_pbs_build
 def test_streams_video_and_audio_and_reports_status(padd, pbs):
     hub = start(padd, pbs.port)
     try:
@@ -181,6 +194,7 @@ def test_streams_video_and_audio_and_reports_status(padd, pbs):
         hub.stop()
 
 
+@needs_pbs_build
 def test_audio_loss_clears_readiness_while_video_continues(padd, pbs):
     hub = start(padd, pbs.port)
     try:
@@ -195,6 +209,7 @@ def test_audio_loss_clears_readiness_while_video_continues(padd, pbs):
         hub.stop()
 
 
+@needs_pbs_build
 def test_decode_failure_requests_a_keyframe(padd, pbs):
     slice_without_idr = b"\0\0\0\1\x41\x9a\x00\x00"
     pbs.first = [struct.pack(">II", len(slice_without_idr), 0) + slice_without_idr]
@@ -206,6 +221,7 @@ def test_decode_failure_requests_a_keyframe(padd, pbs):
         hub.stop()
 
 
+@needs_pbs_build
 def test_oversized_packet_reconnects_instead_of_buffering(padd, pbs):
     pbs.first = [struct.pack(">II", 0x7fffffff, 0)]
     hub = start(padd, pbs.port)
@@ -216,6 +232,7 @@ def test_oversized_packet_reconnects_instead_of_buffering(padd, pbs):
         hub.stop()
 
 
+@needs_pbs_build
 def test_missing_payload_explains_itself_and_recovers(padd, pbs):
     picture, port = (pbs.sps, pbs.pps, pbs.picture), pbs.port
     pbs.stop()
@@ -234,6 +251,7 @@ def test_missing_payload_explains_itself_and_recovers(padd, pbs):
             fake.stop()
 
 
+@needs_pbs_build
 def test_lost_stream_clears_snapshot_then_reconnects(padd, tmp_path):
     fake = FakePBS(*blue_frame(tmp_path))
     hub = start(padd, fake.port)
@@ -263,7 +281,7 @@ def test_load_reconnect_and_stop_payload(pbs, tmp_path):
     compiled = subprocess.run([
         "swiftc", *(str(ROOT / "app" / name) for name in ("PBSSource.swift", "RemotePlayDecoder.swift",
                                                          "RemotePlayAudio.swift", "Frames.swift", "Video.swift")),
-        str(ROOT / "tests/native/PBSSourceTests.swift"), "-parse-as-library", "-framework", "VideoToolbox",
+        str(ROOT / "tests/native/PBSSourceTests.swift"), "-parse-as-library", "-D", "PS5MCP_PBS", "-framework", "VideoToolbox",
         "-framework", "AVFoundation", "-framework", "CoreImage", "-framework", "AppKit", "-o", str(binary),
     ], check=False, capture_output=True, text=True)
     assert compiled.returncode == 0, compiled.stderr
@@ -287,6 +305,7 @@ def test_load_reconnect_and_stop_payload(pbs, tmp_path):
     assert not [request for request in empty.requests if "/loadpayload" in request]
 
 
+@needs_pbs_build
 def test_window_shows_network_source_frames_faster_than_15_fps(padd, pbs):
     hub = start(padd, pbs.port)
     try:
@@ -306,3 +325,21 @@ def test_window_shows_network_source_frames_faster_than_15_fps(padd, pbs):
 def test_pbs_cannot_fall_back_to_ffmpeg(tmp_path):
     with pytest.raises(capture.CaptureError, match="PBS requires the native app"):
         capture.daemon_command(tmp_path / "latest.jpg", video="pbs")
+
+
+@pytest.mark.skipif(_has_pbs(), reason="this build has PBS")
+def test_a_normal_build_has_no_pbs_and_leaves_a_saved_pbs_source(padd, tmp_path):
+    assert b"Waiting for PBS at" not in APP.read_bytes()
+    root = Path(tempfile.mkdtemp(prefix="a", dir="/tmp"))  # AF_UNIX paths are limited to ~104 bytes
+    log = (root / "app.log").open("wb")
+    app = subprocess.Popen([str(APP), "--state-dir", str(root), "--video", "pbs", "--audio", "pbs", "--headless",
+                            "--host", "127.0.0.1", "--port", str(padd.port)], stdout=log, stderr=subprocess.STDOUT)
+    try:
+        status = wait(lambda: capture.NativeApp(root).status())
+        assert status["source"] != "pbs" and status["pbs"] is None
+        assert "no PBS source" in (root / "app.log").read_text()
+    finally:
+        app.terminate()
+        app.wait(5)
+        log.close()
+        shutil.rmtree(root, ignore_errors=True)

@@ -39,6 +39,7 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
     private let connectionNote = NSTextField(wrappingLabelWithString: "")
     private let forgetRemotePlay = NSButton(title: "Forget…", target: nil, action: nil)
     private var remotePlaySetupWindow: RemotePlaySetupWindow?
+    #if PS5MCP_PBS
     private let stopPBS = NSButton(title: "Stop PBS", target: nil, action: nil)
     private let reconnectPBS = NSButton(title: "Reconnect", target: nil, action: nil)
     private let pbsNote = NSTextField(wrappingLabelWithString: "")
@@ -46,6 +47,7 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
     private var pbsBusy = false
     private var pbsMessage: String?
     private var pbsWasStreaming = false
+    #endif
 
     init(hub: Hub, onSaved: @escaping () -> Void) {
         self.hub = hub
@@ -82,11 +84,13 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
         reconnectRemotePlay.target = self; reconnectRemotePlay.action = #selector(reconnect)
         let remotePlayButtons = NSStackView(views: [setupRemotePlay, reconnectRemotePlay, forgetRemotePlay])
         remotePlayButtons.spacing = 8
+        #if PS5MCP_PBS
         stopPBS.target = self; stopPBS.action = #selector(stopPBSPayload)
         reconnectPBS.target = self; reconnectPBS.action = #selector(reconnectToPBS)
         loadPBS.target = self; loadPBS.action = #selector(loadPBSPayload)
         let pbsButtons = NSStackView(views: [loadPBS, reconnectPBS, stopPBS])
         pbsButtons.spacing = 8
+        #endif
 
         folder.pathStyle = .popUp
         folder.isEditable = false
@@ -95,7 +99,11 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
         let folderRow = NSStackView(views: [folder, choose])
         folderRow.spacing = 8
 
-        for text in [note, captureNote, remotePlayNote, connectionNote, pbsNote] {
+        var notes = [note, captureNote, remotePlayNote, connectionNote]
+        #if PS5MCP_PBS
+        notes.append(pbsNote)
+        #endif
+        for text in notes {
             text.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
             text.textColor = .secondaryLabelColor
             text.preferredMaxLayoutWidth = 380
@@ -105,7 +113,7 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
         func label(_ title: String) -> NSTextField { NSTextField(labelWithString: title) }
         func separator() -> NSBox { let box = NSBox(); box.boxType = .separator; return box }
         let empty = NSGridCell.emptyContentView
-        let grid = NSGridView(views: [
+        var rows: [[NSView]] = [
             [label("PS5 IP address:"), addressRow],
             [empty, note],
             [separator(), empty],
@@ -116,18 +124,19 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
             [label("Remote Play:"), remotePlayButtons],
             [empty, remotePlayNote],
             [label("Connection:"), connectionNote],
-            [label("PBS:"), pbsButtons],
-            [empty, pbsNote],
-            [separator(), empty],
-            [label("Save snapshots to:"), folderRow],
-        ])
+        ]
+        #if PS5MCP_PBS
+        rows += [[label("PBS:"), pbsButtons], [empty, pbsNote]]
+        #endif
+        rows += [[separator(), empty], [label("Save snapshots to:"), folderRow]]
+        let grid = NSGridView(views: rows)
         grid.rowSpacing = 8
         grid.columnSpacing = 8
         grid.rowAlignment = .firstBaseline
         grid.column(at: 0).xPlacement = .trailing
         grid.column(at: 1).xPlacement = .fill
         grid.column(at: 1).width = 380
-        for row in [2, 12] {
+        for row in [2, rows.count - 2] {
             grid.row(at: row).mergeCells(in: NSRange(location: 0, length: 2))
             grid.cell(atColumnIndex: 0, rowIndex: row).xPlacement = .fill
             grid.row(at: row).topPadding = 6
@@ -135,7 +144,9 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
         }
         grid.cell(for: captureButtons)?.xPlacement = .leading
         grid.cell(for: remotePlayButtons)?.xPlacement = .leading
+        #if PS5MCP_PBS
         grid.cell(for: pbsButtons)?.xPlacement = .leading
+        #endif
 
         grid.translatesAutoresizingMaskIntoConstraints = false
         let content = NSView()
@@ -184,9 +195,12 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
     }
 
     private func fillDevices(video: String?, audio: String?) {
-        let network = ["remoteplay": "Remote Play (network)", "pbs": "PBS payload (network)"]
+        var network = ["remoteplay": "Remote Play (network)"]
+        #if PS5MCP_PBS
+        network["pbs"] = "PBS payload (network)"
+        #endif
         fill(videoDevice, devices: CaptureDevices.video, selection: network[video ?? ""] == nil ? video : nil, empty: "Choose a video device…")
-        for id in ["remoteplay", "pbs"] {
+        for id in ["remoteplay", "pbs"] where network[id] != nil {
             videoDevice.addItem(withTitle: network[id]!)
             videoDevice.lastItem?.representedObject = id
             if video == id { videoDevice.select(videoDevice.lastItem) }
@@ -207,10 +221,13 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
             .replacingOccurrences(of: " in Settings", with: "")
             ?? "Selections are saved for future launches. Restarting capture keeps connected MCP clients running."
         refreshRemotePlayStatus()
+        #if PS5MCP_PBS
         refreshPBSStatus()
+        #endif
         remotePlaySetupWindow?.refreshVerification()
     }
 
+    #if PS5MCP_PBS
     private func refreshPBSStatus() {
         let pbs = hub.source as? PBSSource
         let streaming = pbs?.status.videoReady == true
@@ -265,6 +282,7 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
             self.refreshPBSStatus()
         }
     }
+    #endif
 
     private func refreshRemotePlayStatus() {
         setupRemotePlay.isEnabled = !hub.host.isEmpty
@@ -297,7 +315,10 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
 
     @objc private func sourceChanged() {
         let selected = videoDevice.selectedItem?.representedObject as? String
-        let labels = ["remoteplay": "Remote Play", "pbs": "PBS"]
+        var labels = ["remoteplay": "Remote Play"]
+        #if PS5MCP_PBS
+        labels["pbs"] = "PBS"
+        #endif
         for item in audioDevice.itemArray where (item.representedObject as? String).map({ labels[$0] != nil && $0 != selected }) == true {
             audioDevice.removeItem(at: audioDevice.index(of: item))
         }

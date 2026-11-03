@@ -3,7 +3,7 @@ PYTHON ?= python3
 ENV := bash scripts/with-env.sh
 CC_PS5 = "$$PS5_PAYLOAD_SDK/bin/prospero-clang"
 
-.PHONY: all app bootstrap remoteplay-deps remoteplay-setup payloads verify test lint check clean
+.PHONY: FORCE all app bootstrap remoteplay-deps remoteplay-setup payloads verify test lint check clean
 all: payloads verify app
 
 # The macOS hub app (capture card, padd link, local API): app/project.yml (XcodeGen) built with xcodebuild and
@@ -18,6 +18,9 @@ APP_EXECUTABLE := build/PS5\ MCP.app/Contents/MacOS/PS5\ MCP
 APP_ARCH ?= $(shell uname -m)
 APP_SOURCES := $(wildcard app/*.swift app/*.c app/*.h)
 APP_ICON_ASSETS := $(wildcard app/Assets.xcassets/*.json app/Assets.xcassets/AppIcon.appiconset/*)
+# The PBS payload is an optional video source: `make app PBS=1` builds it in. A normal build has no PBS code or controls.
+PBS ?= 0
+PBS_CONDITION := $(if $(filter 1,$(PBS)),PS5MCP_PBS)
 XCODE_OVERRIDES := $(if $(DEVELOPMENT_TEAM),DEVELOPMENT_TEAM=$(DEVELOPMENT_TEAM)) $(if $(APP_BUNDLE_ID),APP_BUNDLE_ID=$(APP_BUNDLE_ID))
 remoteplay-deps:
 	$(PYTHON) scripts/build-remoteplay.py --arch $(APP_ARCH)
@@ -29,7 +32,13 @@ build/remoteplay-admit.elf: $(wildcard payload/remoteplay-setup/* third-party/ac
 	$(PYTHON) scripts/build-remoteplay-setup.py --admission
 
 app: $(APP_EXECUTABLE)
-$(APP_EXECUTABLE): $(APP_SOURCES) $(APP_ICON_ASSETS) app/Info.plist app/project.yml $(wildcard app/Configuration/*.xcconfig) src/ps5mcp/assets/assign-dialog.png pyproject.toml $(wildcard build/padd.elf build/toolchain-report.json) Makefile remoteplay-deps build/remoteplay-setup.elf build/remoteplay-admit.elf | build
+# Changes only when PBS= does, so switching rebuilds the app.
+build/pbs-flag: FORCE
+	@mkdir -p build
+	@[ "$$(cat $@ 2>/dev/null)" = "$(PBS)" ] || echo "$(PBS)" > $@
+FORCE:
+
+$(APP_EXECUTABLE): build/pbs-flag $(APP_SOURCES) $(APP_ICON_ASSETS) app/Info.plist app/project.yml $(wildcard app/Configuration/*.xcconfig) src/ps5mcp/assets/assign-dialog.png pyproject.toml $(wildcard build/padd.elf build/toolchain-report.json) Makefile remoteplay-deps build/remoteplay-setup.elf build/remoteplay-admit.elf | build
 	rm -rf build/bundle && mkdir -p build/bundle/padd build/bundle/remoteplay
 	if [ -f build/padd.elf ] && [ -f build/toolchain-report.json ]; then cp build/padd.elf build/toolchain-report.json build/bundle/padd/; fi
 	cp build/remoteplay-setup.elf build/remoteplay-setup-report.json build/bundle/remoteplay/
@@ -38,7 +47,7 @@ $(APP_EXECUTABLE): $(APP_SOURCES) $(APP_ICON_ASSETS) app/Info.plist app/project.
 	cd app && xcodegen generate --quiet
 	xcodebuild -quiet -project app/PS5.xcodeproj -scheme PS5 -destination "generic/platform=macOS" -configuration Release -derivedDataPath build/DerivedData \
 		-allowProvisioningUpdates ARCHS=$(APP_ARCH) PS5MCP_REPO="$(CURDIR)" PS5MCP_UV="$$(command -v uv)" MARKETING_VERSION="$(APP_VERSION)" \
-		CURRENT_PROJECT_VERSION="$(APP_BUILD)" $(XCODE_OVERRIDES) build
+		CURRENT_PROJECT_VERSION="$(APP_BUILD)" SWIFT_ACTIVE_COMPILATION_CONDITIONS="$(PBS_CONDITION)" $(XCODE_OVERRIDES) build
 	rm -rf "$(APP)"
 	ditto "build/DerivedData/Build/Products/Release/PS5 MCP.app" "$(APP)"
 

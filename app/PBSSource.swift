@@ -1,6 +1,9 @@
 import AVFoundation
 import Foundation
 
+// Only with PBS=1 (make app PBS=1): the PBS payload is an optional video source, off in a normal build.
+#if PS5MCP_PBS
+
 /// What the PBS source is doing. PBS is loaded on the console by the user; the app only connects to it.
 struct PBSStatus {
     enum Phase: String { case connecting, streaming, reconnecting, stopped }
@@ -490,3 +493,5 @@ final class PBSSource: FrameSource {
         }
     }
 }
+
+#endif
