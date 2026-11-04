@@ -50,6 +50,91 @@ func feed(_ meter: FrameMeter, _ pattern: String, seconds: Double, from start: i
         require(hitch.filter { near($0, 100) }.count == 1, "one long frame, got \(Array(Set(hitch)))")
         require(hitch.filter { near($0, 33.33) }.count == hitch.count - 1, "the rest are unchanged")
 
+        // Clock drift between the console and the card: a long frame next to a short one is two even frames, in either order.
+        for pair in ["X..X", "XX..", "X..X.X", "XX.X.."] {
+            meter = FrameMeter()
+            time = 0
+            feed(meter, "X.", seconds: 2, from: &time)
+            let run = meter.begin(seconds: 100)
+            feed(meter, "X.", seconds: 1, from: &time)
+            let pairFrames = feed(meter, pair, seconds: Double(pair.count) / 60, from: &time) + feed(meter, "X.", seconds: 1, from: &time)
+            let evened = meter.reading()
+            require(evened.samples.allSatisfy { near($0.milliseconds, 33.33) }, "\(pair) evens out, got \(evened.samples.map(\.milliseconds))")
+            for (earlier, later) in zip(evened.samples, evened.samples.dropFirst()) {
+                require(near((later.time - earlier.time) * 1000, 33.33, 0.1), "\(pair) leaves the graph's steps joined")
+            }
+            let lengths = meter.finish(run).frameTimes
+            require(lengths.count == 1 && near(lengths[0].milliseconds, 33.33), "\(pair) evens out in a run, got \(lengths)")
+            let captured = pairFrames.compactMap(\.frameTimeMs)
+            require(captured.contains { near($0, 50) } || captured.contains { near($0, 16.67) }, "the frame's own time stays as captured")
+        }
+
+        // A whole burst evens out, so it does not lower the 1% low.
+        meter = FrameMeter()
+        time = 0
+        feed(meter, "X.", seconds: 2, from: &time)
+        feed(meter, "X..X", seconds: 3, from: &time)
+        feed(meter, "X.", seconds: 2, from: &time)
+        let burst = meter.reading()
+        require(burst.samples.allSatisfy { near($0.milliseconds, 33.33) }, "a burst evens out")
+        require(near(burst.lowOnePercentFps, 30, 0.1), "a burst leaves the 1% low alone, got \(String(describing: burst.lowOnePercentFps))")
+
+        // A frame with no partner stays, as does a frame rate that really mixes two lengths, and a pair across a lost frame.
+        meter = FrameMeter()
+        time = 0
+        feed(meter, "X.", seconds: 2, from: &time)
+        feed(meter, "X..", seconds: 3.0 / 60, from: &time)
+        feed(meter, "X.", seconds: 2, from: &time)
+        require(meter.reading().samples.filter { near($0.milliseconds, 50) }.count == 1, "a late frame alone stays")
+        meter = FrameMeter()
+        time = 0
+        feed(meter, "XX.", seconds: 3, from: &time)
+        let mixed = meter.reading().samples.map(\.milliseconds)
+        require(mixed.contains { near($0, 16.67) } && mixed.contains { near($0, 33.33) }, "40 fps keeps its two frame times")
+        meter = FrameMeter()
+        time = 0
+        feed(meter, "X.", seconds: 2, from: &time)
+        feed(meter, "X..X", seconds: 4.0 / 60, from: &time)
+        meter.noteDrop()
+        feed(meter, "XX.", seconds: 3.0 / 60, from: &time)
+        require(meter.reading().samples.contains { near($0.milliseconds, 50) }, "nothing is evened out across a lost frame")
+
+        // A frame that a run did not count is not taken out of it: this pair straddles the end of the meter's first second
+        // after a dropout, and the run already holds an unrelated long frame.
+        meter = FrameMeter()
+        time = 0
+        feed(meter, "X.", seconds: 2, from: &time)
+        let straddled = meter.begin(seconds: 100)
+        feed(meter, "X.", seconds: 1, from: &time)
+        feed(meter, "X..", seconds: 3.0 / 60, from: &time)
+        feed(meter, "X.", seconds: 1, from: &time)
+        time += 8
+        meter.add(pts: time, difference: new)
+        time += refresh
+        for index in 1...61 {
+            meter.add(pts: time, difference: [55, 58, 60, 61].contains(index) ? new : repeated)
+            time += refresh
+        }
+        feed(meter, "X.", seconds: 1, from: &time)
+        let straddledTimes = meter.finish(straddled).frameTimes
+        require(straddledTimes.first { near($0.milliseconds, 50) }?.count == 1, "the older long frame stays, got \(straddledTimes)")
+
+        // A run's last frame can still be evened out by the frame after the period, before the run reports.
+        meter = FrameMeter()
+        time = 0
+        feed(meter, "X.", seconds: 2, from: &time)
+        let ending = meter.begin(seconds: 1.96)
+        feed(meter, "X.", seconds: 114.0 / 60, from: &time)
+        feed(meter, "X..", seconds: 3.0 / 60, from: &time)
+        feed(meter, "X", seconds: 1.0 / 60, from: &time)  // closes the long frame, and the period
+        require(ending.done.wait(timeout: .now()) == .timedOut, "the run waits for the frames after it")
+        feed(meter, "X", seconds: 1.0 / 60, from: &time)  // the short partner, after the period
+        feed(meter, "X.", seconds: 0.3, from: &time)
+        require(ending.done.wait(timeout: .now()) == .success, "the run then ends")
+        let ended = meter.finish(ending)
+        require(ended.complete && near(ended.seconds, 1.96, 0.05), "the wait is not part of the period, got \(ended.seconds)")
+        require(ended.frameTimes.allSatisfy { near($0.milliseconds, 33.33) }, "the last frame evens out, got \(ended.frameTimes)")
+
         // Noise below the threshold never counts, and a change in one block does.
         meter = FrameMeter()
         time = 0
@@ -163,8 +248,8 @@ func feed(_ meter: FrameMeter, _ pattern: String, seconds: Double, from start: i
         feed(meter, "X.", seconds: 45, from: &time)
         feed(meter, "X..", seconds: 44, from: &time)
         require(run.done.wait(timeout: .now()) == .timedOut, "the first second does not count")
-        feed(meter, "X..", seconds: 1.1, from: &time)
-        require(run.done.wait(timeout: .now()) == .success, "the run ends after its period")
+        feed(meter, "X..", seconds: 1.3, from: &time)
+        require(run.done.wait(timeout: .now()) == .success, "the run ends just after its period")
         feed(meter, "X", seconds: 5, from: &time) // after the end: must not count
         var summary = meter.finish(run)
         require(summary.complete && near(summary.seconds, 90, 0.05), "ran 90 s, got \(summary.seconds)")

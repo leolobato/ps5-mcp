@@ -185,7 +185,8 @@ async def frame_meter(on: bool = True) -> dict:
     """Turn the game frame rate meter on or off. Capture card only. While it is on, status() has capture.frame_meter:
     state (starting, measuring, static, no_signal), fps, low_1pct_fps, gaps (frames lost on the Mac side, not measured),
     refresh_ms and the recent frame_times_ms. It compares captured frames, so it cannot see above 60 fps, frame times are
-    multiples of about 16.7 ms, a game without vsync reads high, and a very slow scene may read low."""
+    multiples of about 16.7 ms, a game without vsync reads high, and a very slow scene may read low. A frame one refresh
+    long and one a refresh short close together count as even frames: it is mostly clock drift between console and card."""
     app = await _app()
     reply = await asyncio.to_thread(app.call, "frame_meter", on=on)
     return {"on": on, "frame_meter": reply["frame_meter"]}

@@ -14,8 +14,16 @@ final class FrameMeterOverlay {
     private let line = CAShapeLayer()
     private var gridLabels: [CATextLayer] = []
     private var laidOut = CGRect.null
+    private var shownState: FrameMeterState?
+    private var shownAt = 0.0
+    private var graphClock: Double?
+    private var graphClockAt = 0.0
 
     private static let seconds = 10.0
+    /// The frame rate is a sliding count that moves by one almost every frame. It is held this long so that it can be read.
+    private static let holdNumbers = 1.0
+    /// How far the graph's clock may run ahead of the last captured frame before it waits for the next one.
+    private static let maxLead = 0.25
     /// Slower frames are clipped to the top of the graph.
     private static let rangeMs = 66.7
     private static let gridLinesMs = [16.7, 33.3, 50.0]
@@ -66,7 +74,7 @@ final class FrameMeterOverlay {
     }
 
     /// `reading` nil means this source cannot be measured.
-    func update(_ reading: FrameMeterReading?, in bounds: CGRect, scale: CGFloat) {
+    func update(_ reading: FrameMeterReading?, in bounds: CGRect, scale: CGFloat, at time: Double = CACurrentMediaTime()) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
@@ -75,11 +83,32 @@ final class FrameMeterOverlay {
             number.string = "–"
             detail.string = "Not available on this source"
             line.path = nil
+            shownState = nil
+            graphClock = nil
             return
         }
-        number.string = reading.fps.map { String(format: "%.0f", $0) } ?? "–"
-        detail.string = Self.detail(reading)
-        line.path = path(reading)
+        // A change of state shows at once. Only the numbers of a running measurement wait.
+        if reading.state != shownState || abs(reading.now - shownAt) >= Self.holdNumbers {
+            number.string = reading.fps.map { String(format: "%.0f", $0) } ?? "–"
+            detail.string = Self.detail(reading)
+            shownState = reading.state
+            shownAt = reading.now
+        }
+        line.path = path(reading, now: smoothedNow(reading.now, at: time), scale: scale)
+    }
+
+    /// Captured frames do not arrive evenly between screen refreshes, so a graph that follows them stalls and jumps.
+    /// This clock advances with the screen instead, and is drawn slowly toward the capture clock.
+    private func smoothedNow(_ now: Double, at time: Double) -> Double {
+        var clock = now
+        if let previous = graphClock {
+            let advanced = previous + (time - graphClockAt)
+            let behind = now - advanced
+            if behind <= Self.maxLead, behind >= -1 { clock = min(advanced + behind * 0.02, now + Self.maxLead) }
+        }
+        graphClock = clock
+        graphClockAt = time
+        return clock
     }
 
     private static func detail(_ reading: FrameMeterReading) -> String {
@@ -122,16 +151,20 @@ final class FrameMeterOverlay {
     }
 
     /// A step line: each frame's time is held for as long as that frame was on screen. Lost frames leave a break.
-    private func path(_ reading: FrameMeterReading) -> CGPath? {
+    /// Every point stays on the same device pixels as it scrolls: its narrow steps would otherwise shimmer.
+    private func path(_ reading: FrameMeterReading, now: Double, scale: CGFloat) -> CGPath? {
         guard reading.state != .noSignal else { return nil }
         let plot = plot
         guard plot.width > 0, plot.height > 0 else { return nil }
         let path = CGMutablePath()
-        let x = { (time: Double) in plot.maxX - CGFloat((reading.now - time) / Self.seconds) * plot.width }
+        let scale = max(scale, 1)
+        let pixelsPerSecond = Double(plot.width * scale) / Self.seconds
+        let right = (now * pixelsPerSecond).rounded()
+        let x = { (time: Double) in min(plot.maxX, plot.maxX - CGFloat(right - (time * pixelsPerSecond).rounded()) / scale) }
         var previous: Double?
         for sample in reading.samples {
             let begin = sample.time - sample.milliseconds / 1000
-            let y = plot.minY + CGFloat(min(sample.milliseconds, Self.rangeMs) / Self.rangeMs) * plot.height
+            let y = ((plot.minY + CGFloat(min(sample.milliseconds, Self.rangeMs) / Self.rangeMs) * plot.height) * scale).rounded() / scale
             let left = max(plot.minX, x(begin))
             if let previous, abs(previous - begin) < reading.refreshMs / 2000 {
                 path.addLine(to: CGPoint(x: left, y: y))

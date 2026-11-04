@@ -3,6 +3,11 @@
 // The capture card delivers a fixed 60 fps, so a frame only counts when FrameDiffer sees it differ from the one
 // before. Frame times are whole numbers of refresh periods, because a new picture can only appear on a new refresh.
 // Frames lost on the Mac side are "no data": nothing is measured across them.
+//
+// The console and the card run on slightly different clocks. While a frame's arrival drifts across the edge of a capture,
+// it falls on either side at random: a steady 30 fps reads 50, 16.7, 50, 16.7 ms. So a frame one refresh long and one a
+// refresh short count as even frames, when they are next to each other or have one normal frame between them. A real frame
+// one refresh late that then catches up looks the same.
 
 import Foundation
 
@@ -15,6 +20,7 @@ enum FrameMeterState: String {
 /// The meter's view of one captured frame.
 struct FrameMeterFrame {
     let changed: Bool
+    /// As captured: a frame is reported as it arrives, before the next one can even it out.
     let frameTimeMs: Double?
     let fps: Double?
     let state: FrameMeterState
@@ -50,6 +56,11 @@ final class FrameMeterRun {
     let done = DispatchSemaphore(value: 0)
     fileprivate var elapsed = 0.0
     fileprivate var complete = false
+    /// Signal counted since the period ended, so that the period's last frames can still be evened out.
+    fileprivate var settling = 0.0
+    fileprivate var signalled = false
+    /// The newest frames counted here, which are the only ones that can still be evened out.
+    fileprivate var recentSerials: [Int] = []
     fileprivate var seen = 0
     fileprivate var changes = 0
     fileprivate var still = 0.0
@@ -94,10 +105,15 @@ final class FrameMeter {
     /// A longer break than this is a new timeline (a signal dropout), not a late frame.
     private static let breakAfter = 1.0
     private static let learnedAfter = 10
+    /// Long enough for the two frames that can even out a run's last frame, at 20 fps.
+    private static let settleSeconds = 0.15
 
     private let lock = NSLock()
     private var lastPTS: Double?
     private var lastChanged: Double?
+    /// The newest samples' lengths in refreshes that can still be evened out with the next one, oldest first.
+    private var unpairedLengths: [(length: Int, serial: Int)] = []
+    private var nextSerial = 0
     private var started = 0.0
     private var dropPending = false
     private var gaps = 0
@@ -201,18 +217,31 @@ final class FrameMeter {
         }
         var frameTime: Double?
         var length: Int?
+        var evenedOut: (length: Int, serial: Int)?
         if changed, state != .stillPicture {
             if let lastChanged {
-                let refreshes = max(1, ((pts - lastChanged) / period).rounded())
-                let milliseconds = refreshes * period * 1000
-                frameTime = milliseconds
-                length = Int(refreshes)
-                samples.append(FrameMeterSample(time: pts, milliseconds: milliseconds))
+                var refreshes = Int(max(1, ((pts - lastChanged) / period).rounded()))
+                frameTime = Double(refreshes) * period * 1000
+                if let partner = partner(of: refreshes) {
+                    let even = (unpairedLengths[partner].length + refreshes) / 2
+                    evenSamples(from: unpairedLengths.count - partner, to: even)
+                    evenedOut = unpairedLengths[partner]
+                    refreshes = even
+                    unpairedLengths.removeAll(keepingCapacity: true)
+                } else {
+                    unpairedLengths.append((refreshes, nextSerial))
+                    if unpairedLengths.count > 2 { unpairedLengths.removeFirst() }
+                }
+                length = refreshes
+                nextSerial += 1
+                samples.append(FrameMeterSample(time: pts, milliseconds: Double(refreshes) * period * 1000))
                 trimSamples(before: pts - Self.history)
+            } else {
+                unpairedLengths.removeAll(keepingCapacity: true)
             }
             lastChanged = pts
         }
-        count(step: step, changed: changed, length: length)
+        count(step: step, changed: changed, length: length, evenedOut: evenedOut)
         return FrameMeterFrame(changed: changed, frameTimeMs: frameTime, fps: state == .measuring ? currentFps() : nil,
                                state: state)
     }
@@ -234,21 +263,54 @@ final class FrameMeter {
     }
 
     /// The meter's first second cannot tell a still picture from a slow one, so a run starts after it.
-    private func count(step: Double, changed: Bool, length: Int?) {
+    private func count(step: Double, changed: Bool, length: Int?, evenedOut: (length: Int, serial: Int)?) {
         guard state != .starting else { return }
-        for run in runs where !run.complete {
+        for run in runs {
+            if let evenedOut, let length, run.recentSerials.contains(evenedOut.serial), let counted = run.refreshes[evenedOut.length] {
+                run.refreshes[evenedOut.length] = counted > 1 ? counted - 1 : nil
+                run.refreshes[length, default: 0] += 1
+            }
+            if run.complete {
+                run.settling += step
+                if !run.signalled, run.settling >= Self.settleSeconds {
+                    run.signalled = true
+                    run.done.signal()
+                }
+                continue
+            }
             run.elapsed += step
             if state == .stillPicture {
                 run.still += step
             } else {
                 run.seen += 1
                 if changed { run.changes += 1 }
-                if let length { run.refreshes[length, default: 0] += 1 }
+                if let length {
+                    run.refreshes[length, default: 0] += 1
+                    run.recentSerials.append(nextSerial - 1)
+                    if run.recentSerials.count > 2 { run.recentSerials.removeFirst() }
+                }
             }
-            if run.elapsed >= run.seconds {
-                run.complete = true
-                run.done.signal()
-            }
+            if run.elapsed >= run.seconds { run.complete = true }
+        }
+    }
+
+    /// Which unpaired length evens out with this one: the newest, or the one before it if the newest is already even.
+    private func partner(of refreshes: Int) -> Int? {
+        guard let newest = unpairedLengths.indices.last else { return nil }
+        if abs(unpairedLengths[newest].length - refreshes) == 2 { return newest }
+        guard newest == 1, abs(unpairedLengths[0].length - refreshes) == 2,
+              unpairedLengths[1].length == (unpairedLengths[0].length + refreshes) / 2 else { return nil }
+        return 0
+    }
+
+    /// Gives the sample `back` from the end the even length. Samples after it move with its end, and keep their lengths.
+    private func evenSamples(from back: Int, to refreshes: Int) {
+        let first = samples.count - back
+        let milliseconds = Double(refreshes) * period * 1000
+        let shift = (samples[first].milliseconds - milliseconds) / 1000
+        samples[first] = FrameMeterSample(time: samples[first].time - shift, milliseconds: milliseconds)
+        for index in (first + 1)..<samples.count {
+            samples[index] = FrameMeterSample(time: samples[index].time - shift, milliseconds: samples[index].milliseconds)
         }
     }
 
@@ -273,6 +335,7 @@ final class FrameMeter {
         changedInWindow = 0
         samples.removeAll(keepingCapacity: true)
         samplesHead = 0
+        unpairedLengths.removeAll(keepingCapacity: true)
         low = nil
         lowAt = -.infinity
     }
