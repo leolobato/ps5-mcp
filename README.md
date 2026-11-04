@@ -67,7 +67,8 @@ make check          # lint, tests, payloads, and the macOS release app
 The release app is built at `build/PS5 MCP.app`. It is signed ad hoc, so macOS asks for its permissions again after
 each rebuild. To keep them, sign with your Apple team: `make app DEVELOPMENT_TEAM=… APP_BUNDLE_ID=…` or
 `app/Configuration/LocalSigning.xcconfig` (copy the `.example`). Quit the app before rebuilding.
-No `make` target contacts the console.
+`make install` builds the app, waits for agents that hold the console, replaces and restarts `/Applications/PS5 MCP.app`,
+and removes the copies under `build/`. The restarted app reconnects to the console; no other `make` target contacts it.
 
 ## Usage
 

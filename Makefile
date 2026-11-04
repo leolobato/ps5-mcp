@@ -3,7 +3,7 @@ PYTHON ?= python3
 ENV := bash scripts/with-env.sh
 CC_PS5 = "$$PS5_PAYLOAD_SDK/bin/prospero-clang"
 
-.PHONY: FORCE all app bootstrap remoteplay-deps remoteplay-setup payloads verify test lint check clean
+.PHONY: FORCE all app install bootstrap remoteplay-deps remoteplay-setup payloads verify test lint check clean
 all: payloads verify app
 
 # The macOS hub app (capture card, padd link, local API): app/project.yml (XcodeGen) built with xcodebuild and
@@ -52,6 +52,10 @@ $(APP_EXECUTABLE): build/pbs-flag $(APP_SOURCES) $(APP_ICON_ASSETS) app/Info.pli
 		CURRENT_PROJECT_VERSION="$(APP_BUILD)" SWIFT_ACTIVE_COMPILATION_CONDITIONS="$(PBS_CONDITION)" $(XCODE_OVERRIDES) build
 	rm -rf "$(APP)"
 	ditto "build/DerivedData/Build/Products/Release/PS5 MCP.app" "$(APP)"
+
+# Waits for its turn on the console, replaces and restarts /Applications/PS5 MCP.app, and removes the copies under build/.
+install: app
+	uv run python scripts/install-app.py
 
 bootstrap:
 	$(PYTHON) scripts/bootstrap.py
