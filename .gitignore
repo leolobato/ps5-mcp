@@ -7,6 +7,7 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 app/Configuration/LocalSigning.xcconfig
+local.mk
 xcuserdata/
 results/
 app/PS5.xcodeproj/

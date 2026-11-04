@@ -19,6 +19,8 @@ APP_ARCH ?= $(shell uname -m)
 APP_SOURCES := $(wildcard app/*.swift app/*.c app/*.h)
 APP_ICON_ASSETS := $(wildcard app/Assets.xcassets/*.json app/Assets.xcassets/AppIcon.appiconset/*)
 # The PBS payload is an optional video source: `make app PBS=1` builds it in. A normal build has no PBS code or controls.
+# local.mk (gitignored) holds this machine's defaults: `PBS ?= 1` there builds it in unless PBS=0 is given.
+-include local.mk
 PBS ?= 0
 PBS_CONDITION := $(if $(filter 1,$(PBS)),PS5MCP_PBS)
 XCODE_OVERRIDES := $(if $(DEVELOPMENT_TEAM),DEVELOPMENT_TEAM=$(DEVELOPMENT_TEAM)) $(if $(APP_BUNDLE_ID),APP_BUNDLE_ID=$(APP_BUNDLE_ID))
