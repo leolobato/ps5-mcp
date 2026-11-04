@@ -68,7 +68,7 @@ def report(build: str) -> None:
         if client:
             status = client.status()
             client.close()
-            if status["pad"]["connected"] or status["pad"].get("error"):
+            if status["pad"]["connected"]:  # a first connect can fail and then succeed, so keep looking until the deadline
                 break
         time.sleep(0.5)
     if not status:
