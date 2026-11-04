@@ -1132,7 +1132,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         sidebar.setSource(isRemote ? "Video from Remote Play" : hub.captureVideo == "pbs" ? "Video from PBS"
                           : isCamera ? "Video from the capture card" : "No video source")
 
-        if !link.connected, hub.padd.busy == nil {
+        if !link.connected, hub.padd.busy == nil, link.unreachable {
+            sidebar.connectionBanner.show(.error, title: "Cannot reach the console",
+                                          body: "Video still works. Check that the console is on at \(hub.host). If other apps "
+                                            + "reach it, macOS is blocking PS5 MCP: turn each PS5 MCP entry in Local Network "
+                                            + "off and on again. padd reconnects by itself.",
+                                          actionTitle: "Open Local Network…", selector: #selector(showLocalNetworkSettings))
+        } else if !link.connected, hub.padd.busy == nil {
             sidebar.connectionBanner.show(.error, title: "padd is not connected",
                                           body: "Video still works. The console takes no input until padd runs."
                                             + (link.error.map { "\n\($0)" } ?? ""),
@@ -1326,6 +1332,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
 
     private static let dualSenseWarning = "If the PS5 asks \"Who's using this controller?\", the virtual pad answers it. "
         + "Then press the DualSense's PS button and pick the same user."
+
+    @objc func showLocalNetworkSettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_LocalNetwork")
+        else { return }
+        NSWorkspace.shared.open(url)
+    }
 
     @objc func startPadd() {
         guard confirm("Start padd on \(hub.host)?",

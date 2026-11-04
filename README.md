@@ -37,6 +37,8 @@ PS5 MCP expects Web File Manager on port 8888; it moves to the next free port wh
 When one of them is not running, the tool or command that needs it says which one.
 If the CLI or the MCP server reports "no route to host" while other apps reach the console, macOS Local Network
 privacy is blocking its Python: allow it in System Settings › Privacy & Security › Local Network.
+A new app build can lose this permission too, even when its switch still shows on. The app window then says "Cannot reach
+the console", and its button opens that page: turn each PS5 MCP entry off and on again. padd then reconnects by itself.
 
 To add zftpd, download `zftpd-ps5-v1.6.0.elf` from its
 [releases](https://github.com/seregonwar/zftpd/releases) and add it to Payload Manager's library with

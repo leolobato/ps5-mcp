@@ -18,6 +18,7 @@ struct LinkStatus {
     var port: UInt16
     var hello: Hello?
     var error: String?
+    var unreachable: Bool
     var reconnects: Int
     var statesSent: UInt64
     var humanActive: Bool
@@ -25,7 +26,7 @@ struct LinkStatus {
 
     var json: [String: Any] {
         var out: [String: Any] = ["connected": connected, "paused": paused, "host": host, "port": Int(port),
-                                  "error": error as Any? ?? NSNull(), "reconnects": reconnects,
+                                  "error": error as Any? ?? NSNull(), "unreachable": unreachable, "reconnects": reconnects,
                                   "states_sent": statesSent, "human_has_control": humanActive,
                                   "agent_layers": agents]
         if let hello {
@@ -61,6 +62,8 @@ final class PadController {
     /// The console address; `setHost` changes it and the link reconnects there.
     private var target: String
     private(set) var error: String?
+    /// The last connect failed with EHOSTUNREACH (`PadError.unreachable`).
+    private(set) var unreachable = false
     private(set) var reconnects = 0
     private(set) var statesSent: UInt64 = 0
 
@@ -90,6 +93,7 @@ final class PadController {
         guard host != target else { cond.unlock(); return }
         target = host
         error = nil
+        unreachable = false
         cond.broadcast()
         cond.unlock()
         onStatus?()
@@ -217,7 +221,7 @@ final class PadController {
         cond.lock(); defer { cond.unlock() }
         let up = link.map { !$0.closed } ?? false
         return LinkStatus(connected: up, paused: paused, host: target, port: port, hello: up ? link?.hello : nil,
-                          error: error, reconnects: reconnects, statesSent: statesSent, humanActive: !keys.isEmpty,
+                          error: error, unreachable: unreachable, reconnects: reconnects, statesSent: statesSent, humanActive: !keys.isEmpty,
                           agents: agents.count)
     }
 
@@ -259,6 +263,7 @@ final class PadController {
             } catch {
                 cond.lock()
                 self.error = "\(error)"
+                if case .unreachable? = error as? PadError { unreachable = true } else { unreachable = false }
                 connecting = false
                 cond.broadcast()
                 cond.unlock()
@@ -281,6 +286,7 @@ final class PadController {
             self.link = link
             connecting = false
             error = nil
+            unreachable = false
             changed()
             let abandon = paused || stopped  // paused while connecting: give the slot back at once
             cond.unlock()

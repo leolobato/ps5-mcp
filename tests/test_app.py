@@ -422,6 +422,14 @@ def test_reconnects_soon_after_padd_drops_a_stale_session(padd):
         stale.close()
 
 
+def test_a_refused_connect_is_not_reported_as_unreachable(app):
+    client = app.client("agent")
+    assert client.status()["pad"]["unreachable"] is False
+    app.padd.stop()
+    assert wait_for(lambda: client.status()["pad"]["error"] and "refused" in client.status()["pad"]["error"])
+    assert client.status()["pad"]["unreachable"] is False
+
+
 def test_busy_after_a_long_outage_does_not_wait_out_the_backoff(app, tmp_path):
     # Failed connects grow the backoff (as "No route to host" does), then padd answers busy for a stale session.
     client = app.client("agent")

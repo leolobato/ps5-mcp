@@ -6,12 +6,14 @@ import Foundation
 enum PadError: Error, CustomStringConvertible {
     case busy(String)
     case failed(String)
+    /// The connect failed with EHOSTUNREACH: the console is off or elsewhere, or macOS Local Network privacy blocks this app.
+    case unreachable(String)
     case humanHasControl
 
     var description: String {
         switch self {
         case .busy(let message): return "busy: \(message)"
-        case .failed(let message): return message
+        case .failed(let message), .unreachable(let message): return message
         case .humanHasControl: return "a human is holding keys in the viewer window; try again when released"
         }
     }
@@ -42,8 +44,9 @@ func connectTCP(host: String, port: UInt16, timeout: Double) throws -> Int32 {
     _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
     if connect(fd, addr.pointee.ai_addr, addr.pointee.ai_addrlen) != 0 {
         guard errno == EINPROGRESS else {
-            let text = errnoText(); close(fd)
-            throw PadError.failed("connect \(host):\(port): \(text)")
+            let code = errno, text = errnoText(); close(fd)
+            let message = "connect \(host):\(port): \(text)"
+            throw code == EHOSTUNREACH ? PadError.unreachable(message) : PadError.failed(message)
         }
         var pfd = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
         let ready = poll(&pfd, 1, Int32(timeout * 1000))
@@ -52,7 +55,8 @@ func connectTCP(host: String, port: UInt16, timeout: Double) throws -> Int32 {
         getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len)
         if ready <= 0 || err != 0 {
             close(fd)
-            throw PadError.failed("connect \(host):\(port): \(ready <= 0 ? "timed out" : String(cString: strerror(err)))")
+            let message = "connect \(host):\(port): \(ready <= 0 ? "timed out" : String(cString: strerror(err)))"
+            throw ready > 0 && err == EHOSTUNREACH ? PadError.unreachable(message) : PadError.failed(message)
         }
     }
     _ = fcntl(fd, F_SETFL, flags)
