@@ -36,8 +36,9 @@ final class FrameSink: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate,
     /// Frames the window has shown, for sources it draws itself.
     private(set) var previewFrames: UInt64 = 0
     private var recorder: VideoRecorder?
-    /// The capture card's audio format, once its first buffer arrives (nil: no audio to record).
-    private(set) var audioFormat: CMFormatDescription?
+    /// The format of the newest audio buffer (nil: no audio to record). It can change while the capture runs.
+    var audioFormat: CMFormatDescription? { lock.lock(); defer { lock.unlock() }; return currentAudioFormat }
+    private var currentAudioFormat: CMFormatDescription?
 
     // Change detection: a 32x18 luma thumbnail per frame, compared with an armed reference.
     private var reference: [UInt8]?
@@ -85,7 +86,10 @@ final class FrameSink: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate,
     func push(audio sample: CMSampleBuffer) {
         lock.lock()
         guard active else { lock.unlock(); return }
-        if audioFormat == nil { audioFormat = CMSampleBufferGetFormatDescription(sample) }
+        if let format = CMSampleBufferGetFormatDescription(sample),
+           !(currentAudioFormat.map { CMFormatDescriptionEqual($0, otherFormatDescription: format) } ?? false) {
+            currentAudioFormat = format
+        }
         let recorder = recorder
         lock.unlock()
         recorder?.append(audio: sample)
@@ -100,7 +104,7 @@ final class FrameSink: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate,
         latest = nil
         lastFrameAt = 0
         lastWrite = 0
-        audioFormat = nil
+        currentAudioFormat = nil
         recorder = nil
         reference = nil
         meter.reset()

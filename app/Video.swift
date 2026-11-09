@@ -127,11 +127,28 @@ final class VideoRecorder {
         }
     }
 
+    /// Audio in another layout than the input was set up for is dropped: one such buffer would fail the whole file.
     func append(audio sample: CMSampleBuffer) {
         lock.lock(); defer { lock.unlock() }
         guard !finishing, sessionStarted, writer.status == .writing, let audio, audio.isReadyForMoreMediaData,
-              CMSampleBufferGetPresentationTimeStamp(sample) >= startTime else { return }
+              CMSampleBufferGetPresentationTimeStamp(sample) >= startTime,
+              let audioFormat, let format = CMSampleBufferGetFormatDescription(sample),
+              Self.sameLayout(format, audioFormat) else { return }
         audio.append(sample)
+    }
+
+    /// The card's audio can switch between Int16 interleaved and Float32 non-interleaved while the session runs.
+    static func sameLayout(_ a: CMFormatDescription, _ b: CMFormatDescription) -> Bool {
+        CMAudioFormatDescriptionEqual(a, otherFormatDescription: b, equalityMask: kCMAudioFormatDescriptionMask_StreamBasicDescription,
+                                      equalityMaskOut: nil)
+    }
+
+    /// AVFoundation's own text for a failed writer is only "The operation could not be completed".
+    static func describe(_ error: Error?) -> String? {
+        guard let error = error as NSError? else { return nil }
+        var codes = ["\(error.code)"]
+        if let underlying = error.userInfo[NSUnderlyingErrorKey] as? NSError { codes.append("\(underlying.code)") }
+        return "\(error.localizedDescription) (\(codes.joined(separator: ", ")))"
     }
 
     /// Closes the file; `done` runs on the main queue with nil, or the reason nothing usable was written.
@@ -145,7 +162,7 @@ final class VideoRecorder {
             if writer.status == .writing { writer.cancelWriting() }
             try? FileManager.default.removeItem(at: url)
             try? FileManager.default.removeItem(at: Self.meterCSV(for: url))
-            let reason = writer.error?.localizedDescription ?? "no frames reached the recorder"
+            let reason = Self.describe(writer.error) ?? "no frames reached the recorder"
             DispatchQueue.main.async { done(reason) }
             return
         }
@@ -153,7 +170,7 @@ final class VideoRecorder {
         audio?.markAsFinished()
         writer.endSession(atSourceTime: lastVideoTime)
         writer.finishWriting { [writer] in
-            let reason = writer.status == .completed ? nil : writer.error?.localizedDescription ?? "unknown error"
+            let reason = writer.status == .completed ? nil : Self.describe(writer.error) ?? "unknown error"
             DispatchQueue.main.async { done(reason) }
         }
     }

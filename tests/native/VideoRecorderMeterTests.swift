@@ -17,6 +17,35 @@ func wait(for recorder: VideoRecorder) -> String? {
     return reason
 }
 
+func audioFormat(float: Bool) -> CMAudioFormatDescription {
+    // The capture card's two layouts: Int16 interleaved, and Float32 non-interleaved.
+    var description = AudioStreamBasicDescription(
+        mSampleRate: 48000, mFormatID: kAudioFormatLinearPCM,
+        mFormatFlags: float ? kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked | kAudioFormatFlagIsNonInterleaved
+            : kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked,
+        mBytesPerPacket: 4, mFramesPerPacket: 1, mBytesPerFrame: 4, mChannelsPerFrame: 2,
+        mBitsPerChannel: float ? 32 : 16, mReserved: 0)
+    var format: CMAudioFormatDescription?
+    CMAudioFormatDescriptionCreate(allocator: nil, asbd: &description, layoutSize: 0, layout: nil, magicCookieSize: 0,
+                                   magicCookie: nil, extensions: nil, formatDescriptionOut: &format)
+    return format!
+}
+
+/// 512 frames of silence at `time`.
+func silence(_ format: CMAudioFormatDescription, at time: CMTime) -> CMSampleBuffer {
+    let bytes = 512 * 2 * 4
+    var block: CMBlockBuffer?
+    CMBlockBufferCreateWithMemoryBlock(allocator: nil, memoryBlock: nil, blockLength: bytes, blockAllocator: nil,
+                                       customBlockSource: nil, offsetToData: 0, dataLength: bytes,
+                                       flags: kCMBlockBufferAssureMemoryNowFlag, blockBufferOut: &block)
+    CMBlockBufferFillDataBytes(with: 0, blockBuffer: block!, offsetIntoDestination: 0, dataLength: bytes)
+    var sample: CMSampleBuffer?
+    CMAudioSampleBufferCreateReadyWithPacketDescriptions(allocator: nil, dataBuffer: block!, formatDescription: format,
+                                                         sampleCount: 512, presentationTimeStamp: time,
+                                                         packetDescriptions: nil, sampleBufferOut: &sample)
+    return sample!
+}
+
 @main struct VideoRecorderMeterTests {
     static func main() throws {
         let folder = URL(fileURLWithPath: CommandLine.arguments[1])
@@ -60,6 +89,25 @@ func wait(for recorder: VideoRecorder) -> String? {
         empty.append(frame, at: .zero)  // before the first frame: dropped, as the video has no clock yet
         require(wait(for: empty) != nil, "an empty recording reports why")
         require(!FileManager.default.fileExists(atPath: VideoRecorder.meterCSV(for: emptyURL).path), "nothing left behind")
+        // The card's audio changed layout halfway through: audio in the recording's layout is kept, the rest is dropped,
+        // and the video survives.
+        let switchedURL = folder.appendingPathComponent("switched.mp4")
+        let switched = try VideoRecorder(url: switchedURL, audioFormat: audioFormat(float: false))
+        let int16 = audioFormat(float: false), float = audioFormat(float: true)
+        var audioTime = CMTime(value: 48000 * 100, timescale: 48000)
+        for index in 0..<30 {
+            let time = CMTime(value: CMTimeValue(6000 + index), timescale: 60)
+            switched.append(buffer, at: time)
+            while audioTime < CMTime(value: CMTimeValue(6001 + index), timescale: 60) {
+                switched.append(audio: silence(index < 15 ? int16 : float, at: audioTime))
+                audioTime = audioTime + CMTime(value: 512, timescale: 48000)
+            }
+        }
+        let switchedReason = wait(for: switched)
+        require(switchedReason == nil, "a change of audio layout does not lose the video, got \(switchedReason ?? "")")
+        let audioTracks = AVURLAsset(url: switchedURL).tracks(withMediaType: .audio)
+        require(audioTracks.count == 1 && audioTracks[0].timeRange.duration.seconds > 0.1,
+                "audio in the recording's layout is kept")
         print("recorder meter checks passed")
     }
 }
