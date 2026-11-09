@@ -514,6 +514,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
     private let noSignalLabel = NSTextField(labelWithString: "")
     private var imageLayer: CALayer?
     private var previewLink: CADisplayLink?
+    /// When `drawFrame` last ran, on the media clock. See `restartStalledDisplayLink`.
+    private var drawnAt = 0.0
     /// Kept while on screen: the decoder's pool must not reuse the surface the layer is showing.
     private var shownBuffer: CVPixelBuffer?
     private var pong: Pong?
@@ -628,11 +630,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         keyboardPanel.onChange = { [weak self] in self?.updateKeyboardControls() }
         updateKeyboardControls()
         Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in self?.refresh() }
-        // Follows the window's display and stops while the window cannot be seen.
+        startDisplayLink()
+        say("ready")
+    }
+
+    /// Follows the window's display and stops while the window cannot be seen.
+    private func startDisplayLink() {
+        previewLink?.invalidate()
         let link = video.displayLink(target: self, selector: #selector(drawFrame))
         link.add(to: .main, forMode: .common)
         previewLink = link
-        say("ready")
+    }
+
+    /// A display link can stop for good: one made while a headless launch hid the window stopped after days and display
+    /// sleeps, and froze the frame meter on "Starting". A new one starts again. Called from the half-second refresh.
+    private func restartStalledDisplayLink() {
+        let now = CACurrentMediaTime()
+        guard window.isVisible, window.occlusionState.contains(.visible), now - drawnAt > 1 else { return }
+        startDisplayLink()
+        drawFrame()
     }
 
     private func attachCapturePreview() {
@@ -889,6 +905,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
 
     /// Shows the newest frame of a source that has no preview layer of its own (all but the capture card).
     @objc private func drawFrame() {
+        drawnAt = CACurrentMediaTime()
         if frameMeterShown, window.isVisible {
             frameMeterOverlay.update(hub.frameMeterSupported ? hub.sink.frameMeterReading() ?? Self.startingFrameMeter : nil,
                                      in: video.bounds, scale: window.backingScaleFactor)
@@ -965,6 +982,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
 
     func refresh() {
         guard let window, let sidebar else { return }
+        restartStalledDisplayLink()
         settings?.refreshCaptureStatus()
         let link = hub.controller.status()
         window.title = link.title

@@ -96,8 +96,9 @@ struct FrameMeterSummary {
 }
 
 final class FrameMeter {
-    /// From calibration: repeated frames stayed below this and new frames above it on the capture card.
-    static let threshold = 2.0
+    /// From calibration on the capture card: repeated frames of still, detailed scenes stayed below 0.6, and the frame after a
+    /// change below 0.8, while small, slow movement (a breathing character, a spinning icon) often stays under 2.
+    static let threshold = 1.0
     /// Fewer changes than this in a second is a still picture. It is not zero: an on-screen counter still changes.
     static let stillBelow = 3
     private static let window = 1.0

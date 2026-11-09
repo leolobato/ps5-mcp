@@ -11,7 +11,7 @@ func near(_ value: Double?, _ expected: Double, _ tolerance: Double = 0.01) -> B
 
 let refresh = 1.0 / 60
 let new = FrameDifference(mean: 8, largestBlock: 30, rows: [])
-let repeated = FrameDifference(mean: 0.1, largestBlock: 1.5, rows: [])
+let repeated = FrameDifference(mean: 0.1, largestBlock: 0.6, rows: [])
 
 /// Feeds whole seconds of a repeating pattern, X for a new frame. Returns the frames.
 @discardableResult
