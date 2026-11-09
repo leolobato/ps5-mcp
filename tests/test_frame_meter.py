@@ -28,3 +28,15 @@ def test_recorder_writes_the_meter_csv(tmp_path):
     result = subprocess.run([str(binary), str(tmp_path)], check=False, capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stderr
     assert "recorder meter checks passed" in result.stdout
+
+
+def test_snapshot_composite_draws_the_meter(tmp_path):
+    binary = tmp_path / "overlay-tests"
+    compiled = subprocess.run([
+        "swiftc", str(ROOT / "app/FrameDiff.swift"), str(ROOT / "app/FrameMeter.swift"), str(ROOT / "app/FrameMeterOverlay.swift"),
+        str(ROOT / "tests/native/FrameMeterOverlayTests.swift"), "-parse-as-library", "-framework", "AppKit", "-o", str(binary),
+    ], check=False, capture_output=True, text=True)
+    assert compiled.returncode == 0, compiled.stderr
+    result = subprocess.run([str(binary)], check=False, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert "frame meter overlay checks passed" in result.stdout

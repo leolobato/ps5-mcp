@@ -277,7 +277,8 @@ Existing titles are not changed automatically. A read-only permission audit can 
 
 **View → Show Frame Meter** (⌥⌘F) draws the frame rate, the 1% low, and a scrolling frame-time graph over the video.
 A video recorded while it runs also gets a CSV with the same name. It has each frame's time as captured, before the
-correction below. The graph itself is not in the video. Agents use the `frame_meter` tool, then read `capture.frame_meter` from `status`. To get one result for a fixed
+correction below. The graph itself is not in the video. To include the meter in snapshots saved with **⌘S** while it
+shows, turn on the option under Capture files in Settings. Agents use the `frame_meter` tool, then read `capture.frame_meter` from `status`. To get one result for a fixed
 period, agents use `measure_frame_rate(seconds)`.
 
 The capture card delivers a fixed 60 fps, so the meter compares each frame with the one before: a frame counts only if

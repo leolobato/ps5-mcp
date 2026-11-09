@@ -1,6 +1,7 @@
 // FrameMeterOverlay: the frame meter over the bottom of the video, in the style of a Digital Foundry graph.
 //
-// A separate layer, so it does not appear in recordings: those get a CSV of the same numbers instead.
+// A separate layer, so it does not appear in recordings: those get a CSV of the same numbers instead. A snapshot can
+// include it, when Settings asks for that.
 
 import AppKit
 import QuartzCore
@@ -64,6 +65,24 @@ final class FrameMeterOverlay {
             layer.addSublayer(label)
             return label
         }
+    }
+
+    /// `image` with the meter over it, at its full resolution. The meter looks as it does on a picture `viewWidth` points wide.
+    /// The whole line shows at once: a one-off drawing has no scrolling clock to smooth.
+    static func composite(_ reading: FrameMeterReading?, over image: CGImage, viewWidth: CGFloat) -> CGImage? {
+        guard viewWidth > 0, let space = image.colorSpace?.supportsOutput == true ? image.colorSpace : CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: 0, space: space,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+        else { return nil }
+        let size = CGSize(width: image.width, height: image.height)
+        context.draw(image, in: CGRect(origin: .zero, size: size))
+        let scale = size.width / viewWidth
+        context.scaleBy(x: scale, y: scale)
+        let overlay = FrameMeterOverlay()
+        overlay.layer.isHidden = false
+        overlay.update(reading, in: CGRect(x: 0, y: 0, width: viewWidth, height: size.height / scale), scale: scale)
+        overlay.layer.render(in: context)
+        return context.makeImage()
     }
 
     private func style(_ text: CATextLayer) {

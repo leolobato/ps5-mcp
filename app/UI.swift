@@ -903,12 +903,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         hub.source.setMuted(audioMuted || !hub.visible)
     }
 
+    /// Nil when this source cannot be measured.
+    private var currentFrameMeterReading: FrameMeterReading? {
+        hub.frameMeterSupported ? hub.sink.frameMeterReading() ?? Self.startingFrameMeter : nil
+    }
+
     /// Shows the newest frame of a source that has no preview layer of its own (all but the capture card).
     @objc private func drawFrame() {
         drawnAt = CACurrentMediaTime()
         if frameMeterShown, window.isVisible {
-            frameMeterOverlay.update(hub.frameMeterSupported ? hub.sink.frameMeterReading() ?? Self.startingFrameMeter : nil,
-                                     in: video.bounds, scale: window.backingScaleFactor)
+            frameMeterOverlay.update(currentFrameMeterReading, in: video.bounds, scale: window.backingScaleFactor)
         }
         guard imageLayer != nil, !videoHidden, window.isVisible else { return }
         let buffer = hub.sink.latestBuffer()
@@ -1851,10 +1855,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
 
     /// Saves the current frame straight to the capture folder from Settings (Desktop by default), no dialog.
     @objc func saveSnapshot() {
-        guard let image = hub.sink.latestImage() else {
+        guard let frame = hub.sink.latestImage() else {
             hub.notice = "No frame to save yet."
             return
         }
+        let image = snapshotImage(of: frame)
         let folder = captureFolder
         let name = "PS5 \(Self.stamp())"
         var url = folder.appendingPathComponent(name + ".png")
@@ -1873,6 +1878,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         } catch {
             hub.notice = "Snapshot not saved: \(error.localizedDescription)"
         }
+    }
+
+    /// The frame, with the frame meter over it if the setting is on and the meter is showing.
+    private func snapshotImage(of frame: CGImage) -> CGImage {
+        guard UserDefaults.standard.bool(forKey: snapshotIncludesFrameMeterKey), frameMeterShown, window.isVisible else { return frame }
+        // The width the picture has on screen, so that the meter has the proportions seen in the window.
+        let aspect = CGFloat(frame.width) / CGFloat(max(frame.height, 1))
+        let width = min(video.bounds.width, video.bounds.height * aspect)
+        return FrameMeterOverlay.composite(currentFrameMeterReading, over: frame, viewWidth: width) ?? frame
     }
 
     // MARK: video

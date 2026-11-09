@@ -1,5 +1,6 @@
 // The Settings window (⌘,): the PS5's IP address, saved for the next launches and applied at once, the video source
-// with only that source's controls, the folder snapshots and videos go to (Desktop by default), and the keyboard panel.
+// with only that source's controls, the folder snapshots and videos go to (Desktop by default), whether snapshots include
+// the frame meter, and the keyboard panel.
 //
 // --host and PS5_HOST still win at launch (the MCP server passes PS5_HOST), so the window says when one of them set
 // this launch's address. Saving here switches the running app to the new address either way.
@@ -12,6 +13,9 @@ let captureAudioKey = "captureAudioID"
 
 /// The UserDefaults key for the capture folder chosen in Settings (its name is from when only snapshots used it).
 let captureFolderKey = "snapshotFolder"
+
+/// The UserDefaults key for drawing the frame meter into saved snapshots while it shows. Off by default.
+let snapshotIncludesFrameMeterKey = "snapshotIncludesFrameMeter"
 
 /// Where snapshots are saved, and where saving a video starts: the folder chosen in Settings, else the Desktop.
 var captureFolder: URL {
@@ -37,6 +41,7 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
     private let captureControls = NSStackView()
     private let remoteControls = NSStackView()
     private let floatOverAll = NSButton(checkboxWithTitle: "Float over all windows, on every Space", target: nil, action: nil)
+    private let snapshotFrameMeter = NSButton(checkboxWithTitle: "Include the frame meter in snapshots when it is showing", target: nil, action: nil)
     private let videoDevice = NSPopUpButton()
     private let audioDevice = NSPopUpButton()
     private let captureNote = NSTextField(wrappingLabelWithString: "")
@@ -162,6 +167,8 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
         panes.append(pbsControls)
         #endif
 
+        snapshotFrameMeter.target = self
+        snapshotFrameMeter.action = #selector(snapshotFrameMeterChanged)
         floatOverAll.target = self
         floatOverAll.action = #selector(floatChanged)
         let hotKey = NSTextField(labelWithString: "Show or hide it from any app with ⌃⌥K, or with the toolbar's keyboard button.")
@@ -171,7 +178,7 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
         let body = column([
             section("Console", [row([NSTextField(labelWithString: "PS5 IP address"), address, save]), note]),
             section("Video and audio", [sourcePicker] + panes + [row([spacer(), useSource])]),
-            section("Capture files", [row([NSTextField(labelWithString: "Save snapshots and videos to"), folder, choose])]),
+            section("Capture files", [row([NSTextField(labelWithString: "Save snapshots and videos to"), folder, choose]), snapshotFrameMeter]),
             section("Keyboard panel", [floatOverAll, hotKey]),
         ], spacing: 14, inset: 48)
         body.edgeInsets = NSEdgeInsets(top: 18, left: 24, bottom: 20, right: 24)
@@ -218,6 +225,7 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
     func show() {
         address.stringValue = hub.host
         folder.url = captureFolder
+        snapshotFrameMeter.state = UserDefaults.standard.bool(forKey: snapshotIncludesFrameMeterKey) ? .on : .off
         floatOverAll.state = KeyboardPanel.floats ? .on : .off
         fillDevices(video: hub.captureVideo, audio: hub.captureAudio)
         refreshCaptureStatus()
@@ -395,6 +403,10 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
         var frame = window.frameRect(forContentRect: NSRect(origin: .zero, size: size))
         frame.origin = NSPoint(x: window.frame.minX, y: window.frame.maxY - frame.height)
         window.setFrame(frame, display: true)
+    }
+
+    @objc private func snapshotFrameMeterChanged() {
+        UserDefaults.standard.set(snapshotFrameMeter.state == .on, forKey: snapshotIncludesFrameMeterKey)
     }
 
     @objc private func floatChanged() {
