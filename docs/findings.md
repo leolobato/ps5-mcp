@@ -49,6 +49,12 @@ stayed the foreground user, and the new pad's next press on the home screen got 
 the PS button" ([PS button](ps-button.md)). The app had only asked the person to confirm with Cross, so the dialog
 stayed open. It now answers this dialog like the others, or leaves it to the person when they pick users by hand.
 
+The focus follows the row, not the foreground user. Later that day both users were signed in and padd was restarted: the
+row was Add User, `leolobato-jb` (focused), `User1`, although `User1` was still the foreground user. The icon beside
+"Assign Controller" is the player number that profile would get (2 for `leolobato-jb`, 1 for `User1`). That restart went
+through the app with users picked by hand: the CLI pressed nothing, the app asked in the sidebar, and Right then Enter
+from the window's keyboard path gave controller 1 to `User1`. Controller 2 was then added the same way.
+
 What is not known yet:
 
 - whether two virtual pads stay usable side by side for long (padd 1.5 had two only for the moment of a switch);
