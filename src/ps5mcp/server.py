@@ -544,8 +544,10 @@ async def use_controller(controller: int, snapshot_after_ms: int | None = None):
 
 async def _controllers_text() -> str:
     controllers = (await asyncio.to_thread((await _app()).status)).get("controllers") or {}
-    names = ", ".join(f"controller {c['controller']} = {c.get('user_name') or c['user_id']}"
-                      for c in controllers.get("list", []))
+    def user(c: dict) -> str:
+        return "no user" if c["user_id"] < 0 else str(c.get("user_name") or c["user_id"])
+
+    names = ", ".join(f"controller {c['controller']} = {user(c)}" for c in controllers.get("list", []))
     return f"input goes to controller {controllers.get('active', 1)} ({names})"
 
 

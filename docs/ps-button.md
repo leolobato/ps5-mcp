@@ -20,7 +20,8 @@ A hold with no owner to take over from has not been tested, and neither has PS d
 
 **padd's user and the console's can differ.** After a padd update, a plain Cross on the focused profile gave controller 1 to
 `leolobato-jb`, not the `User1` padd added the pad for, while HELLO and `status` still said `User1`. The app now steers controller 1
-to its user's profile too, but a person can still pick another profile. PS does nothing while "Who's using this controller?" is open: the console shows a blocked icon.
+to its user's profile too. A person can still pick another profile; when the app asked them to answer, it reads the pick
+and padd 1.10 records it (see [Auto-assign](app-api.md#auto-assign)). PS does nothing while "Who's using this controller?" is open: the console shows a blocked icon.
 
 ## Other ways to go home and control apps (verified on 13.60, padd 1.1)
 

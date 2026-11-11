@@ -139,8 +139,11 @@ final class Assigner {
     }
 
     /// The name of the focused profile, if the focus is on one (it can be on Add User).
-    static func focused(_ profiles: [(name: String, x: Double)]) -> String? {
-        profiles.first { abs($0.x - 0.5) < 0.1 }?.name
+    static func focused(_ profiles: [(name: String, x: Double)]) -> String? { focusedProfile(profiles)?.name }
+
+    /// The same, with where it is.
+    static func focusedProfile(_ profiles: [(name: String, x: Double)]) -> (name: String, x: Double)? {
+        profiles.first { abs($0.x - 0.5) < 0.1 }
     }
 
     /// Characters video compression and text recognition mix up. Other differences are different names: User1 is not User2.
@@ -189,5 +192,59 @@ final class Assigner {
             if uptimeSeconds() >= deadline { return false }
             Thread.sleep(forTimeInterval: interval)
         }
+    }
+}
+
+/// Which profile a person picked in "Who's using this controller?".
+///
+/// Once the dialog is gone it tells nothing, so the app reads the focused name while it is open and notes what the
+/// controller sends. A name counts only when it cannot be the wrong one: the last thing sent was Cross alone, shortly
+/// before the dialog went, and every reading between the last move (its release) having time to show on the video and
+/// that Cross has that name at the same place in the middle of the row: at least two, from frames that arrived then. A quick Right then Cross can leave no such readings, and
+/// then nothing is learned: no name is better than a wrong one.
+struct PickWatch {
+    /// A move's scroll shows on the video within this, the capture's delay included; a slower one fails `still`.
+    static let settle = 0.4
+    /// How far from the middle of the row a focused name may be read, and how far two readings may differ.
+    static let centered = 0.04, still = 0.008
+    /// The readings must cover at least this much time.
+    static let apart = 0.05
+    /// The dialog goes within about a second of Cross, a little later when Cross signs someone in.
+    static let closesWithin = 4.0
+
+    private var reads: [(at: Double, name: String, x: Double)] = []
+    private var lastMove = 0.0
+    private var crossAt: Double?
+
+    /// The focused profile read from a frame captured at `at` (nil: no name was read there). Only frames that arrived
+    /// since the last reading are read, so video that stopped adds nothing.
+    mutating func read(_ profile: (name: String, x: Double)?, at: Double) {
+        guard let profile else { return }
+        reads.append((at, profile.name, profile.x))
+        if reads.count > 64 { reads.removeFirst() }
+    }
+
+    /// A change of what the controller sends, in order. A held move scrolls until it is released, so the release
+    /// counts as a move too.
+    mutating func sent(_ state: PadState, at: Double) {
+        if state.isNeutral {
+            if crossAt == nil { lastMove = at }
+            return
+        }
+        var cross = PadState()
+        cross.buttons = button("cross")
+        crossAt = state == cross ? at : nil
+        if crossAt == nil { lastMove = at }
+    }
+
+    /// The picked profile's name as read, when the dialog was seen gone at `goneAt`. Every reading from the move's end
+    /// to the Cross counts, and they must all agree, so a later different name always wins over an earlier one.
+    func picked(goneAt: Double) -> String? {
+        guard let crossAt, goneAt - crossAt <= PickWatch.closesWithin else { return nil }
+        let settled = reads.filter { $0.at >= lastMove + PickWatch.settle && $0.at <= crossAt }
+        guard let first = settled.first, let last = settled.last, settled.count >= 2,
+              last.at - first.at >= PickWatch.apart, abs(last.x - 0.5) <= PickWatch.centered,
+              settled.allSatisfy({ $0.name == last.name && abs($0.x - last.x) <= PickWatch.still }) else { return nil }
+        return last.name
     }
 }

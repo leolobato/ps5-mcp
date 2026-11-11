@@ -5,7 +5,7 @@
  * PADD_FAIL_ADD=<errno> makes pad_add fail; PADD_FAIL_ADD_USER=<user id> limits that to one user.
  * PADD_LOGIN_USERS=<id>,<id>... are the signed-in users (default: only the foreground user);
  * PADD_FAIL_LOGIN_USERS=<status> makes that list fail.
- * PADD_USER_NAME and PADD_GUEST_NAME name the foreground user and the others.
+ * PADD_USER_NAME and PADD_GUEST_NAME name the foreground user and the others; PADD_NAME_<user id> names one user.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -61,7 +61,11 @@ int system_user_name(int32_t user_id, char *name, size_t size) {
     const char *fail = getenv("PADD_FAIL_USER_NAME");
     const char *value = getenv("PADD_USER_NAME");
     const char *guest = getenv("PADD_GUEST_NAME");
+    char key[32];
+    snprintf(key, sizeof key, "PADD_NAME_%d", user_id);
+    const char *own = getenv(key);
     if (fail) snprintf(name, size, "%s", "");
+    else if (own) snprintf(name, size, "%s", own);
     else if (user_id != FOREGROUND_USER && guest) snprintf(name, size, "%s", guest);
     else if (user_id != FOREGROUND_USER) snprintf(name, size, "Guest %d", user_id);
     else snprintf(name, size, "%s", value ? value : "Test Player");

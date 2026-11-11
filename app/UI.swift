@@ -1011,7 +1011,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
             sidebar.set("Pad", hello.padReady ? "handle \(hello.padHandle)" : "NOT ready (\(hello.addStatus))",
                         color: hello.padReady ? .labelColor : .systemRed)
             let userID = String(format: "0x%08X", UInt32(bitPattern: hello.userID))
-            sidebar.set("User", hello.userName.map { "\($0) · \(userID)" } ?? userID)
+            sidebar.set("User", hello.userID < 0 ? "no user" : hello.userName.map { "\($0) · \(userID)" } ?? userID)
         } else {
             for field in ["Pad", "User"] { sidebar.set(field, "–") }
             sidebar.set("padd", bundled.version.map { "– · v\($0) to start" } ?? "–")
@@ -1031,8 +1031,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
             let pads = hub.pads, supported = link.connected && (link.hello?.flags ?? 0) & PMCP.flagPads != 0
             let connected = pads?.connected ?? [1]
             let active = pads?.active ?? 1
-            sidebar.showControllers(connected.map { (pad: $0, name: hub.controllerName($0)) }, active: active,
-                                    enabled: link.connected)
+            sidebar.showControllers(connected.map { pad in
+                (pad: pad, name: hub.controllerName(pad) ?? (pads?.hasNoUser(pad) == true ? "no user" : nil))
+            }, active: active, enabled: link.connected)
             let available = hub.availableUsers, signedOut = hub.signedOutUsers
             let full = connected.count >= (pads?.capacity ?? 1)
             let unknown = hub.loginUsers.map { $0.status != 0 } ?? true

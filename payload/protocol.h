@@ -119,6 +119,7 @@ struct pmcp_command {           /* 4 + 4 + 32 bytes */
 #define PMCP_FLAG_PAD_USER        0x10  /* COMMAND op PAD_USER supported (padd 1.5 only) */
 #define PMCP_FLAG_USERS           0x20  /* GET_USERS supported (padd 1.7+) */
 #define PMCP_FLAG_PADS            0x40  /* several pads: GET_PADS, COMMAND ops PAD and SELECT_PAD (padd 1.7+) */
+#define PMCP_FLAG_PAD_USERS       0x80  /* COMMAND op PAD takes "user <pad> <user id>" (padd 1.10+) */
 
 enum pmcp_command_op {
     PMCP_CMD_HOME = 1,          /* return to the home screen; arg = method ("" = default) */
@@ -126,7 +127,8 @@ enum pmcp_command_op {
     PMCP_CMD_CLOSE = 3,         /* close the running game or app */
     PMCP_CMD_UNINSTALL = 4,     /* uninstall arg (title id, 4 letters + 5 digits); the removal finishes later */
     PMCP_CMD_PAD_USER = 5,      /* padd 1.5 only: give its one pad to "foreground", "second" or a user id */
-    PMCP_CMD_PAD = 6,           /* arg "connect" or "connect <user id>": add a pad; "disconnect" or "disconnect <pad>": remove one */
+    PMCP_CMD_PAD = 6,           /* arg "connect" or "connect <user id>": add a pad; "disconnect" or "disconnect <pad>": remove one;
+                                   "user <pad> <user id>": record who has a pad now (0: nobody) */
     PMCP_CMD_SELECT_PAD = 7,    /* arg "1" to "4": the pad STATE drives; the others go neutral */
 };
 

@@ -66,6 +66,10 @@ final class Hub {
     private var askOnRestoreUntil = 0.0
     /// The controller whose dialog the person was asked to answer, while that wait runs.
     private var askingPadNow: Int?
+    /// What the pad is sent while a person answers a dialog (nil: nobody is asked), for `PickWatch`. Its own lock:
+    /// the controller reports each change with its lock held.
+    private let askCond = NSCondition()
+    private var askInputs: [(at: Double, state: PadState)]?
     /// One "Who's using this controller?" at a time: a second answer would land in the first one's dialog.
     private let assignQueue = DispatchQueue(label: "auto-assign")
     /// Every profile padd has reported signed in, kept in `<state>/known-users`: a new controller can sign one in
@@ -98,6 +102,7 @@ final class Hub {
         }
         controller.onState = { [weak self] state, at in
             self?.recorder?.note(state, at: at)
+            self?.noteAskInput(state, at: at)
             self?.events.async { self?.broadcast("state", ["t": at, "state": state.json]) }
         }
         controller.onStatus = { [weak self] in self?.statusChanged() }
@@ -596,7 +601,8 @@ final class Hub {
         guard let pads = padsNow else { lock.unlock(); return }
         controllersChanged &+= 1
         wantUsers = pads.extraUsers
-        wantActiveUser = pads.active == 1 ? nil : pads.userIDs[pads.active - 1]
+        let activeUser = pads.userIDs[pads.active - 1]
+        wantActiveUser = pads.active == 1 || activeUser <= 0 ? nil : activeUser
         var saved: [String: Any] = ["users": wantUsers.map { Int($0) }]
         if let user = wantActiveUser { saved["active_user"] = Int(user) }
         lock.unlock()
@@ -651,7 +657,7 @@ final class Hub {
             let asked = pickNotice(pad, user: controllerName(pad))
             notice = asked
             lock.lock(); askingPadNow = pad; lock.unlock()  // from now, not from when the queue gets to it
-            assignQueue.async { [weak self] in _ = self?.askPerson(link, pad: pad, announced: asked) }
+            assignQueue.async { [weak self] in _ = self?.askPerson(link, pad: pad, announced: asked, save: true) }
         } else if config.autoAssign {
             assignQueue.async { [weak self] in self?.autoAssign(link, pad: pad) }
         } else {
@@ -684,7 +690,8 @@ final class Hub {
         lock.lock(); let wanted = wantUsers, activeUser = wantActiveUser, started = controllersChanged; lock.unlock()
         func stillOurs() -> Bool { lock.lock(); defer { lock.unlock() }; return controllersChanged == started }
         var ask = false
-        /// The selected controller's dialog. False: it may still be open.
+        /// The selected controller's dialog. False: it may still be open. A pick that changed whose controller it is
+        /// is saved by whoever ends the restore, not here: saving stops a restore.
         func answer() -> Bool {
             assignQueue.sync {
                 // Read here, after any wait of the previous link: one that lost its link asks again on this one.
@@ -693,10 +700,9 @@ final class Hub {
                 askOnRestoreUntil = 0
                 lock.unlock()
                 guard ask else {
-                    if config.autoAssign { autoAssign(link) }
-                    return true
+                    return config.autoAssign ? autoAssign(link) : true
                 }
-                let asked = askPerson(link)
+                let asked = askPerson(link, save: false)
                 return asked == .answered || asked == .notShown
             }
         }
@@ -715,6 +721,9 @@ final class Hub {
                     if pads.active != pad { _ = try selectPad(pad, link: link, save: false) }
                 }
                 _ = answer()
+                // A pick can take another controller's user: what padd says now is the choice to keep.
+                lock.lock(); let saved = wantUsers; lock.unlock()
+                if let users = self.pads?.extraUsers, users != saved { saveControllers() }
                 return
             }
             if pads.active != 1 { _ = try selectPad(1, link: link, save: false) }
@@ -725,6 +734,8 @@ final class Hub {
             var complete = true
             for user in missing.filter({ signedIn.contains($0) }) + missing.filter({ !signedIn.contains($0) }) {
                 guard stillOurs() else { return }
+                // Picked for an earlier controller by the person: padd would answer "already connected".
+                if self.pads?.controller(forUser: user) != nil { continue }
                 let before = Set(self.pads?.connected ?? [])
                 let status = try link.padsCommand(.pad, signedIn.contains(user) ? "connect \(user)" : "connect",
                                                   timeout: Hub.commandTimeout)
@@ -819,15 +830,18 @@ final class Hub {
     /// the row is longer than the panel, and presses Cross only then. When the name cannot be found, controller 1 answers
     /// the profile focused at first and the others press Cross nowhere. Stops if another controller is selected meanwhile.
     /// `expected`: the controller this was started for. Once another one is selected its keys would go elsewhere.
-    private func autoAssign(_ link: PadLink, pad expected: Int? = nil) {
-        guard let assigner else { return }
+    /// False: the dialog may still be open (handed to the person, who left it).
+    @discardableResult
+    private func autoAssign(_ link: PadLink, pad expected: Int? = nil) -> Bool {
+        guard let assigner else { return true }
         let layer = "auto-assign"
         let pad = pads?.active ?? 1
         if let expected, expected != pad {
             notice = "Controller \(expected) may still ask \"Who's using this controller?\": select it and answer with it."
-            return
+            return false
         }
         let target = link.hello.userName
+        var handed: String?  // what the person was asked, when the app could not answer
         func press(_ name: String) throws {
             // A watch outlives its link by seconds, and what it presses goes to the link of the moment.
             guard !link.closed else { throw BadInput("the padd link changed") }
@@ -896,7 +910,8 @@ final class Hub {
                     while net != 0 { try move(net > 0 ? "left" : "right") }
                 } else {
                     say("auto-assign: \(target ?? "the pad's user") not found; not pressing")
-                    notice = pickNotice(pad, user: target)
+                    handed = pickNotice(pad, user: target)
+                    notice = handed
                     return false
                 }
                 // Reading the names takes time: someone may have answered, and a press would land on the next screen.
@@ -918,7 +933,12 @@ final class Hub {
                 ? "Answered \"Who's using this controller?\" with \(target ?? "its user") for controller \(pad)."
                 : "Answered \"Who's using this controller?\" with controller 1. If your DualSense turned off, "
                     + "press its PS button and pick the same user; both controllers then work."
+        } else if let handed {
+            // The person answers it: wait for that, and learn who they pick. A restore saves at its end.
+            let asked = askPerson(link, pad: pad, announced: handed, save: expected != nil)
+            return asked == .answered || asked == .notShown
         }
+        return true
     }
 
     private enum Asked { case answered, notShown, open, linkLost }
@@ -934,7 +954,9 @@ final class Hub {
     /// already does; else once the dialog shows), and this waits until the dialog is seen gone, `patience` s at most.
     /// `.open`: it may still be there, also when no video shows whether it is. `.linkLost`: the next link's restore
     /// asks again, since it would otherwise answer by itself. `expected`: as for `autoAssign`.
-    private func askPerson(_ link: PadLink, pad expected: Int? = nil, announced: String? = nil,
+    /// While it waits it reads which profile is picked, and padd's record follows (`recordPick`); `save` keeps that as
+    /// the person's choice.
+    private func askPerson(_ link: PadLink, pad expected: Int? = nil, announced: String? = nil, save: Bool,
                            patience: Double = 120) -> Asked {
         let pad = pads?.active ?? 1
         lock.lock(); askingPadNow = expected ?? pad; lock.unlock()
@@ -951,6 +973,8 @@ final class Hub {
             askOnNextRestore()
             return .linkLost
         }
+        askCond.lock(); askInputs = []; askCond.unlock()
+        defer { askCond.lock(); askInputs = nil; askCond.unlock() }
         var asked = announced, sawFrame = false
         var deadline = uptimeSeconds() + 6  // as auto-assign: the dialog can reach the video after the connect
         while true {
@@ -967,14 +991,126 @@ final class Hub {
             notice = asked
         }
         deadline = uptimeSeconds() + patience
-        while dialogShowing() != false {
+        var watch = PickWatch()
+        var goneAt = 0.0, lastInput = 0.0, lastRead = 0.0
+        var lastFrame: UInt64?
+        while true {
             if link.closed { return lost() }
-            if uptimeSeconds() >= deadline { return .open }
-            Thread.sleep(forTimeInterval: 0.5)
+            let at = uptimeSeconds(), sink = self.sink, age = sink.frameAge
+            if let assigner, age >= 0, age < 2, let frame = sink.latestBuffer() {
+                if assigner.score(frame) < Assigner.minScore {
+                    goneAt = at
+                    break
+                }
+                // Reading the names costs more than looking for the title: now and then, and at once after a key. Only
+                // once frames have arrived since the last reading, timed by the capture: video that stopped says nothing
+                // about what was picked since.
+                let count = sink.frames
+                if count != lastFrame, age < 0.3, at - lastInput < 1.5 || at - lastRead >= 0.4 {
+                    watch.read(Assigner.focusedProfile(assigner.profiles(frame)), at: at - age)
+                    lastRead = at
+                    lastFrame = count
+                }
+            }
+            if at >= deadline { return .open }
+            for input in takeAskInputs(wait: at - lastInput < 1.5 ? 0.02 : 0.2) {
+                watch.sent(input.state, at: input.at)
+                lastInput = input.at
+            }
         }
+        // What was sent before the dialog was seen gone; a key after that is for the next screen.
+        for input in takeAskInputs(wait: 0) where input.at <= goneAt { watch.sent(input.state, at: input.at) }
         lock.lock(); let unchanged = noticeText == asked; if unchanged { noticeText = nil }; lock.unlock()
         if unchanged { statusChanged() }
+        refreshLoginUsers(link)
+        if (pads?.active ?? 1) == pad, let name = watch.picked(goneAt: goneAt), recordPick(link, pad: pad, name: name), save {
+            saveControllers()
+        }
         return .answered
+    }
+
+    /// The saved choice follows a recorded pick at once, also when a restore stops before it saves: the controller
+    /// added for `from` is `to`'s now, and `to` has no other.
+    private func rememberPick(pad: Int, from: Int32, to: Int32) {
+        lock.lock()
+        var users = wantUsers
+        if pad == 1 {
+            users.removeAll { $0 == to }
+        } else if let index = users.firstIndex(of: from) {
+            users[index] = to
+            users = users.enumerated().filter { $0.element != to || $0.offset == index }.map(\.element)
+        }
+        let changed = users != wantUsers || wantActiveUser == from
+        wantUsers = users
+        if wantActiveUser == from { wantActiveUser = pad == 1 ? nil : to }
+        var saved: [String: Any] = ["users": users.map { Int($0) }]
+        if let active = wantActiveUser { saved["active_user"] = Int(active) }
+        lock.unlock()
+        if changed, let data = try? JSONSerialization.data(withJSONObject: saved, options: .sortedKeys) {
+            try? data.write(to: URL(fileURLWithPath: stateDir + "/controllers"), options: .atomic)
+        }
+    }
+
+    /// With the controller's lock held: only notes it.
+    private func noteAskInput(_ state: PadState, at: Double) {
+        askCond.lock()
+        if askInputs != nil {
+            askInputs?.append((at, state))
+            askCond.signal()
+        }
+        askCond.unlock()
+    }
+
+    /// What the pad was sent since the last call, waiting up to `wait` s for something.
+    private func takeAskInputs(wait: Double) -> [(at: Double, state: PadState)] {
+        askCond.lock(); defer { askCond.unlock() }
+        if askInputs?.isEmpty == true, wait > 0 { _ = askCond.wait(until: Date().addingTimeInterval(wait)) }
+        let inputs = askInputs ?? []
+        askInputs?.removeAll()
+        return inputs
+    }
+
+    /// The person gave controller `pad` to the profile read as `name`. When that is not the user padd has for it,
+    /// padd's record follows (padd 1.10), and a controller that had this user is left with none: the console moved
+    /// them ("Switch Controller"). Only when the name is one signed-in user's and nobody else's, since the pick signs
+    /// that user in and a wrong name is worse than an old one. True: the record changed.
+    private func recordPick(_ link: PadLink, pad: Int, name: String) -> Bool {
+        func named(_ other: String) -> Bool { other.caseInsensitiveCompare(name) == .orderedSame }
+        // A signed-out profile of the same name may be the one picked, before its sign-in reaches the list.
+        lock.lock(); let known = knownUsersNow.filter { named($0.value) }.map(\.key); lock.unlock()
+        var user: Int32?
+        for attempt in 0..<6 {  // a sign-in takes a moment to reach the list
+            if attempt > 0 {
+                Thread.sleep(forTimeInterval: 0.5)
+                refreshLoginUsers(link)
+            }
+            let same = (loginUsers?.users ?? []).filter { named($0.name) }.map(\.id)
+            if Set(same + known).count > 1 {
+                say("controller \(pad): several profiles are named \(name); not recording the pick")
+                return false
+            }
+            user = same.first
+            if user != nil { break }
+        }
+        guard let user, let pads, pads.connected.contains(pad), pads.userIDs[pad - 1] != user else { return false }
+        guard link.hello.flags & PMCP.flagPadUsers != 0 else {
+            notice = "Controller \(pad) went to \(name), but this padd cannot record that and still shows "
+                + "\(controllerName(pad) ?? "its first user"): Update padd."
+            return false
+        }
+        do {
+            let loser = pads.controller(forUser: user)
+            guard try link.padsCommand(.pad, "user \(pad) \(user)", timeout: Hub.commandTimeout) == 0 else { return false }
+            if let loser { _ = try link.padsCommand(.pad, "user \(loser) 0", timeout: Hub.commandTimeout) }
+            refreshLoginUsers(link)
+            rememberPick(pad: pad, from: pads.userIDs[pad - 1], to: user)
+            notice = loser.map { "\(name) moved to controller \(pad). Controller \($0) has no user now." }
+                ?? "Controller \(pad) is \(name)'s."
+            return true
+        } catch {
+            say("controller \(pad): \(error); the pick was not recorded")
+            return false
+        }
     }
 
     /// Evidence of an automatic press: a copy of the current frame in the state dir.

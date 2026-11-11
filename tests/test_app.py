@@ -123,7 +123,7 @@ def buttons(padd) -> list[int]:
 def test_status_reports_api_link_and_frames(app):
     status = app.client().status()
     assert status["api"] == 1 and status["frames"] > 0 and 0 <= status["frame_age"] < 1
-    assert status["pad"]["connected"] and status["pad"]["version"] == "1.9"
+    assert status["pad"]["connected"] and status["pad"]["version"] == "1.10"
     assert status["pad"]["hello"]["pad_handle"] == 1000 and status["source"].startswith("file:")
     assert status["pad"]["hello"]["user_name"] == "Test Player"
     assert status["title"] == "PS5 MCP · pad connected"
@@ -784,13 +784,14 @@ def calls_in(trace) -> list[dict]:
 
 class DialogSim:
     """The console's "Who's using this controller?" as frames: the focused profile stays centered and the row scrolls
-    with the pad's Left and Right, as seen on the console. Cross closes it, showing the home screen."""
+    with the pad's Left and Right, as seen on the console. Cross closes it, showing the home screen, `linger` s later
+    (on the console it stays for a moment)."""
 
     SPACING = 352
     FONT = "/System/Library/Fonts/Helvetica.ttc"
 
-    def __init__(self, hub, calls, handle: int, names: list[str], focus: int):
-        self.hub, self.calls, self.handle, self.names, self.focus = hub, calls, handle, names, focus
+    def __init__(self, hub, calls, handle: int, names: list[str], focus: int, linger: float = 0.0):
+        self.hub, self.calls, self.handle, self.names, self.focus, self.linger = hub, calls, handle, names, focus, linger
         self.buttons: list[int] = []
         self.stopped = threading.Event()
         self.draw()
@@ -815,6 +816,7 @@ class DialogSim:
                 if value and value != previous:
                     self.buttons.append(value)
                     if value == CROSS:
+                        time.sleep(self.linger)
                         put_frame(self.hub.frame, HOME)
                         return
                     self.focus += {RIGHT: 1, p.BUTTONS["left"]: -1}.get(value, 0)
@@ -1065,6 +1067,203 @@ def test_a_reconnect_leaves_the_dialog_with_the_person(tmp_path):
         if restarted:
             restarted.send_signal(signal.SIGTERM)
             restarted.wait(5)
+        hub.stop()
+        daemon.stop()
+
+
+FOREGROUND, OTHER = 0x11ECF8B9, 0x33445566
+THREE_USERS = {"PADD_LOGIN_USERS": f"{FOREGROUND},{GUEST},{OTHER}", "PADD_USER_NAME": "leolobato-jb",
+               f"PADD_NAME_{GUEST}": "User1", f"PADD_NAME_{OTHER}": "Other"}
+ROW = ["Add User", "leolobato-jb", "User1", "Other"]
+picks = pytest.mark.skipif(not USERS.exists() or not HOME.exists() or not Path(DialogSim.FONT).exists(), reason="fixtures")
+
+
+def tap(client, key: str) -> None:
+    """A key of the window's keyboard, as a person presses it."""
+    client.key(key, True)
+    time.sleep(0.1)
+    client.key(key, False)
+
+
+def controller_users(client) -> list[int]:
+    return [c["user_id"] for c in client.status()["controllers"]["list"]]
+
+
+@picks
+def test_padd_follows_the_user_a_person_picks(tmp_path):
+    daemon = Padd(tmp_path, env=THREE_USERS)
+    hub = App(daemon, USERS)
+    sim = None
+    try:
+        client = hub.client()
+        assert client.status()["pad"]["hello"]["flags"] & p.FLAG_PAD_USERS
+        assert wait_for(lambda: CROSS in buttons(daemon) and buttons(daemon)[-1] == 0, 4)  # controller 1's dialog
+        sim = DialogSim(hub, lambda: daemon.calls("pad_report"), 1001, ROW, 1)
+        assert client.command("pad", f"connect {GUEST} ask", wait=10) == 0  # added for User1
+        assert "controller 2: pick User1" in client.status()["notice"]
+        time.sleep(0.5)
+        tap(client, "right")
+        time.sleep(0.7)
+        tap(client, "right")  # past User1, to Other
+        time.sleep(1.5)
+        tap(client, "enter")
+        assert wait_for(lambda: controller_users(client) == [FOREGROUND, OTHER], 8), client.status()["notice"]
+        status = client.status()
+        assert status["controllers"]["list"][1]["user_name"] == "Other" and status["notice"] == "Controller 2 is Other's."
+        assert status["pad"]["hello"]["user_name"] == "Other"  # the selected controller's user, from padd
+        assert status["controllers"]["available"] == [{"user_id": GUEST, "name": "User1"}]  # free again
+        assert json.loads((hub.root / "controllers").read_text()) == {"users": [OTHER], "active_user": OTHER}
+        assert sim.buttons == [RIGHT, RIGHT, CROSS] and len(daemon.calls("pad_add")) == 2
+    finally:
+        if sim:
+            sim.stop()
+        hub.stop()
+        daemon.stop()
+
+
+@picks
+@pytest.mark.parametrize("linger", [0.0, 0.7])
+def test_a_pick_too_quick_to_read_is_never_recorded_wrongly(tmp_path, linger):
+    # Left, Left, Enter in a row: User1 is focused only in passing, and must never be taken for the pick.
+    daemon = Padd(tmp_path, env=THREE_USERS)
+    hub = App(daemon, USERS)
+    sim = None
+    try:
+        client = hub.client()
+        assert wait_for(lambda: CROSS in buttons(daemon) and buttons(daemon)[-1] == 0, 4)
+        sim = DialogSim(hub, lambda: daemon.calls("pad_report"), 1001, ROW, 3, linger=linger)
+        assert client.command("pad", f"connect {OTHER} ask", wait=10) == 0
+        time.sleep(1.5)  # Other, focused, is read
+        for key in ("left", "left", "enter"):
+            tap(client, key)
+        assert wait_for(lambda: CROSS in sim.buttons, 5) and sim.buttons == [LEFT, LEFT, CROSS]
+        assert wait_for(lambda: "pick" not in (client.status()["notice"] or ""), 8)
+        time.sleep(4.5)  # recording a pick waits up to 3 s for a sign-in
+        users = controller_users(client)
+        # Either nothing was learned (Other stays), or the real pick was: leolobato-jb, whose controller 1 lost them.
+        assert users in ([FOREGROUND, OTHER], [-1, FOREGROUND]), users
+        if linger == 0:
+            assert users == [FOREGROUND, OTHER]  # the dialog went at once: nothing could be read after the moves
+    finally:
+        if sim:
+            sim.stop()
+        hub.stop()
+        daemon.stop()
+
+
+@picks
+def test_a_name_two_users_share_is_not_recorded(tmp_path):
+    env = {"PADD_LOGIN_USERS": f"{FOREGROUND},{GUEST},{OTHER}", "PADD_USER_NAME": "leolobato-jb", "PADD_GUEST_NAME": "Twin"}
+    daemon = Padd(tmp_path, env=env)
+    hub = App(daemon, USERS)
+    sim = None
+    try:
+        client = hub.client()
+        assert wait_for(lambda: CROSS in buttons(daemon) and buttons(daemon)[-1] == 0, 4)
+        sim = DialogSim(hub, lambda: daemon.calls("pad_report"), 1001, ["Add User", "leolobato-jb", "Twin", "Twin"], 2)
+        assert client.command("pad", f"connect {GUEST} ask", wait=10) == 0
+        time.sleep(0.5)
+        tap(client, "right")  # the other Twin
+        time.sleep(1.5)
+        tap(client, "enter")
+        assert wait_for(lambda: CROSS in sim.buttons, 5)
+        time.sleep(5)
+        assert controller_users(client) == [FOREGROUND, GUEST]
+    finally:
+        if sim:
+            sim.stop()
+        hub.stop()
+        daemon.stop()
+
+
+@picks
+def test_a_user_who_switches_controller_leaves_the_old_one_without(tmp_path):
+    daemon = Padd(tmp_path, env=THREE_USERS)
+    hub = App(daemon, USERS)
+    sim = None
+    try:
+        client = hub.client()
+        assert wait_for(lambda: CROSS in buttons(daemon) and buttons(daemon)[-1] == 0, 4)
+        sim = DialogSim(hub, lambda: daemon.calls("pad_report"), 1001, ROW, 1)  # opens on leolobato-jb: "Switch Controller"
+        assert client.command("pad", f"connect {GUEST} ask", wait=10) == 0
+        time.sleep(1.5)
+        tap(client, "enter")
+        assert wait_for(lambda: controller_users(client) == [-1, FOREGROUND], 8), client.status()["notice"]
+        status = client.status()
+        assert status["notice"] == "leolobato-jb moved to controller 2. Controller 1 has no user now."
+        assert status["controllers"]["list"][0]["user_name"] is None
+        assert json.loads((hub.root / "controllers").read_text()) == {"users": [FOREGROUND], "active_user": FOREGROUND}
+        assert client.command("select_pad", "1") == 0  # a controller nobody has is not saved as the one to drive
+        assert json.loads((hub.root / "controllers").read_text()) == {"users": [FOREGROUND]}
+        assert client.status()["pad"]["hello"]["user_id"] == -1
+    finally:
+        if sim:
+            sim.stop()
+        hub.stop()
+        daemon.stop()
+
+
+@picks
+def test_a_user_picked_for_controller_1_is_not_added_again(tmp_path):
+    # User1 was saved as controller 2. After a padd restart by hand, the person gives controller 1 to User1.
+    env = {"PADD_LOGIN_USERS": f"{FOREGROUND},{GUEST}", "PADD_USER_NAME": "leolobato-jb", f"PADD_NAME_{GUEST}": "User1"}
+    daemon = Padd(tmp_path, env=env)
+    hub = App(daemon, HOME, "--no-auto-assign", files={"controllers": json.dumps({"users": [GUEST]})})
+    restarted = sim = None
+    try:
+        client = hub.client()
+        assert wait_for(lambda: controller_users(client) == [FOREGROUND, GUEST], 8)
+        daemon.stop()
+        assert wait_for(lambda: not client.status()["pad"]["connected"])
+        assert client.call("padd_start", ask=True, timeout=20)["ok"]
+        restarted, trace = restart_padd(daemon, tmp_path, env, "again")
+        sim = DialogSim(hub, lambda: calls_in(trace), 1000, ["Add User", "leolobato-jb", "User1"], 1)
+        assert wait_for(lambda: "controller 1: pick the user" in (client.status()["notice"] or ""), 14)
+        time.sleep(0.5)
+        tap(client, "right")
+        time.sleep(1.5)
+        tap(client, "enter")
+        assert wait_for(lambda: controller_users(client) == [GUEST], 8), client.status()["notice"]
+        time.sleep(1.5)  # the restore goes on: it must not ask padd for User1 again
+        status = client.status()
+        assert controller_users(client) == [GUEST] and status["notice"] == "Controller 1 is User1's."
+        assert [c["user_id"] for c in calls_in(trace) if c["call"] == "pad_add"] == [FOREGROUND]
+        assert json.loads((hub.root / "controllers").read_text()) == {"users": []}
+    finally:
+        if sim:
+            sim.stop()
+        if restarted:
+            restarted.send_signal(signal.SIGTERM)
+            restarted.wait(5)
+        hub.stop()
+        daemon.stop()
+
+
+@picks
+def test_a_dialog_the_app_hands_over_is_learned_too(tmp_path):
+    # The app cannot find "Somebody" in the row and asks the person, who gives the controller to Other.
+    env = {"PADD_LOGIN_USERS": f"{FOREGROUND},{GUEST},{OTHER}", "PADD_USER_NAME": "leolobato-jb",
+           f"PADD_NAME_{GUEST}": "Somebody", f"PADD_NAME_{OTHER}": "Other"}
+    daemon = Padd(tmp_path, env=env)
+    hub = App(daemon, USERS)
+    sim = None
+    try:
+        client = hub.client()
+        assert wait_for(lambda: CROSS in buttons(daemon) and buttons(daemon)[-1] == 0, 4)
+        sim = DialogSim(hub, lambda: daemon.calls("pad_report"), 1001, ["Add User", "leolobato-jb", "Other"], 1)
+        assert client.command("pad", "connect", wait=10) == 0
+        assert wait_for(lambda: "pick Somebody" in (client.status()["notice"] or ""), 12)
+        assert not sim.buttons
+        with pytest.raises(AppError, match="controller 2: answer that first"):
+            client.command("pad", f"connect {OTHER}")
+        tap(client, "right")
+        time.sleep(1.5)
+        tap(client, "enter")
+        assert wait_for(lambda: controller_users(client) == [FOREGROUND, OTHER], 8), client.status()["notice"]
+        assert json.loads((hub.root / "controllers").read_text()) == {"users": [OTHER], "active_user": OTHER}
+    finally:
+        if sim:
+            sim.stop()
         hub.stop()
         daemon.stop()
 

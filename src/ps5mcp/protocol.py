@@ -33,7 +33,8 @@ class Command(IntEnum):
     CLOSE = 3
     UNINSTALL = 4  # padd 1.3+ (FLAG_UNINSTALL)
     PAD_USER = 5  # padd 1.5 only (FLAG_PAD_USER): its one pad to "foreground", "second" or a user id
-    PAD = 6  # padd 1.7+ (FLAG_PADS): arg "connect [user id]" or "disconnect [controller]" (the controller from 1.9)
+    PAD = 6  # padd 1.7+ (FLAG_PADS): arg "connect [user id]" or "disconnect [controller]" (the controller from 1.9);
+    # "user <controller> <user id>" records who has it now, 0 for nobody (padd 1.10+, FLAG_PAD_USERS)
     SELECT_PAD = 7  # padd 1.7+ (FLAG_PADS): arg "1" to "4", the pad STATE drives
 
 
@@ -56,6 +57,7 @@ FLAG_UNINSTALL = 0x8
 FLAG_PAD_USER = 0x10  # padd 1.5 only
 FLAG_USERS = 0x20
 FLAG_PADS = 0x40
+FLAG_PAD_USERS = 0x80  # padd 1.10+: PAD "user <controller> <user id>"
 
 # Several controllers (padd 1.7, up to four from 1.9): controller 1 is the foreground user's; the others are other
 # signed-in users' (in the console's order, as a prospero-win game's next controllers). Input drives the selected one.

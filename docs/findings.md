@@ -32,6 +32,8 @@ by moving until the pad's user was focused, and the console's notice named the r
 
 Known gap: `connect <id>` with an id nobody has opens the dialog, where Add User creates a guest. The pad then keeps the requested id,
 so `status` shows a null name and that placeholder id, while the guest is listed under `available` with its real id. Input works.
+padd 1.10 can be told who has a pad (`user <pad> <user id>`), and the app does so for a profile a person picks in the dialog, but
+not for Add User: the guest signs in only after more screens.
 
 What is known: `/dev/hid` AddDevice takes a user id that is not the foreground user's, and the console then shows
 its user picker. With nobody signed in, the picker had that user selected (the padd variant for User1 in

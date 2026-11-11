@@ -148,8 +148,20 @@ while the dialog is on screen, and a restore of saved controllers waits for each
 adds the next one. It stops when a dialog stays open, or when there is no video to tell. While the person is asked,
 `pad connect` fails with `bad_request` ("answer that first") and **+** is off: the console shows one dialog at a time.
 If the padd link drops meanwhile, the next link asks again instead of answering. Requests through this API are answered
-by auto-assign unless they carry `ask`. padd and `status` keep the user the controller was added for, also when the
-person picks another profile.
+by auto-assign unless they carry `ask`.
+
+Whenever the app asks a person to answer (by hand, or because auto-assign could not find the name), it reads which
+profile they pick: the focused name, when the last thing the controller sent before the dialog went was Cross alone. If
+that is another signed-in user than the one the controller was added for, the app tells padd (`user`, padd 1.10), and
+`status`, `pad.hello` and the saved users follow; `notice` says so. A user who already had a virtual controller moved to
+this one ("Switch Controller"), so that other controller is left with `user_id` -1 and a null `user_name`. The app
+records a pick only on plain evidence, because a wrong name is worse than an old one: every reading of fresh video from
+0.4 s after the last move (or its release) up to Cross shows the same name in the middle of the row, at least two of
+them, and exactly one profile the app knows has that name. A Cross right after a move, video that stopped, a name two
+profiles share, or Add User leave the record as it was. A pick is saved as the person's choice at once, also during a
+restore of saved controllers, which stops when a dialog the app handed over is left open. With an older padd
+`notice` asks for an update instead. Dialogs nobody was asked about (`--no-auto-assign`, or one a DualSense opens) are
+not read.
 
 ## Launch options
 

@@ -35,8 +35,9 @@
    that hung up no longer makes the next one busy. 1.5: the pad can belong to another signed-in user (PAD_USER), and
    launch always uses the foreground user. 1.7: a second pad for the second signed-in user instead of PAD_USER
    (SECOND_PAD, SELECT_PAD, GET_PADS), and GET_USERS lists the foreground and signed-in users. 1.8: SECOND_PAD
-   "connect <user id>". 1.9: up to four pads (COMMAND PAD, the former SECOND_PAD, and "disconnect <pad>"). */
-#define PADD_VERSION 0x0109
+   "connect <user id>". 1.9: up to four pads (COMMAND PAD, the former SECOND_PAD, and "disconnect <pad>"). 1.10: PAD
+   "user <pad> <user id>", so the record of who has a pad can follow the console's picker. */
+#define PADD_VERSION 0x010A
 
 struct config {
     int port;
@@ -192,7 +193,7 @@ static int valid_title_id(const char *id) {
 
 static uint32_t flags(const struct daemon *d) {
     return (d->pads[d->active].ready ? PMCP_FLAG_PAD_READY : 0) | PMCP_FLAG_TOUCH_UNMAPPED | PMCP_FLAG_USER_NAME
-        | PMCP_FLAG_UNINSTALL | PMCP_FLAG_USERS | PMCP_FLAG_PADS;
+        | PMCP_FLAG_UNINSTALL | PMCP_FLAG_USERS | PMCP_FLAG_PADS | PMCP_FLAG_PAD_USERS;
 }
 
 /* The first signed-in user with no pad who is not the foreground one, as prospero-win gives a game's next controller.
@@ -260,13 +261,28 @@ static void remove_extra_pad(struct daemon *d, int index) {
     pad->user_id = -1;
 }
 
+/* "<pad> <user id>": who has that pad now. The console's picker lets a person give a pad to another profile than the
+   one it was added for, and nothing here sees that, so the client says it. User id 0: nobody has it (its user took
+   another pad). Only the record changes; nothing reaches the console. ENOENT: that pad is not connected. */
+static int set_pad_user(struct daemon *d, const char *arg) {
+    if (arg[0] < '1' || arg[0] >= '1' + PMCP_PADS || arg[1] != ' ' || arg[2] < '0' || arg[2] > '9') return EINVAL;
+    char *end;
+    long value = strtol(arg + 2, &end, 10);
+    if (*end || value > INT32_MAX) return EINVAL;
+    struct pad *pad = &d->pads[arg[0] - '1'];
+    if (!pad->ready) return ENOENT;
+    pad->user_id = value ? (int32_t)value : -1;
+    return 0;
+}
+
 /* Pads 2 to 4, on demand. "connect" adds one for the next signed-in user, "connect <user id>" for that user (already
    connected: nothing changes), into the lowest free pad; other pads keep their numbers. ENOSPC: all are connected.
    "disconnect <pad>" removes that pad, "disconnect" the highest one (none connected, or not this one: nothing
    changes); if it was the active one, pad 1 becomes active. A user who is not signed in gets the console's sign-in
-   picker with that user selected (docs/findings.md). These pads log their own events: the runner reads pad_added and
-   pad_removed to judge a start and an exit. */
+   picker (docs/findings.md). These pads log their own events: the runner reads pad_added and pad_removed to judge a
+   start and an exit. "user <pad> <user id>" is for any pad, the first one too (set_pad_user). */
 static int pad_command(struct daemon *d, const char *arg) {
+    if (!strncmp(arg, "user ", 5)) return set_pad_user(d, arg + 5);
     if (!strcmp(arg, "connect")) return connect_pad(d, "");
     if (!strncmp(arg, "connect ", 8)) return arg[8] ? connect_pad(d, arg + 8) : EINVAL;
     if (!strcmp(arg, "disconnect")) {

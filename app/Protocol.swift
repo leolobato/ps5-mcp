@@ -12,6 +12,7 @@ enum PMCP {
     static let flagUserName: UInt32 = 0x4
     static let flagUninstall: UInt32 = 0x8
     static let flagPadUser: UInt32 = 0x10  // padd 1.5 only
+    static let flagPadUsers: UInt32 = 0x80  // padd 1.10+: PAD "user <controller> <user id>"
     static let flagUsers: UInt32 = 0x20
     static let flagPads: UInt32 = 0x40
 
@@ -184,9 +185,11 @@ struct Pads: Equatable {
     /// Connected controller numbers, in order. Controller 1 first; they keep their numbers while padd runs.
     var connected: [Int] { (1...capacity).filter { handles[$0 - 1] >= 0 } }
     var extraConnected: Bool { connected.contains { $0 != 1 } }
-    /// The users of controllers 2 and up, in order.
-    var extraUsers: [Int32] { connected.filter { $0 != 1 }.map { userIDs[$0 - 1] } }
-    func controller(forUser user: Int32) -> Int? { connected.first { userIDs[$0 - 1] == user } }
+    /// The users of controllers 2 and up, in order. A controller nobody has (user -1, padd 1.10) is left out.
+    var extraUsers: [Int32] { connected.filter { $0 != 1 }.map { userIDs[$0 - 1] }.filter { $0 > 0 } }
+    func controller(forUser user: Int32) -> Int? { user > 0 ? connected.first { userIDs[$0 - 1] == user } : nil }
+    /// A connected controller whose user took another one ("Switch Controller").
+    func hasNoUser(_ pad: Int) -> Bool { connected.contains(pad) && userIDs[pad - 1] <= 0 }
 }
 
 func decodePads(_ data: [UInt8]) -> Pads {

@@ -95,7 +95,7 @@ async def test_home_and_launch_commands(runtime):
 
 async def test_status_reports_link_and_counters(runtime):
     info = json.loads(text(await server.mcp.call_tool("status", {})))
-    assert info["payload"]["connected"] and info["payload"]["version"] == "1.9"
+    assert info["payload"]["connected"] and info["payload"]["version"] == "1.10"
     assert info["payload"]["pong"]["report_failures"] == 0
     assert info["capture"]["running"]
     assert info["app"]["version"] == info["app"]["server_version"]  # one version for the app and the MCP server

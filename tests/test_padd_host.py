@@ -101,7 +101,7 @@ def test_ping_reports_uptime_and_counters(padd):
     link = padd.connect()
     link.send_state(PadState(buttons=RIGHT), wait=True)
     pong = link.ping()
-    assert pong.protocol == 1 and p.version_string(pong.payload_version) == "1.9"
+    assert pong.protocol == 1 and p.version_string(pong.payload_version) == "1.10"
     assert pong.reports_sent >= 1 and pong.report_failures == 0 and pong.flags & p.FLAG_PAD_READY
     link.close()
 
@@ -537,13 +537,37 @@ def test_second_pad_needs_a_second_user_and_valid_args(padd):
 
 
 def test_second_pad_can_be_for_a_given_user(padd):
-    # A user who is not signed in: on the console this opens the sign-in picker with that user selected.
+    # A user who is not signed in: on the console this opens the picker, where Cross on their profile signs them in.
     link = padd.connect()
     assert link.command(p.Command.PAD, "connect 0") == 22
     assert link.command(p.Command.PAD, "connect x1") == 22
     assert link.command(p.Command.PAD, "connectx") == 22
     assert link.command(p.Command.PAD, f"connect {GUEST}") == 0
     assert padd.calls("pad_add")[-1]["user_id"] == GUEST and link.get_pads().user_ids == (0x11ECF8B9, GUEST, -1, -1)
+    link.close()
+
+
+def test_a_pads_user_follows_what_the_client_reports(padd):
+    # The console's picker can give a pad to another profile than the one it was added for; only the client sees it.
+    other = 0x33445566
+    link = padd.connect()
+    assert link.hello.flags & p.FLAG_PAD_USERS
+    assert link.command(p.Command.PAD, f"connect {GUEST}") == 0
+    adds = len(padd.calls("pad_add"))
+    assert link.command(p.Command.PAD, f"user 2 {other}") == 0
+    assert link.get_pads() == p.Pads(1, (1000, 1001, -1, -1), (0x11ECF8B9, other, -1, -1))
+    assert link.command(p.Command.PAD, f"connect {other}") == 0  # that user's controller is this one: nothing is added
+    assert link.command(p.Command.PAD, f"connect {GUEST}") == 0  # and the first user is free again
+    assert link.get_pads().user_ids == (0x11ECF8B9, other, GUEST, -1)
+    assert link.command(p.Command.PAD, f"user 1 {GUEST}") == 0  # the first pad too; the client clears the other itself
+    assert link.command(p.Command.PAD, "user 3 0") == 0  # nobody has it
+    assert link.get_pads() == p.Pads(1, (1000, 1001, 1002, -1), (GUEST, other, -1, -1))
+    assert link.get_user().user_id == GUEST  # the selected pad's user, as HELLO would say
+    assert link.command(p.Command.PAD, "user 4 5") == 2  # ENOENT: not connected
+    for bad in ("user", "user 2", "user 5 7", "user 2 -7", "user 2 x", "user 2 7x", "user 2  7", "user 2 99999999999"):
+        assert link.command(p.Command.PAD, bad) == 22, bad
+    # Only the record changed: no pad was added or removed for it.
+    assert len(padd.calls("pad_add")) == adds + 1 and not padd.calls("pad_remove")
     link.close()
 
 

@@ -236,8 +236,12 @@ your answer: move with the arrow keys and press Enter in the window. Controllers
 CLI are still answered by the app.
 
 This is how you give padd's controller 1 to a user other than the one on your DualSense: pick that user when padd
-starts, and the DualSense stays on. The sidebar still names the user padd added the controller for, because padd does
-not learn which profile you picked.
+starts, and the DualSense stays on.
+
+The app reads which profile you pick, and padd 1.10 records it, so the sidebar and `status()` name the user who has the
+controller. If you pick a user who already has a virtual controller ("Switch Controller"), that other controller shows
+**no user**. The app records a pick only when it read the name clearly: leave a moment between the last arrow key and
+Enter. Otherwise the controller keeps the name it was added for, and so does one you give to **Add User**.
 
 ### Sharing the console
 
