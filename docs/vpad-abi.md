@@ -28,9 +28,10 @@ a separate implementation; only the interface values below are reused. The devic
 | 0x20 | class `1` |
 
 There is no separate "bind to user" call. The user id does not have to be the foreground user's: on 13.60 a
-descriptor with another local user's id, while that user was signed out, made the console open its user picker with
-that user selected, and Cross signed them in ([findings](findings.md#virtual-controller-assignment)). padd 1.5 uses
-this to give the pad to a second user (protocol COMMAND op 5).
+descriptor with another local user's id, while that user was signed out, made the console open its user picker, and
+Cross on that user's profile signed them in ([findings](findings.md#virtual-controller-assignment)). While someone
+is signed in, the id does not choose the profile the picker opens on: that is the first signed-in one.
+padd 1.5 uses this to give the pad to a second user (protocol COMMAND op 5).
 
 ## Input report (0xA0 bytes)
 

@@ -362,7 +362,8 @@ extension Hub {
         case "padd_start", "padd_stop", "padd_update":
             try lease.check(conn: conn.id)
             let action = String(cmd.dropFirst("padd_".count))
-            reply(conn, request, try padd.run(action, firmware: request["firmware"] as? String))
+            reply(conn, request, try padd.run(action, firmware: request["firmware"] as? String,
+                                              ask: request["ask"] as? Bool ?? false))
         case "claim":
             let client = request["client"] as? String ?? "default"
             let reason = request["reason"] as? String ?? ""

@@ -82,6 +82,7 @@ and removes the copies under `build/`. The restarted app reconnects to the conso
    without disconnecting MCP clients; stop and save any video recording first.
 3. **Start `padd`** with **Start padd…** in the sidebar or `uv run ps5mcp padd start`, once per console boot. The app answers
    the user-selection dialog automatically. If your DualSense turns off, press its PS button and select your user again.
+   To answer the dialog yourself, see [Pick users by hand](#pick-users-by-hand).
    The sidebar's status line shows the running padd version and, when `make` built a newer one, "update available": **Update** in the `⋯` menu (or
    `uv run ps5mcp padd update`) stops padd and starts the new build.
 4. **Control the console** from the app window or connect an MCP client (see [MCP clients](#mcp-clients)).
@@ -208,12 +209,13 @@ keyboard, the API and MCP agents goes to the selected one.
 
 1. Sign the other users (or guests) in on the console. `status()` lists them under `payload.login_users`, and the ones
    with no controller yet under `payload.controllers.available`. Without a real controller, a new controller can sign
-   someone in: **+** offers the users the app has seen signed in before, or call `connect_controller(user_id=<id>)`. The
-   console opens its sign-in picker with that user selected; press Cross (Enter in the window) to confirm.
+   someone in: **+** offers the users the app has seen signed in before, or call `connect_controller(user_id=<id>)`.
 2. Click **+** next to **Controller** in the sidebar (**⌥⌘N**), or call `connect_controller()`, or run
    `uv run ps5mcp pad controller connect`. With a choice of users, **+** shows a menu. The new controller is selected, so
    the next input goes to it.
-3. The console asks "Who's using this controller?" for it. The app moves to that user's profile and answers it there.
+3. The console asks "Who's using this controller?" for it. The picker opens on the first signed-in profile, not on the
+   controller's user. The app moves to that user's profile and answers it there, which also signs in a user who was
+   signed out.
 4. Click the controller to drive in the sidebar (**⌘1** to **⌘4**), or call `use_controller(1)` to `use_controller(4)`, or run
    `uv run ps5mcp pad use 1`. The others are released.
 5. Launch the game with `launch`. It always starts the game for the foreground user, so controller 1 owns it.
@@ -222,6 +224,20 @@ keyboard, the API and MCP agents goes to the selected one.
 selected. The others keep their numbers. The choice is saved in the state folder. After padd restarts the same users come
 back in order, so numbers may close up. Four controllers worked in a split-screen game on 13.60 (see
 [findings](docs/findings.md#several-virtual-controllers)).
+
+On the home screen the console follows one user's controller. An added controller that presses a button there gets "To
+take over control, press and hold the PS button": hold **P**, or Option-click **PS** in the sidebar, for one second.
+
+#### Pick users by hand
+
+To answer "Who's using this controller?" yourself, turn on **Controllers › Pick Users by Hand** (also in **Settings**).
+The app then presses nothing when you start or update padd, or add a controller, in the window. The sidebar asks for
+your answer: move with the arrow keys and press Enter in the window. Controllers that agents add through the MCP or the
+CLI are still answered by the app.
+
+This is how you give padd's controller 1 to a user other than the one on your DualSense: pick that user when padd
+starts, and the DualSense stays on. The sidebar still names the user padd added the controller for, because padd does
+not learn which profile you picked.
 
 ### Sharing the console
 

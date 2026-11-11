@@ -1,7 +1,8 @@
 // padd Start / Stop / Update from the app: the same deploy flow and archive as `ps5mcp padd start|stop|update`.
 //
-// padd takes one client, and the CLI needs that slot (HELLO and auto-assign on start, SHUTDOWN on stop). So the
-// app pauses its own link, runs the CLI once, and resumes. Nothing here retries or relaunches padd on its own.
+// padd takes one client, and the CLI needs that slot (HELLO on start, SHUTDOWN on stop). So the app pauses its own
+// link, runs the CLI once, and resumes. Nothing here retries or relaunches padd on its own. The CLI leaves the new
+// pad's "Who's using this controller?" alone: the app answers it when its link is back, or the person does (`ask`).
 
 import CryptoKit
 import Foundation
@@ -109,7 +110,8 @@ final class PaddRunner {
         return env
     }
 
-    func run(_ action: String, firmware: String?) throws -> [String: Any] {
+    /// `ask`: after a start or an update, the person answers the dialogs (`Hub.askOnNextRestore`).
+    func run(_ action: String, firmware: String?, ask: Bool = false) throws -> [String: Any] {
         guard let hub else { throw BadInput("hub gone") }
         let base = cli
         guard !base.isEmpty else {
@@ -164,11 +166,9 @@ final class PaddRunner {
         }
         if process.terminationStatus != 0 && result["status"] == nil {
             hub.notice = "padd \(action) failed (exit \(process.terminationStatus)); see \(config.stateDir)/padd-\(action).log"
-        } else if text.contains("auto-assign: done") {
-            hub.notice = "padd started and the virtual pad answered \"Who's using this controller?\". If your "
-                + "DualSense turned off, press its PS button and pick the same user; both controllers then work."
         } else if action != "stop" && process.terminationStatus == 0 {
             hub.notice = action == "update" ? "padd updated." : "padd started."
+            if ask { hub.askOnNextRestore() }  // before the link resumes
         } else if action == "stop" {
             hub.notice = "padd \(result["status"] ?? "stopped") (\(result["run"] ?? "no run recorded"))."
         } else {

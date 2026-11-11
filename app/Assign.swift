@@ -10,6 +10,7 @@
 // The focused profile need not be the pad's user, and Cross takes whoever is focused. So the app reads the names (Vision),
 // which stay centered on the focus as the row scrolls, moves until the pad's user is focused, and presses Cross only then.
 // For a name it cannot find, controller 1 answers the profile focused at first, and the others get no Cross.
+// A user who is not signed in has a profile in the row too, and Cross there signs them in.
 //
 // Matching mirrors assign.dialog_score: grayscale at quarter resolution, normalised cross-correlation, title at
 // (712, 168) in a 1920x1080 frame, within 24 px. Python searches the whole frame and rejects a best match outside
@@ -174,10 +175,13 @@ final class Assigner {
             if let buffer, let found, found >= Assigner.minScore {
                 log(String(format: "auto-assign: 'Who's using this controller?' visible (score %.3f)", found))
                 guard answer(buffer) else { return false }
-                Thread.sleep(forTimeInterval: 1.0)
-                if (current() ?? 0) < Assigner.minScore {
-                    log("auto-assign: done; turn the DualSense back on with its PS button if it went off")
-                    return true
+                // Gone within a second on the console, also when Cross signs the user in; some room for a slow one.
+                for _ in 0..<3 {
+                    Thread.sleep(forTimeInterval: 1.0)
+                    if (current() ?? 0) < Assigner.minScore {
+                        log("auto-assign: done; turn the DualSense back on with its PS button if it went off")
+                        return true
+                    }
                 }
                 log("auto-assign: dialog still visible after Cross")
                 return false

@@ -87,7 +87,7 @@ free, every client drives it as before.
 |---|---|---|
 | `command` | `op`: `home` (`arg` = `suspend` (default), `system` or `shellcore`), `close`, `launch` (`arg` = title id), `uninstall` (`arg` = title id; padd 1.3+), `pad` (`arg` = `connect`, `connect <user id>` (padd 1.8+) or `disconnect`; padd 1.7+) or `select_pad` (`arg` = `1` or `2`; padd 1.7+) | `status`: padd's ACK status (0 ok, >0 errno, <0 SCE error) |
 | `ping` | | `pong`: uptime, reports sent and failed, neutral events |
-| `padd_start` | `firmware?` (default 13.60) | Pauses the link, runs `ps5mcp padd start` once, then resumes. Returns `status`, `run` (the `results/` dir), `exit` and `output`. |
+| `padd_start` | `firmware?` (default 13.60), `ask?` (bool) | Pauses the link, runs `ps5mcp padd start` once, then resumes. Returns `status`, `run` (the `results/` dir), `exit` and `output`. The CLI leaves the new pad's "Who's using this controller?" alone; the app answers it once the link is back (see [Auto-assign](#auto-assign)). With `ask`, the person answers it instead, as the window's Start does with **Pick Users by Hand** on. `padd_update` takes `ask` too. |
 | `padd_stop` | | The same flow, with `ps5mcp padd stop`. |
 | `padd_update` | `firmware?` | The same flow, with `ps5mcp padd update`: stops the running padd, then starts the bundled padd. |
 
@@ -101,9 +101,12 @@ free, every client drives it as before.
   controller and selects it, and auto-assign answers its "Who's using this controller?". `pad disconnect <controller>`
   removes that one (without a number, the highest), and input goes back to controller 1 if it was selected; the others keep
   their numbers. `select_pad` picks the controller; the others are released. A nonzero status changes nothing (`pad` 2:
-  nobody else is free; `pad` 28: all connected; `select_pad` 2: not connected). `connect <user id>` adds one for that user;
-  for a user who is not signed in the console shows its sign-in picker with that user selected, and `notice` asks to confirm
-  with Cross (no auto-assign there). `second_pad` is an old name for `pad`. The app remembers every user padd has reported
+  nobody else is free; `pad` 28: all connected; `select_pad` 2: not connected). `connect <user id>` adds one for that user,
+  signed in or not: the console's picker opens on the first signed-in profile either way, and auto-assign moves to the
+  user's own profile, where Cross also signs them in. A last word `ask` (`connect ask`, `connect <user id> ask`) leaves
+  the dialog to the person: nothing is pressed, and `notice` asks them to pick the user with the arrow keys and Enter
+  until the dialog is gone. The window's **+** sends it with **Pick Users by Hand** on.
+  `second_pad` is an old name for `pad`. The app remembers every user padd has reported
   signed in (`<state>/known-users`), and `controllers.signed_out` lists them; `controllers.available` lists the signed-in
   users with no controller, and `controllers.max` how many this padd runs. The app keeps the users and the selected one in
   `<state>/controllers` and restores them after every (re)connect, one dialog at a time: a restarted padd has controller 1
@@ -135,8 +138,18 @@ dialog is visible. The match uses the title template at (712, 168), within 24 px
 more it can start off-screen. The app reads the names (Vision), moves until the controller's user is on the focused profile, and
 presses Cross only then. A name can differ by one look-alike character (video compression, such as `j` read as `i`) if no other
 profile is that close and it is nobody else's name. If the name cannot be found, controller 1 answers the profile focused at first;
-an added controller presses no Cross, and `notice` asks you to pick it. It stops if another controller is selected meanwhile.
-Disable it with `--no-auto-assign` or `PS5MCP_AUTO_ASSIGN=0`.
+an added controller presses no Cross, and `notice` asks you to pick it. It stops if another controller is selected meanwhile,
+or if the padd link it started on is gone.
+Disable it with `--no-auto-assign` or `PS5MCP_AUTO_ASSIGN=0`; an added controller then sets the same `notice`.
+
+**Pick Users by Hand** (Controllers menu and Settings, saved as `pickUserByHand`) leaves the dialog to the person for what
+they start in the window: Start padd, Update padd and **+**. The app presses nothing there. `notice` asks for the answer
+while the dialog is on screen, and a restore of saved controllers waits for each answer (up to two minutes) before it
+adds the next one. It stops when a dialog stays open, or when there is no video to tell. While the person is asked,
+`pad connect` fails with `bad_request` ("answer that first") and **+** is off: the console shows one dialog at a time.
+If the padd link drops meanwhile, the next link asks again instead of answering. Requests through this API are answered
+by auto-assign unless they carry `ask`. padd and `status` keep the user the controller was added for, also when the
+person picks another profile.
 
 ## Launch options
 

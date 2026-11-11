@@ -62,6 +62,10 @@ final class Hub {
     private var wantActiveUser: Int32?
     /// Counts saved choices, so a restore in progress notices that someone changed the controllers.
     private var controllersChanged = 0
+    /// Set by `askOnNextRestore`: a restore that starts before this uptime leaves its dialogs to the person.
+    private var askOnRestoreUntil = 0.0
+    /// The controller whose dialog the person was asked to answer, while that wait runs.
+    private var askingPadNow: Int?
     /// One "Who's using this controller?" at a time: a second answer would land in the first one's dialog.
     private let assignQueue = DispatchQueue(label: "auto-assign")
     /// Every profile padd has reported signed in, kept in `<state>/known-users`: a new controller can sign one in
@@ -478,12 +482,15 @@ final class Hub {
                 }
                 return try disconnectPad(link, pad: nil)
             }
-            guard parts.first == "connect", parts.count <= 2 else {
+            // A last "ask": the person answers the dialog, as the window's + does when users are picked by hand.
+            let ask = parts.first == "connect" && parts.count > 1 && parts.last == "ask"
+            let connect = ask ? Array(parts.dropLast()) : parts
+            guard connect.first == "connect", connect.count <= 2 else {
                 throw BadInput("pad needs connect, connect <user id>, disconnect or disconnect <controller>")
             }
-            if parts.count == 1 { return try connectPad(link) }
-            guard let user = Int32(parts[1]), user > 0 else { throw BadInput("not a user id: \(parts[1])") }
-            return try connectPad(link, user: user)
+            if connect.count == 1 { return try connectPad(link, ask: ask) }
+            guard let user = Int32(connect[1]), user > 0 else { throw BadInput("not a user id: \(connect[1])") }
+            return try connectPad(link, user: user, ask: ask)
         case "select_pad":
             guard let pad = Int(arg), (1...Hub.maxControllers).contains(pad) else {
                 throw BadInput("select_pad needs 1 to \(Hub.maxControllers)")
@@ -498,8 +505,30 @@ final class Hub {
     //
     // padd runs controller 1 for the foreground user and, on request, up to three more for other signed-in users.
     // Keyboard, API and MCP input drive the selected one. A new controller shows "Who's using this controller?", which
-    // only that controller can answer, so connecting one selects it and auto-assign answers with it.
+    // only that controller can answer, so connecting one selects it. Then auto-assign answers with it, or the person
+    // does with the keyboard (`pickByHand`, for what they start in the window).
     static let maxControllers = 4
+
+    /// The window's choice (Settings, Controllers menu): the person picks the user for a controller they add and for
+    /// the padd they start, and the app presses nothing there. Agents' requests are still answered by the app.
+    var pickByHand: Bool {
+        get { UserDefaults.standard.bool(forKey: pickUserByHandKey) }
+        set { UserDefaults.standard.set(newValue, forKey: pickUserByHandKey) }
+    }
+
+    /// The person answers the dialogs of the next (re)connect: they started padd from the window, picking by hand, or
+    /// the link dropped while they were answering. It lapses, so a much later start is not left waiting for them.
+    func askOnNextRestore() { lock.lock(); askOnRestoreUntil = uptimeSeconds() + 600; lock.unlock() }
+
+    /// The controller whose dialog the person is answering (nil: none). No other controller is added meanwhile: the
+    /// console shows one dialog at a time, and input would go to the new controller, which cannot answer this one.
+    var askingPad: Int? { lock.lock(); defer { lock.unlock() }; return askingPadNow }
+
+    /// Asks the person to answer controller `pad`'s dialog. The window shows it until the dialog is gone.
+    private func pickNotice(_ pad: Int, user: String?) -> String {
+        "\(Hub.assignNoticePrefix) \"Who's using this controller?\" for controller \(pad): pick \(user ?? "the user") "
+            + "with the arrow keys and Enter in this window."
+    }
 
     /// The controllers as padd last reported them (nil before padd 1.7 or before the first answer).
     var pads: Pads? { lock.lock(); defer { lock.unlock() }; return padsNow }
@@ -597,11 +626,15 @@ final class Hub {
         return status
     }
 
-    /// Adds a controller for the next signed-in user (or `user`) and selects it. For a signed-in user auto-assign
-    /// answers its dialog; a signed-out user gets the console's sign-in picker, which the person confirms with Cross.
+    /// Adds a controller for the next signed-in user (or `user`) and selects it. Auto-assign then answers its dialog,
+    /// also for a user who is not signed in: the picker opens on the first profile, not on that user, and Cross on the
+    /// user's own profile signs them in. `ask`: the person answers with the keyboard instead, and the window says so.
     /// Returns padd's status (ENOENT: nobody else is signed in; ENOSPC: none free; nothing changes).
-    func connectPad(_ link: PadLink, user: Int32? = nil) throws -> Int32 {
+    func connectPad(_ link: PadLink, user: Int32? = nil, ask: Bool = false) throws -> Int32 {
         try requirePads(link)
+        if let asking = askingPad {
+            throw BadInput("The PS5 still asks who is using controller \(asking): answer that first.")
+        }
         assignQueue.sync {}  // the previous controller's dialog first: the console shows one at a time
         controller.release(client: "auto-assign")
         let before = Set(pads?.connected ?? [])
@@ -614,11 +647,15 @@ final class Hub {
         saveControllers()
         let selected = try selectPad(pad, link: link)
         guard selected == 0, added != nil else { return selected }
-        if let user, loginUsers?.users.contains(where: { $0.id == user }) == false {
-            notice = "The PS5 asks to sign in \(controllerName(pad) ?? String(user)) for controller \(pad): confirm with "
-                + "Cross (Enter in this window). Input now goes to controller \(pad)."
+        if ask {
+            let asked = pickNotice(pad, user: controllerName(pad))
+            notice = asked
+            lock.lock(); askingPadNow = pad; lock.unlock()  // from now, not from when the queue gets to it
+            assignQueue.async { [weak self] in _ = self?.askPerson(link, pad: pad, announced: asked) }
         } else if config.autoAssign {
             assignQueue.async { [weak self] in self?.autoAssign(link, pad: pad) }
+        } else {
+            notice = pickNotice(pad, user: controllerName(pad))
         }
         return selected
     }
@@ -640,15 +677,32 @@ final class Hub {
     /// After a (re)connect: answer controller 1's dialog, then bring back the other controllers and the selection, one
     /// dialog at a time. padd keeps its controllers while it runs, so an app restart finds them as they were; a padd
     /// restart has only controller 1, and numbers follow the order of the saved users. If someone changes the
-    /// controllers meanwhile, their choice stands and the restore stops.
+    /// controllers meanwhile, their choice stands and the restore stops. So does it when the person, asked to answer a
+    /// dialog (`askOnNextRestore`), leaves it open: the next controller's dialog would wait behind it.
     private func restoreControllers(_ link: PadLink) {
         refreshLoginUsers(link)
         lock.lock(); let wanted = wantUsers, activeUser = wantActiveUser, started = controllersChanged; lock.unlock()
         func stillOurs() -> Bool { lock.lock(); defer { lock.unlock() }; return controllersChanged == started }
-        func answer() { if config.autoAssign { assignQueue.sync { autoAssign(link) } } }
+        var ask = false
+        /// The selected controller's dialog. False: it may still be open.
+        func answer() -> Bool {
+            assignQueue.sync {
+                // Read here, after any wait of the previous link: one that lost its link asks again on this one.
+                lock.lock()
+                if uptimeSeconds() < askOnRestoreUntil { ask = true }
+                askOnRestoreUntil = 0
+                lock.unlock()
+                guard ask else {
+                    if config.autoAssign { autoAssign(link) }
+                    return true
+                }
+                let asked = askPerson(link)
+                return asked == .answered || asked == .notShown
+            }
+        }
         guard link.hello.flags & PMCP.flagPads != 0, let pads else {
             if !wanted.isEmpty { notice = "This padd has one controller; Update padd for more." }
-            answer()
+            _ = answer()
             return
         }
         do {
@@ -660,11 +714,11 @@ final class Hub {
                     let pad = activeUser.flatMap { pads.controller(forUser: $0) } ?? 1
                     if pads.active != pad { _ = try selectPad(pad, link: link, save: false) }
                 }
-                answer()
+                _ = answer()
                 return
             }
             if pads.active != 1 { _ = try selectPad(1, link: link, save: false) }
-            answer()
+            guard answer() else { return }
             // Users who are still signed in first: for one who is not, "connect" takes the next free user, who must
             // not be someone else on this list.
             let signedIn = Set(loginUsers?.users.map(\.id) ?? [])
@@ -682,7 +736,7 @@ final class Hub {
                     continue
                 }
                 _ = try selectPad(pad, link: link, save: false)
-                answer()
+                guard answer() else { return }
             }
             guard stillOurs() else { return }
             let pad = activeUser.flatMap { self.pads?.controller(forUser: $0) } ?? 1
@@ -775,6 +829,8 @@ final class Hub {
         }
         let target = link.hello.userName
         func press(_ name: String) throws {
+            // A watch outlives its link by seconds, and what it presses goes to the link of the moment.
+            guard !link.closed else { throw BadInput("the padd link changed") }
             guard (pads?.active ?? 1) == pad else { throw BadInput("controller \(pad) is no longer selected") }
             var state = PadState()
             state.buttons = button(name)
@@ -840,8 +896,7 @@ final class Hub {
                     while net != 0 { try move(net > 0 ? "left" : "right") }
                 } else {
                     say("auto-assign: \(target ?? "the pad's user") not found; not pressing")
-                    notice = "The PS5 asks \"Who's using this controller?\" for controller \(pad): pick "
-                        + "\(target ?? "its user") with it (arrow keys and Enter in this window)."
+                    notice = pickNotice(pad, user: target)
                     return false
                 }
                 // Reading the names takes time: someone may have answered, and a press would land on the next screen.
@@ -864,6 +919,62 @@ final class Hub {
                 : "Answered \"Who's using this controller?\" with controller 1. If your DualSense turned off, "
                     + "press its PS button and pick the same user; both controllers then work."
         }
+    }
+
+    private enum Asked { case answered, notShown, open, linkLost }
+
+    /// Whether the dialog is on screen; nil without a fresh frame, which proves nothing either way.
+    private func dialogShowing() -> Bool? {
+        let sink = self.sink
+        guard let assigner, sink.frameAge >= 0, sink.frameAge < 2, let frame = sink.latestBuffer() else { return nil }
+        return assigner.score(frame) >= Assigner.minScore
+    }
+
+    /// The person answers the selected controller's dialog with the keyboard. The window asks for it (`announced`: it
+    /// already does; else once the dialog shows), and this waits until the dialog is seen gone, `patience` s at most.
+    /// `.open`: it may still be there, also when no video shows whether it is. `.linkLost`: the next link's restore
+    /// asks again, since it would otherwise answer by itself. `expected`: as for `autoAssign`.
+    private func askPerson(_ link: PadLink, pad expected: Int? = nil, announced: String? = nil,
+                           patience: Double = 120) -> Asked {
+        let pad = pads?.active ?? 1
+        lock.lock(); askingPadNow = expected ?? pad; lock.unlock()
+        defer {
+            lock.lock(); askingPadNow = nil; lock.unlock()
+            statusChanged()
+        }
+        if let expected, expected != pad {
+            notice = "Controller \(expected) may still ask \"Who's using this controller?\": select it and answer with it."
+            return .notShown
+        }
+        func lost() -> Asked {
+            say("controller \(pad): the padd link dropped with its dialog unanswered; the next link asks again")
+            askOnNextRestore()
+            return .linkLost
+        }
+        var asked = announced, sawFrame = false
+        var deadline = uptimeSeconds() + 6  // as auto-assign: the dialog can reach the video after the connect
+        while true {
+            if link.closed { return lost() }
+            let showing = dialogShowing()
+            if showing == true { break }
+            sawFrame = sawFrame || showing != nil
+            if uptimeSeconds() >= deadline { return sawFrame ? .notShown : .open }
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        if asked == nil {
+            // Controller 1 is the one a person gives to somebody else: no name there.
+            asked = pickNotice(pad, user: pad == 1 ? nil : controllerName(pad))
+            notice = asked
+        }
+        deadline = uptimeSeconds() + patience
+        while dialogShowing() != false {
+            if link.closed { return lost() }
+            if uptimeSeconds() >= deadline { return .open }
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        lock.lock(); let unchanged = noticeText == asked; if unchanged { noticeText = nil }; lock.unlock()
+        if unchanged { statusChanged() }
+        return .answered
     }
 
     /// Evidence of an automatic press: a copy of the current frame in the state dir.

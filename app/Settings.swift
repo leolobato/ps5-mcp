@@ -17,6 +17,9 @@ let captureFolderKey = "snapshotFolder"
 /// The UserDefaults key for drawing the frame meter into saved snapshots while it shows. Off by default.
 let snapshotIncludesFrameMeterKey = "snapshotIncludesFrameMeter"
 
+/// The UserDefaults key for `Hub.pickByHand`. Off by default.
+let pickUserByHandKey = "pickUserByHand"
+
 /// Where snapshots are saved, and where saving a video starts: the folder chosen in Settings, else the Desktop.
 var captureFolder: URL {
     if let path = UserDefaults.standard.string(forKey: captureFolderKey), !path.isEmpty {
@@ -42,6 +45,7 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
     private let remoteControls = NSStackView()
     private let floatOverAll = NSButton(checkboxWithTitle: "Float over all windows, on every Space", target: nil, action: nil)
     private let snapshotFrameMeter = NSButton(checkboxWithTitle: "Include the frame meter in snapshots when it is showing", target: nil, action: nil)
+    private let pickByHand = NSButton(checkboxWithTitle: "Let me pick the user when I start padd or add a controller", target: nil, action: nil)
     private let videoDevice = NSPopUpButton()
     private let audioDevice = NSPopUpButton()
     private let captureNote = NSTextField(wrappingLabelWithString: "")
@@ -174,11 +178,19 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
         let hotKey = NSTextField(labelWithString: "Show or hide it from any app with ⌃⌥K, or with the toolbar's keyboard button.")
         hotKey.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         hotKey.textColor = .secondaryLabelColor
+        pickByHand.target = self
+        pickByHand.action = #selector(pickByHandChanged)
+        let pickNote = NSTextField(wrappingLabelWithString: "The PS5 asks who is using each new controller. Answer with the arrow "
+            + "keys and Enter in the window. When this is off, the app moves to the controller's user and presses Cross for you.")
+        pickNote.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        pickNote.textColor = .secondaryLabelColor
+        pickNote.preferredMaxLayoutWidth = Self.innerWidth
 
         let body = column([
             section("Console", [row([NSTextField(labelWithString: "PS5 IP address"), address, save]), note]),
             section("Video and audio", [sourcePicker] + panes + [row([spacer(), useSource])]),
             section("Capture files", [row([NSTextField(labelWithString: "Save snapshots and videos to"), folder, choose]), snapshotFrameMeter]),
+            section("Controllers", [pickByHand, pickNote]),
             section("Keyboard panel", [floatOverAll, hotKey]),
         ], spacing: 14, inset: 48)
         body.edgeInsets = NSEdgeInsets(top: 18, left: 24, bottom: 20, right: 24)
@@ -226,6 +238,7 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
         address.stringValue = hub.host
         folder.url = captureFolder
         snapshotFrameMeter.state = UserDefaults.standard.bool(forKey: snapshotIncludesFrameMeterKey) ? .on : .off
+        pickByHand.state = hub.pickByHand ? .on : .off
         floatOverAll.state = KeyboardPanel.floats ? .on : .off
         fillDevices(video: hub.captureVideo, audio: hub.captureAudio)
         refreshCaptureStatus()
@@ -408,6 +421,11 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
     @objc private func snapshotFrameMeterChanged() {
         UserDefaults.standard.set(snapshotFrameMeter.state == .on, forKey: snapshotIncludesFrameMeterKey)
     }
+
+    @objc private func pickByHandChanged() { hub.pickByHand = pickByHand.state == .on }
+
+    /// The Controllers menu changed it while this window is open.
+    func refreshPickByHand() { pickByHand.state = hub.pickByHand ? .on : .off }
 
     @objc private func floatChanged() {
         KeyboardPanel.floats = floatOverAll.state == .on

@@ -206,7 +206,10 @@ def start(host: str, firmware: str | None, elf: Path | None = None, timeout: flo
         if evidence["status"] == "running":
             link = PadLink(host)
             evidence["hello"] = link.hello.__dict__
-            evidence["auto_assign"] = auto_assign(link, run)
+            # Run by the PS5 app, the app answers once its own link is back: it moves to the pad's user first, or
+            # leaves the dialog to the person. Here Cross would take whichever profile is focused.
+            if os.environ.get("PS5MCP_IN_APP") != "1":
+                evidence["auto_assign"] = auto_assign(link, run)
             link.close()
     except Exception as exc:  # noqa: BLE001 - any failure is recorded as an incomplete run
         evidence["status"] = "incomplete"

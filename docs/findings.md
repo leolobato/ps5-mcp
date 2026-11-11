@@ -34,15 +34,24 @@ Known gap: `connect <id>` with an id nobody has opens the dialog, where Add User
 so `status` shows a null name and that placeholder id, while the guest is listed under `available` with its real id. Input works.
 
 What is known: `/dev/hid` AddDevice takes a user id that is not the foreground user's, and the console then shows
-its user picker with that user selected (the padd variant for User1 in [Online follow-up](#online-follow-up-remote-play-on-1360-2026-10-15) below).
+its user picker. With nobody signed in, the picker had that user selected (the padd variant for User1 in
+[Online follow-up](#online-follow-up-remote-play-on-1360-2026-10-15) below).
 A pad added for a signed-in non-foreground user shows "Who's using this controller?" too, with the profiles in a
 row (Add User, then the signed-in users) and the focus on the first profile, the foreground user's. Cross there gives
 the pad the foreground user and turns the DualSense off (2026-10-29, padd 1.5). Auto-assign therefore reads the
 profile names with Vision, presses Right to the pad's user, then Cross; a name it cannot read gets no press.
+
+A pad added for a signed-out user, while someone else is signed in, gets the same dialog and the same focus (13.60,
+2026-11-11, padd 1.9): the row was Add User, `User1` (Logged In, focused, "Switch Controller") and `leolobato-jb`, the
+signed-out user the pad was for. Cross there would have moved `User1` to the new pad. One Right from the new pad focused
+`leolobato-jb` ("Assign Controller"), and Cross signed that user in and closed the dialog within a second. `User1`
+stayed the foreground user, and the new pad's next press on the home screen got "To take over control, press and hold
+the PS button" ([PS button](ps-button.md)). The app had only asked the person to confirm with Cross, so the dialog
+stayed open. It now answers this dialog like the others, or leaves it to the person when they pick users by hand.
+
 What is not known yet:
 
 - whether two virtual pads stay usable side by side for long (padd 1.5 had two only for the moment of a switch);
-- whether the focus is always on the foreground user's profile, or on the first one when they differ;
 - whether a game's second `scePadOpen` reads pad 2.
 
 ## Input and cleanup

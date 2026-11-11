@@ -965,11 +965,106 @@ def test_second_controller_signs_in_a_known_user(tmp_path):
         assert client.command("pad", f"connect {GUEST}") == 0
         status = client.status()
         assert daemon.calls("pad_add")[-1]["user_id"] == GUEST and status["controllers"]["active"] == 2
-        assert "sign in User1" in status["notice"]
+        assert "controller 2: pick User1 with the arrow keys" in status["notice"]  # nothing answers: the person does
         assert json.loads((hub.root / "controllers").read_text()) == {"users": [GUEST], "active_user": GUEST}
         # Known users only grow: the signed-in foreground user is remembered too.
         assert json.loads((hub.root / "known-users").read_text()) == {str(GUEST): "User1", str(0x11ECF8B9): "Test Player"}
     finally:
+        hub.stop()
+        daemon.stop()
+
+
+@pytest.mark.skipif(not USERS.exists() or not HOME.exists() or not Path(DialogSim.FONT).exists(), reason="fixtures")
+def test_the_app_signs_a_known_user_in_on_their_own_profile(tmp_path):
+    # As on the console: the picker opens on the signed-in user, not on the one the new controller is for.
+    daemon = Padd(tmp_path, env={"PADD_USER_NAME": "leolobato-jb", "PADD_GUEST_NAME": "User1"})
+    hub = App(daemon, USERS, files={"known-users": json.dumps({str(GUEST): "User1"})})
+    sim = None
+    try:
+        client = hub.client()
+        assert wait_for(lambda: CROSS in buttons(daemon) and buttons(daemon)[-1] == 0, 4)
+        assert client.status()["controllers"]["signed_out"] == [{"user_id": GUEST, "name": "User1"}]
+        sim = DialogSim(hub, lambda: daemon.calls("pad_report"), 1001, ["Add User", "leolobato-jb", "User1"], 1)
+        assert client.command("pad", f"connect {GUEST}", wait=10) == 0
+        assert wait_for(lambda: CROSS in sim.buttons, 12), sim.buttons
+        assert sim.buttons == [RIGHT, CROSS]
+        assert wait_for(lambda: "with User1 for controller 2" in (client.status()["notice"] or ""), 6)
+    finally:
+        if sim:
+            sim.stop()
+        hub.stop()
+        daemon.stop()
+
+
+@pytest.mark.skipif(not USERS.exists() or not HOME.exists(), reason="test fixtures not present")
+def test_a_controller_added_by_hand_is_left_to_the_person(tmp_path):
+    env = {"PADD_LOGIN_USERS": f"{0x11ECF8B9},{GUEST}", "PADD_USER_NAME": "leolobato-jb", "PADD_GUEST_NAME": "User1"}
+    daemon = Padd(tmp_path, env=env)
+    hub = App(daemon, USERS)
+    try:
+        client = hub.client()
+        assert wait_for(lambda: CROSS in buttons(daemon) and buttons(daemon)[-1] == 0, 4)
+        assert client.command("pad", "connect ask", wait=10) == 0
+        assert "controller 2: pick User1 with the arrow keys" in client.status()["notice"]
+        time.sleep(2)  # the app presses nothing; the person's keys go to the new controller
+        assert not pressed(daemon, 1001)
+        client.key("right", True)
+        client.key("right", False)
+        assert wait_for(lambda: pressed(daemon, 1001) == [RIGHT])
+        assert "pick User1" in client.status()["notice"]  # still asking while the dialog is on screen
+        with pytest.raises(AppError, match="controller 2: answer that first"):  # its dialog would wait behind this one
+            client.command("pad", "connect")
+        put_frame(hub.frame, HOME)  # Enter on the console
+        assert wait_for(lambda: not client.status()["notice"], 6)
+        with pytest.raises(AppError, match="connect <user id>, disconnect"):
+            client.command("pad", "ask")
+    finally:
+        hub.stop()
+        daemon.stop()
+
+
+@pytest.mark.skipif(not USERS.exists() or not HOME.exists(), reason="test fixtures not present")
+def test_padd_started_by_hand_leaves_its_dialog_to_the_person(padd):
+    hub = App(padd, HOME)
+    try:
+        client = hub.client()
+        assert client.call("padd_start", ask=True, timeout=20)["ok"]
+        put_frame(hub.frame, USERS)  # the new pad's dialog
+        assert wait_for(lambda: "controller 1: pick the user with the arrow keys" in (client.status()["notice"] or ""), 14)
+        time.sleep(1.5)
+        assert CROSS not in buttons(padd)
+        put_frame(hub.frame, HOME)  # answered with the keyboard
+        assert wait_for(lambda: not client.status()["notice"], 6)
+        time.sleep(1)  # the app looks twice a second; a link dropped before it saw the dialog gone would ask again
+        # Asked once: the next start is answered by the app, as after any reconnect.
+        assert client.call("padd_start", timeout=20)["ok"]
+        put_frame(hub.frame, USERS)
+        assert wait_for(lambda: CROSS in buttons(padd), 14)
+    finally:
+        hub.stop()
+
+
+@pytest.mark.skipif(not USERS.exists() or not HOME.exists(), reason="test fixtures not present")
+def test_a_reconnect_leaves_the_dialog_with_the_person(tmp_path):
+    daemon = Padd(tmp_path)
+    hub = App(daemon, HOME)
+    restarted = None
+    try:
+        client = hub.client()
+        assert client.call("padd_start", ask=True, timeout=20)["ok"]
+        put_frame(hub.frame, USERS)
+        assert wait_for(lambda: "controller 1: pick the user" in (client.status()["notice"] or ""), 14)
+        daemon.stop()  # the link drops while the person is choosing
+        assert wait_for(lambda: not client.status()["pad"]["connected"])
+        restarted, trace = restart_padd(daemon, tmp_path, {}, "again")
+        assert wait_for(lambda: client.status()["pad"]["connected"], 10)
+        time.sleep(8)  # auto-assign looks for the dialog for 6 s after a connect, and would have pressed
+        assert CROSS not in [c["buttons"] for c in calls_in(trace) if c["call"] == "pad_report"]
+        assert "controller 1: pick the user" in client.status()["notice"]
+    finally:
+        if restarted:
+            restarted.send_signal(signal.SIGTERM)
+            restarted.wait(5)
         hub.stop()
         daemon.stop()
 

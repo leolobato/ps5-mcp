@@ -496,9 +496,12 @@ async def connect_controller(user_id: int | None = None, snapshot_after_ms: int 
     input tool drives it, and the app answers its "Who's using this controller?". status() shows them under
     payload.controllers, with the users still free under available.
 
-    user_id: add it for that user instead. A user who is not signed in gets the console's sign-in picker with that
-    user selected: press("cross") signs them in (input already goes to the new controller). Users seen signed in
-    before are listed under payload.controllers.signed_out.
+    user_id: add it for that user instead. For a user who is not signed in, the app answers the dialog on that user's
+    profile, which signs them in. Users seen signed in before are listed under payload.controllers.signed_out.
+
+    If status() shows a notice asking to pick the user, the app could not find the profile: the dialog opens on the
+    first signed-in profile, so move to the right one before press("cross"). On the home screen the console follows
+    one user's controller; ps_button(hold_ms=1000) on the new controller takes over.
     """
     if user_id is not None and not 0 < user_id < 2**31:
         raise ValueError("user_id must be a positive user id")

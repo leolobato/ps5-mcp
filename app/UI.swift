@@ -778,6 +778,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
             ("-", nil, "", .command),
             ("Add Controller", #selector(addController(_:)), "n", [.command, .option]),
             ("Remove Controller", #selector(removeController), "\u{8}", [.command, .option]),
+            ("-", nil, "", .command),
+            ("Pick Users by Hand", #selector(togglePickByHand), "", .command),
         ])
         for (index, item) in (main.items.last?.submenu?.items.prefix(4) ?? []).enumerated() { item.tag = index + 1 }
         var sources: [(String, Selector?, String, NSEvent.ModifierFlags)] = [
@@ -1034,8 +1036,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
             let available = hub.availableUsers, signedOut = hub.signedOutUsers
             let full = connected.count >= (pads?.capacity ?? 1)
             let unknown = hub.loginUsers.map { $0.status != 0 } ?? true
-            sidebar.setEnabled("addController", supported && !full && (!available.isEmpty || !signedOut.isEmpty || unknown))
+            let asking = hub.askingPad
+            sidebar.setEnabled("addController", supported && !full && asking == nil
+                               && (!available.isEmpty || !signedOut.isEmpty || unknown))
             sidebar.setTip("addController", !supported ? "Needs a newer padd: press Update"
+                : asking != nil ? "Answer the PS5's question for controller \(asking!) first"
                 : full ? ((pads?.capacity ?? 0) < Hub.maxControllers ? "Press Update for up to \(Hub.maxControllers) controllers"
                           : "All \(Hub.maxControllers) controllers are connected")
                 : !available.isEmpty ? "Add a controller for another signed-in user and send input to it"
@@ -1295,6 +1300,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
             menuItem.title = "Controller \(pad)" + (hub.controllerName(pad).map { " (\($0))" } ?? "")
             menuItem.state = controllerList.count > 1 && hub.pads?.active == pad ? .on : .off
             return enabled("selectController") && controllerList.contains(pad)
+        case #selector(togglePickByHand):
+            menuItem.state = hub.pickByHand ? .on : .off
+            menuItem.toolTip = "Answer \"Who's using this controller?\" yourself, with the arrow keys and Enter, when you "
+                + "start padd or add a controller. When off, the app moves to the controller's user and presses Cross."
+            return true
         case #selector(reconnectRemotePlay): return remotePlayCanReconnect
         case #selector(setUpRemotePlay): return !hub.host.isEmpty
         default: return true
@@ -1353,8 +1363,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         settings?.show()
     }
 
-    private static let dualSenseWarning = "If the PS5 asks \"Who's using this controller?\", the virtual pad answers it. "
-        + "Then press the DualSense's PS button and pick the same user."
+    /// What the new pad's "Who's using this controller?" does to the DualSense, for the Start and Update confirmations.
+    private var dualSenseWarning: String {
+        hub.pickByHand
+            ? "The PS5 asks \"Who's using this controller?\": pick the user with the arrow keys and Enter. If you pick "
+                + "your DualSense's user, press its PS button afterwards and pick the same user."
+            : "If the PS5 asks \"Who's using this controller?\", the virtual pad answers it. "
+                + "Then press the DualSense's PS button and pick the same user."
+    }
+
+    @objc func togglePickByHand() {
+        hub.pickByHand.toggle()
+        settings?.refreshPickByHand()
+    }
 
     @objc func showLocalNetworkSettings() {
         guard let url = URL(string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_LocalNetwork")
@@ -1365,10 +1386,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
     @objc func startPadd() {
         guard confirm("Start padd on \(hub.host)?",
                       "This uploads \(hub.padd.bundled.name) through Payload Manager and starts it once. "
-                      + "The run is archived under results/.", "Start", warning: Self.dualSenseWarning)
+                      + "The run is archived under results/.", "Start", warning: dualSenseWarning)
         else { return }
         hub.notice = "Starting padd…"
-        background { _ = try self.hub.padd.run("start", firmware: nil) }
+        let ask = hub.pickByHand
+        background { _ = try self.hub.padd.run("start", firmware: nil, ask: ask) }
     }
 
     @objc func updatePadd() {
@@ -1377,10 +1399,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         guard confirm("Update padd on \(hub.host) to v\(bundled)?",
                       "\(running.prefix(1).uppercased() + running.dropFirst()) stops, which releases input and removes the "
                       + "virtual pad. Then \(hub.padd.bundled.name) uploads through Payload Manager and starts once. "
-                      + "Both runs are archived under results/.", "Update", warning: Self.dualSenseWarning)
+                      + "Both runs are archived under results/.", "Update", warning: dualSenseWarning)
         else { return }
         hub.notice = "Updating padd…"
-        background { _ = try self.hub.padd.run("update", firmware: nil) }
+        let ask = hub.pickByHand
+        background { _ = try self.hub.padd.run("update", firmware: nil, ask: ask) }
     }
 
     @objc func stopPadd() {
@@ -1493,8 +1516,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
     @objc func connectControllerUser(_ item: NSMenuItem) { connectController(user: Int32(item.tag)) }
 
     private func connectController(user: Int32?) {
+        let ask = hub.pickByHand
         background {
-            let status = try self.hub.connectPad(self.hub.controller.currentLink(), user: user)
+            let status = try self.hub.connectPad(self.hub.controller.currentLink(), user: user, ask: ask)
             if status != 0 { self.hub.notice = "New controller: \(PMCP.padsText(.pad, status))" }
         }
     }

@@ -168,3 +168,55 @@ def test_version_names_the_app_and_the_padd_it_deploys(tmp_path, monkeypatch, ca
         cli.main(["--version"])
     version = tomllib.loads((padd_runner.ROOT / "pyproject.toml").read_text())["project"]["version"]
     assert capsys.readouterr().out.strip() == f"ps5mcp {version} (padd 1.4)"
+
+
+def test_start_leaves_the_dialog_to_the_app_that_runs_it(tmp_path, monkeypatch):
+    import json
+    from types import SimpleNamespace
+
+    from ps5mcp import padd_runner
+    elf = b"\x7fELF padd"
+
+    class Console:
+        def __init__(self, host):
+            self.loaded = False
+
+        def request(self, port, path, *args, **kwargs):
+            self.loaded = self.loaded or path.startswith("/loadpayload:")
+            return {"/version": b"0.5.2", "/list_payloads": b'{"payloads": ["/data/ps5mcp-padd.elf"]}'}.get(path, b"")
+
+        def ensure_dir(self, path):
+            pass
+
+        def listdir(self, path):
+            return [{"name": "padd-abc", "path": f"{path}/padd-abc"}] if self.loaded else []
+
+        def download(self, path):
+            return elf if path.endswith(".elf") else b'{"event":"pad_added","ok":true}\n'
+
+    class Link:
+        def __init__(self, host):
+            self.hello = SimpleNamespace(pad_handle=1)
+
+        def close(self):
+            pass
+
+    answered = []
+    monkeypatch.setenv("PS5MCP_STATE", str(tmp_path))
+    monkeypatch.setattr(padd_runner, "ROOT", tmp_path)
+    monkeypatch.setattr(padd_runner, "SOURCES", ())
+    monkeypatch.setattr(padd_runner, "_build", lambda path: (elf, {}))
+    monkeypatch.setattr(padd_runner, "preflight", lambda host: None)
+    monkeypatch.setattr(padd_runner, "_port_open", lambda host: False)
+    monkeypatch.setattr(padd_runner, "_snapshot", lambda run, name, evidence: None)
+    monkeypatch.setattr(padd_runner, "_git", lambda *args: "")
+    monkeypatch.setattr(padd_runner, "Console", Console)
+    monkeypatch.setattr(padd_runner, "PadLink", Link)
+    monkeypatch.setattr(padd_runner, "auto_assign", lambda link, run: answered.append(run) or True)
+    monkeypatch.delenv("PS5MCP_IN_APP", raising=False)
+    assert padd_runner.start("ps5", "13.60") == 0 and len(answered) == 1  # on its own, the CLI answers
+    monkeypatch.setenv("PS5MCP_IN_APP", "1")
+    assert padd_runner.start("ps5", "13.60") == 0 and len(answered) == 1  # the app answers, or the person does
+    run = tmp_path / padd_runner.current_run_file().read_text().strip()
+    evidence = json.loads((run / "run.json").read_text())
+    assert evidence["status"] == "running" and evidence["hello"] == {"pad_handle": 1} and "auto_assign" not in evidence
