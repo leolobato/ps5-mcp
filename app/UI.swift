@@ -98,6 +98,7 @@ final class Banner: NSBox {
         heading.isHidden = title.isEmpty
         message.stringValue = body
         message.toolTip = body
+        message.isHidden = body.isEmpty
         message.preferredMaxLayoutWidth = wrap
         action.isHidden = actionTitle == nil
         action.title = actionTitle ?? ""
@@ -1189,9 +1190,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
 
         if let owner {
             let reason = owner["reason"] as? String ?? ""
+            let waiting = queued > 0 ? "\(queued) waiting" : ""
             sidebar.agentBanner.show(.info, title: "\(owner["client"] as? String ?? "An agent") holds the console",
-                                     body: (reason.isEmpty ? "" : reason + " · ") + (queued > 0 ? "\(queued) waiting. " : "")
-                                        + "Your keyboard still works.",
+                                     body: [reason, waiting].filter { !$0.isEmpty }.joined(separator: " · "),
                                      actionTitle: "Claim and Queue…", selector: #selector(showClaims))
         } else {
             sidebar.agentBanner.hide()
