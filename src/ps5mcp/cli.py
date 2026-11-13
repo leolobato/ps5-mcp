@@ -8,10 +8,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import capture
+from . import backends, capture
 
 
 def _devices(_args) -> int:
+    if sys.platform == "linux":
+        raise capture.CaptureError("Linux device selection is explicit: choose a /dev/v4l/by-id/ path and a supported capture mode")
     devices = capture.list_devices()
     print("video:", *(f"  {d}" for d in devices.video), sep="\n")
     print("audio:", *(f"  {d}" for d in devices.audio), sep="\n")
@@ -20,9 +22,11 @@ def _devices(_args) -> int:
 
 def _backend(args):
     if getattr(args, "backend", None) == "ffmpeg":
+        if sys.platform == "linux":
+            raise capture.CaptureError("Linux FFmpeg capture runs inside the shared hub; select --backend linux")
         return capture.Daemon()
-    if getattr(args, "backend", None) == "native":
-        return capture.NativeApp()
+    if getattr(args, "backend", None) in ("native", "linux"):
+        return backends.select(name=args.backend)
     return capture.backend()
 
 
@@ -31,23 +35,46 @@ def _capture(args) -> int:
     name = type(backend).__name__
     if args.action == "start":
         options = {"video": args.video}
+        from .linux.backend import LinuxHub
+        if isinstance(backend, LinuxHub):
+            for field in ("video_format", "video_size", "video_fps", "stale_s", "viewer_port", "host", "padd_port"):
+                if (value := getattr(args, field, None)) is not None:
+                    options[field] = value
         if args.no_audio or args.audio is not None:
             options["audio"] = None if args.no_audio else args.audio
         pid = backend.start(**options)
         print(f"{name} running (pid {pid})")
+        if isinstance(backend, LinuxHub):
+            info = backend.status()
+            print(f"Live viewer: {info['viewer_url']}")
+            if info.get("capture_error"):
+                print(f"Capture: {info['capture_error']}")
     elif args.action == "stop":
-        stopped = [type(b).__name__ for b in (capture.NativeApp(), capture.Daemon()) if b.stop()]
+        services = (backend,) if sys.platform == "linux" else (capture.NativeApp(), capture.Daemon())
+        stopped = [type(b).__name__ for b in services if b.stop()]
         print(f"stopped {', '.join(stopped)}" if stopped else "not running")
     else:
         pid, age = backend.pid(), backend.frame_age()
         frame_status = f"frame age {age:.2f}s" if age is not None else "no frames yet"
         print(f"{name} running pid {pid}, {frame_status}" if pid else f"{name} not running")
+        from .linux.backend import LinuxHub
+        if pid and isinstance(backend, LinuxHub):
+            info = backend.status()
+            print(f"Live viewer: {info['viewer_url']}")
+            if info.get("capture_error"):
+                print(f"Capture: {info['capture_error']}")
+                return 1
         return 0 if pid else 1
     return 0
 
 
 def _view(args) -> int:
     backend = _backend(args)
+    from .linux.backend import LinuxHub
+    if isinstance(backend, LinuxHub):
+        backend.start()
+        print(f"Live viewer: {backend.status()['viewer_url']}")
+        return 0
     if isinstance(backend, capture.NativeApp):
         pid = backend.start(visible=True)
         print(f"PS5 app shown (pid {pid}); keys in its window drive the console")
@@ -71,7 +98,8 @@ def _running_app():
     if os.environ.get("PS5MCP_IN_APP") == "1":  # the app itself runs this CLI with its link paused
         return None
     try:
-        return hub.AppClient(capture.NativeApp().socket, client="cli")
+        backend = backends.select()
+        return getattr(backend, "client_type", hub.AppClient)(backend.socket, client="cli")
     except hub.AppNotRunning:
         return None
 
@@ -311,14 +339,21 @@ def main(argv: list[str] | None = None) -> int:
     cap = sub.add_parser("capture", help="manage the daemon that owns the capture card")
     cap.add_argument("action", choices=("start", "stop", "status"))
     cap.add_argument("--video", help="capture device (default: saved native setting or PS5MCP_VIDEO)")
+    cap.add_argument("--host", help="Explicit Linux padd host; still requires PS5MCP_ALLOW_CONSOLE=1")
+    cap.add_argument("--padd-port", type=int, help="Linux padd TCP port (default: 9305)")
+    cap.add_argument("--video-format", help="Linux V4L2 input format, e.g. mjpeg or yuyv422")
+    cap.add_argument("--video-size", help="Linux capture size, e.g. 1920x1080")
+    cap.add_argument("--video-fps", help="Linux capture rate, e.g. 60 or 60000/1001")
+    cap.add_argument("--stale-s", type=float, help="Linux frame timeout before capture restart")
+    cap.add_argument("--viewer-port", type=int, help="Loopback HTTP viewer port (default: automatic)")
     cap.add_argument("--audio", help="audio device (default: saved native setting or PS5MCP_AUDIO)")
     cap.add_argument("--no-audio", action="store_true")
-    cap.add_argument("--backend", choices=("native", "ffmpeg"))
+    cap.add_argument("--backend", choices=("native", "ffmpeg", "linux"))
     cap.set_defaults(func=_capture)
 
     view = sub.add_parser("view", help="open the PS5 app window (live video, audio, keyboard; starts it if needed)")
     view.add_argument("--detach", action="store_true", help="ffmpeg backend: return immediately, leave mpv open")
-    view.add_argument("--backend", choices=("native", "ffmpeg"))
+    view.add_argument("--backend", choices=("native", "ffmpeg", "linux"))
     view.set_defaults(func=_view)
 
     snap = sub.add_parser("snapshot", help="save the current frame")
@@ -387,6 +422,10 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     try:
+        if sys.platform == "linux" and args.command in ("padd", "pad", "install", "push", "pull", "latency"):
+            from .linux.backend import console_enabled
+            if not console_enabled():
+                raise capture.CaptureError("Console access disabled; Linux defaults to offline mode")
         return args.func(args)
     except capture.CaptureError as exc:
         print(f"capture error: {exc}", file=sys.stderr)

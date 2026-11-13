@@ -1,6 +1,12 @@
 """Exercise the real credential validation and storage orchestration without a user's Keychain."""
+
 import subprocess
+import sys
 from pathlib import Path
+
+import pytest
+
+pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="requires macOS Swift frameworks")
 
 ROOT = Path(__file__).resolve().parents[1]
 

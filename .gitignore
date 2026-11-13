@@ -11,3 +11,17 @@ local.mk
 xcuserdata/
 results/
 app/PS5.xcodeproj/
+
+# Local credentials and runtime/capture evidence (never publish).
+.env
+.env.*
+!.env.example
+credentials/
+*.pem
+*.key
+*.p12
+*.pfx
+*.sock
+screenshots/
+validation-output/
+dist/

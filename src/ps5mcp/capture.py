@@ -358,6 +358,10 @@ class NativeApp:
 
 def backend(root: Path | None = None) -> Daemon | NativeApp:
     """The native app when built, unless PS5MCP_CAPTURE=ffmpeg; whichever is already running wins."""
+    import sys
+    if sys.platform == "linux" or os.environ.get("PS5MCP_BACKEND"):
+        from .backends import select
+        return select(root)
     native, ffmpeg = NativeApp(root), Daemon(root)
     if native.status() is not None:
         return native
@@ -388,6 +392,11 @@ def grab_direct(destination: Path, video: str | None = None, timeout: float = 10
 def snapshot(destination: Path, max_width: int | None = None, daemon: Daemon | NativeApp | None = None) -> Path:
     """Save the current frame as JPEG or PNG (by extension), optionally scaled down."""
     daemon = daemon or backend()
+    from .linux.backend import LinuxHub
+    if isinstance(daemon, LinuxHub):
+        if daemon.pid() is None:
+            daemon.start()
+        return daemon.save_snapshot(destination, max_width)
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as scratch:

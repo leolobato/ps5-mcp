@@ -1,6 +1,12 @@
 """The window's claim details: the API client's process and the agent above its launchers."""
+
 import subprocess
+import sys
 from pathlib import Path
+
+import pytest
+
+pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="requires macOS Swift frameworks")
 
 ROOT = Path(__file__).resolve().parents[1]
 

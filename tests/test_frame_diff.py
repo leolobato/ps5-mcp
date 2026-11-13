@@ -1,7 +1,13 @@
 """Compare real pixel buffers with the production frame differ, built as the app builds it."""
+
 import re
 import subprocess
+import sys
 from pathlib import Path
+
+import pytest
+
+pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="requires macOS Swift frameworks")
 
 ROOT = Path(__file__).resolve().parents[1]
 BUDGET_US = 2000

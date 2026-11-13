@@ -1,6 +1,12 @@
 """Run the native setup HTTP client against an isolated URLProtocol fixture."""
+
 import subprocess
+import sys
 from pathlib import Path
+
+import pytest
+
+pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="requires macOS Swift frameworks")
 
 ROOT = Path(__file__).resolve().parents[1]
 

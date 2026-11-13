@@ -203,9 +203,10 @@ class AppClient:
 def connect(root: Path | None = None, client: str | None = None, start: bool = True, visible: bool = False,
             timeout: float = 15.0) -> AppClient:
     """Connect to the running app, launching it (headless unless `visible`) when `start` is set."""
-    app = capture.NativeApp(root)
+    from .backends import select
+    app = select(root)
     if start:
         app.start(visible=visible, timeout=timeout)
     elif visible:
         app.show()
-    return AppClient(app.socket, client=client)
+    return getattr(app, "client_type", AppClient)(app.socket, client=client)

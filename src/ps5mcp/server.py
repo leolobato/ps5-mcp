@@ -22,7 +22,7 @@ from pathlib import Path
 
 from mcp.server.mcpserver import Image, MCPServer
 
-from . import capture, recording, stream, vision
+from . import backends, capture, recording, stream, vision
 from . import protocol as p
 from .client import ConsoleInUse, HumanHasControl, PadError
 from .hub import AppClient, state_from_json
@@ -44,7 +44,7 @@ LINK_WAIT_S = 8.0
 
 class Runtime:
     def __init__(self):
-        self.capture: capture.NativeApp | None = None
+        self.capture: backends.Backend | None = None
         self.stream = None
         self.recorder: recording.Recorder | None = None
         self._app: AppClient | None = None
@@ -52,7 +52,7 @@ class Runtime:
         self.title_uploads: dict[str, str] = {}
 
     def start(self) -> None:
-        self.capture = capture.NativeApp()
+        self.capture = backends.select()
         with contextlib.suppress(capture.CaptureError, OSError):
             self.app()  # reported by status(); every tool retries
         if port := os.environ.get("PS5MCP_STREAM_PORT"):
@@ -65,7 +65,7 @@ class Runtime:
         with self._lock:
             if self._app is None or self._app.closed:
                 self.capture.start(visible=os.environ.get("PS5MCP_VIEW") == "1", host=HOST)
-                client = AppClient(self.capture.socket, client=f"mcp-{os.getpid()}")
+                client = getattr(self.capture, "client_type", AppClient)(self.capture.socket, client=f"mcp-{os.getpid()}")
                 client.on("state", self._on_state)
                 client.subscribe("state")
                 self._app = client
@@ -145,7 +145,13 @@ async def _apply_for(state: PadState, duration_ms: int) -> None:
     """Hold `state`, release, then the release gap; the app times it (waiting up to LINK_WAIT_S for the padd link)."""
     _check_duration(duration_ms)
     app = await _app()
-    await asyncio.to_thread(app.press, state, duration_ms, LINK_WAIT_S)
+    try:
+        await asyncio.to_thread(app.press, state, duration_ms, LINK_WAIT_S)
+    except asyncio.CancelledError:
+        from .linux.controller import LinuxAppClient
+        if isinstance(app, LinuxAppClient):
+            app.close()  # EOF cancels the hold, including an in-flight ACK wait.
+        raise
 
 
 async def _result(message: str, snapshot_after_ms: int | None):
@@ -162,6 +168,10 @@ def _errors(fn):
     @functools.wraps(fn)
     async def wrapper(*args, **kwargs):
         try:
+            if fn.__name__ in ("list_apps", "install", "push", "pull"):
+                from .linux.backend import LinuxHub, console_enabled
+                if isinstance(runtime.capture, LinuxHub) and not console_enabled():
+                    raise PadError("Console access disabled (offline mode)")
             return await fn(*args, **kwargs)
         except HumanHasControl as exc:
             return f"human has control: {exc}"
@@ -277,10 +287,16 @@ async def _run_steps(steps: list[dict], max_total_ms: int) -> int:
         raise ValueError(f"steps last {total} ms; the limit is {max_total_ms} ms")
     states = [(recording.step_to_state(step), _check_duration(int(step.get("duration_ms", 0)))) for step in steps]
     app = await _app()
+    from .linux.controller import LinuxAppClient
+    epoch = (await asyncio.to_thread(app.call, "begin_sequence"))["input_epoch"] if isinstance(app, LinuxAppClient) else None
     deadline = time.monotonic()
     try:
         for index, (state, seconds) in enumerate(states):
-            await asyncio.to_thread(app.set, state, LINK_WAIT_S if index == 0 else 0.0)
+            wait = LINK_WAIT_S if index == 0 else 0.0
+            if isinstance(app, LinuxAppClient):
+                await asyncio.to_thread(app.set_sequence, state, wait, epoch)
+            else:
+                await asyncio.to_thread(app.set, state, wait)
             deadline += seconds
             await asyncio.sleep(max(0.0, deadline - time.monotonic()))
     finally:
@@ -701,16 +717,25 @@ async def status() -> dict:
     info: dict = {"payload": {"connected": link["connected"], "host": link["host"], "port": link["port"],
                               "error": link["error"], "reconnects": link["reconnects"],
                               "human_has_control": link["human_has_control"]}}
-    for key in ("hello", "version"):
+    for key in ("hello", "version", "enabled", "states_sent"):
         if key in link:
             info["payload"][key] = link[key]
     info["payload"]["controllers"] = hub.get("controllers")
     info["payload"]["login_users"] = hub.get("login_users")
     if link["connected"]:
-        with contextlib.suppress(PadError):
-            info["payload"]["pong"] = await asyncio.to_thread(app.ping)
-    info["capture"] = {"backend": "NativeApp", "running": True, "source": hub["source"],
+        if hub.get("backend") == "LinuxHub":
+            if hub.get("pong"):
+                info["payload"]["pong"] = hub["pong"]  # Cached read-only telemetry; never wait behind a command.
+        else:
+            with contextlib.suppress(PadError):
+                info["payload"]["pong"] = await asyncio.to_thread(app.ping)
+    info["capture"] = {"backend": hub.get("backend", "NativeApp"), "running": True, "source": hub["source"],
                        "frame_age_s": hub["frame_age"] if hub["frame_age"] >= 0 else None}
+    if hub.get("backend") == "LinuxHub":
+        for field in ("frame_sequence", "frame_timestamp", "frame_timestamp_unix", "capture_error",
+                      "ffmpeg_pid", "capture_starts", "stale_after_s", "video_config", "viewer_url"):
+            if field in hub:
+                info["capture"][field] = hub[field]
     if hub.get("remote_play"):
         info["capture"]["remote_play"] = hub["remote_play"]  # state, readiness, keyboard.open for type_text
     if hub.get("frame_meter"):
@@ -773,6 +798,9 @@ async def show_viewer() -> str:
     """Open the live video window for a human (keyboard in that window drives the console too)."""
     await _app()
     await asyncio.to_thread(runtime.capture.show)
+    from .linux.backend import LinuxHub
+    if isinstance(runtime.capture, LinuxHub):
+        return f"Live viewer: {runtime.capture.status()['viewer_url']}"
     return "viewer shown"
 
 

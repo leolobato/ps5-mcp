@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import itertools
 import socket
+import struct
 import threading
 import time
 from dataclasses import dataclass
@@ -35,27 +36,44 @@ class PadLink:
         self.closed = False
         self.error: str | None = None
         self.last_ack_seq = 0
-        reader = p.Reader()
-        self.sock.settimeout(timeout)
-        while True:
-            data = self.sock.recv(4096)
-            if not data:
-                raise PadError("padd closed the connection during HELLO")
-            messages = reader.feed(data)
-            if messages:
-                break
-        type_, payload = messages[0]
-        if type_ == p.Type.ERROR:
-            code, message = p.decode_error(payload)
+        try:
+            reader = p.Reader()
+            deadline = time.monotonic() + timeout
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("padd HELLO timed out")
+                self.sock.settimeout(remaining)
+                data = self.sock.recv(4096)
+                if not data:
+                    raise PadError("padd closed the connection during HELLO")
+                messages = reader.feed(data)
+                if messages:
+                    break
+            type_, payload = messages[0]
+            if type_ == p.Type.ERROR:
+                code, message = p.decode_error(payload)
+                self.sock.close()
+                raise (PadBusy if code == p.Error.BUSY else PadError)(message)
+            if type_ != p.Type.HELLO:
+                raise PadError(f"expected HELLO, got type {type_}")
+            self.hello = p.decode_hello(payload)
+            if self.hello.protocol != p.VERSION:
+                raise PadError(f"unsupported padd HELLO protocol {self.hello.protocol}")
+        except (p.ProtocolError, struct.error, ValueError) as exc:
             self.sock.close()
-            raise (PadBusy if code == p.Error.BUSY else PadError)(message)
-        if type_ != p.Type.HELLO:
-            raise PadError(f"expected HELLO, got type {type_}")
-        self.hello = p.decode_hello(payload)
+            raise PadError(f"Invalid padd HELLO: {exc}") from exc
+        except (OSError, PadError):
+            self.sock.close()
+            raise
         self.sock.settimeout(None)
         self._reader = reader
-        for message in messages[1:]:
-            self._dispatch(*message)
+        try:
+            for message in messages[1:]:
+                self._dispatch(*message)
+        except (struct.error, ValueError) as exc:
+            self.close()
+            raise PadError(f"Invalid padd reply after HELLO: {exc}") from exc
         threading.Thread(target=self._read_loop, daemon=True, name="padd-reader").start()
 
     def next_seq(self) -> int:
@@ -85,7 +103,7 @@ class PadLink:
                     break
                 for message in self._reader.feed(data):
                     self._dispatch(*message)
-        except (OSError, p.ProtocolError) as exc:
+        except (OSError, p.ProtocolError, struct.error) as exc:
             self.error = self.error or str(exc)
         finally:
             with self._cond:
@@ -165,6 +183,8 @@ class PadLink:
 
     def close(self) -> None:
         self.closed = True
+        with self._cond:
+            self._cond.notify_all()
         try:
             self.sock.shutdown(socket.SHUT_RDWR)
         except OSError:
@@ -202,9 +222,15 @@ class PadController:
     - After every (re)connect the state is reset to neutral before anything else is sent.
     """
 
-    def __init__(self, host: str, port: int = p.PORT, keepalive: float = 0.1, connect=PadLink):
+    def __init__(self, host: str, port: int = p.PORT, keepalive: float = 0.1, connect=PadLink,
+                 ack_timeout: float | None = None, on_ready=None, on_disconnect=None):
         self.host, self.port, self.keepalive = host, port, keepalive
         self._connect = connect
+        self.ack_timeout = ack_timeout
+        self.on_ready, self.on_disconnect = on_ready, on_disconnect
+        self._stopped = threading.Event()
+        self.revision = 0
+        self.acked_revision = -1
         self._lock = threading.Condition()
         self._agent = PadState()
         self._keys: dict[str, PadState] = {}
@@ -226,9 +252,21 @@ class PadController:
             if self._keys and not state.is_neutral():
                 raise HumanHasControl("a human is holding keys in the viewer window; try again when released")
             self._agent = state
+            self.revision += 1
             self._dirty = True
             self._note()
             self._lock.notify_all()
+
+    def wait_applied(self, revision: int, timeout: float) -> None:
+        deadline = time.monotonic() + timeout
+        with self._lock:
+            while self.acked_revision < revision:
+                if self._stop or self._link is None or self._link.closed:
+                    raise PadError("padd disconnected before input was acknowledged")
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise PadError("timed out waiting for input acknowledgement")
+                self._lock.wait(remaining)
 
     def key(self, name: str, state: PadState | None) -> None:
         """Keyboard layer: `state` while the key is down, None on release."""
@@ -319,20 +357,36 @@ class PadController:
             except PadError as exc:
                 self.error = str(exc)
                 self._notify()
-                time.sleep(backoff)
+                self._stopped.wait(backoff)
                 backoff = min(backoff * 2, 5.0)
                 continue
             except OSError as exc:
                 self.error = str(exc)
                 self._notify()
-                time.sleep(backoff)
+                self._stopped.wait(backoff)
                 backoff = min(backoff * 2, 5.0)
                 continue
             backoff = 0.25
+            if self._stop:
+                link.close()
+                break
+            if self.ack_timeout is not None:
+                try:
+                    if link.send_state(PadState(), wait=True, timeout=self.ack_timeout) != 0:
+                        raise PadError("padd refused neutral input")
+                    if self.on_ready:
+                        self.on_ready()
+                except PadError as exc:
+                    self.error = str(exc)
+                    link.close()
+                    self._notify()
+                    self._stopped.wait(backoff)
+                    continue
             with self._lock:
                 self._agent = PadState()
                 self._keys.clear()
                 self._link = link
+                self.acked_revision = -1
                 self._dirty = True
                 self.error = None
             self._notify()
@@ -346,6 +400,11 @@ class PadController:
                 link.close()
                 with self._lock:
                     self._link = None
+                    self._agent = PadState()
+                    self._keys.clear()
+                    self._lock.notify_all()
+                if self.on_disconnect:
+                    self.on_disconnect()
                 self.reconnects += 1
                 self._notify()
 
@@ -356,10 +415,16 @@ class PadController:
                 if not self._dirty:
                     self._lock.wait(max(0.0, self.keepalive - (time.monotonic() - last_sent)))
                 state = self._merged()
+                revision = self.revision
                 self._dirty = False
             if link.closed:
                 raise PadError(link.error or "connection closed")
-            link.send_state(state)
+            result = link.send_state(state, wait=self.ack_timeout is not None, timeout=self.ack_timeout)
+            if result != 0:
+                raise PadError(f"padd refused input (status {result})")
+            with self._lock:
+                self.acked_revision = max(self.acked_revision, revision)
+                self._lock.notify_all()
             self.states_sent += 1
             last_sent = time.monotonic()
 
@@ -368,6 +433,7 @@ class PadController:
             self.release_all()
             time.sleep(min(0.05, self.keepalive))
         self._stop = True
+        self._stopped.set()
         with self._lock:
             self._lock.notify_all()
             link = self._link

@@ -92,3 +92,10 @@ check: lint test all
 
 clean:
 	rm -rf build
+
+# Offline Linux tests: local padd stub and synthetic frames; no Xcode or console.
+.PHONY: test-linux check-linux
+test-linux: build/padd-host
+	uv run pytest -q tests/test_linux.py tests/test_linux_video.py tests/test_linux_controller.py tests/test_protocol.py tests/test_padd_host.py tests/test_assign.py tests/test_transfer.py tests/test_transfer_server.py
+
+check-linux: lint test-linux

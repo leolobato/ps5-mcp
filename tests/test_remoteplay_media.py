@@ -1,9 +1,13 @@
 """Decode actual Annex B video and package PCM through the production media classes."""
+
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
+
+pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="requires macOS Swift frameworks")
 
 ROOT = Path(__file__).resolve().parents[1]
 

@@ -1,6 +1,12 @@
 """Admission recovery retains the authority of the source start, not a later claimant."""
+
 import subprocess
+import sys
 from pathlib import Path
+
+import pytest
+
+pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="requires macOS Swift frameworks")
 
 ROOT = Path(__file__).resolve().parents[1]
 
