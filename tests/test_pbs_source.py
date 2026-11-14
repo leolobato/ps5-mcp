@@ -37,8 +37,8 @@ def _has_pbs() -> bool:
                                 check=False).stdout
 
 
-# Only `make app PBS=1` has the source; PBSSource.swift itself is compiled and tested below either way.
-needs_pbs_build = pytest.mark.skipif(not _has_pbs(), reason="the app was built without PBS (make app PBS=1)")
+# Only a PBS build (the default; not `make app PBS=0`) has the source; PBSSource.swift itself is compiled and tested below either way.
+needs_pbs_build = pytest.mark.skipif(not _has_pbs(), reason="the app was built without PBS (make app PBS=0)")
 
 
 def blue_frame(tmp_path) -> tuple[bytes, bytes, bytes]:

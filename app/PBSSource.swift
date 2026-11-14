@@ -1,7 +1,7 @@
 import AVFoundation
 import Foundation
 
-// Only with PBS=1 (make app PBS=1): the PBS payload is an optional video source, off in a normal build.
+// Built in unless PBS=0 (make app PBS=0): the PBS payload is an optional video source.
 #if PS5MCP_PBS
 
 /// What the PBS source is doing. PBS is loaded on the console by the user; the app only connects to it.

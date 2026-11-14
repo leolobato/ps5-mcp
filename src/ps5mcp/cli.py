@@ -296,6 +296,18 @@ def _install(args) -> int:
     return 0
 
 
+def _get_pbs(args) -> int:
+    from . import installer, pbs
+    try:
+        print(f"downloading PBS {pbs.VERSION} from {pbs.URL}", flush=True)
+        path = pbs.fetch()
+        print(installer.install(_host(args), path, run=args.run, progress=lambda line: print(line, flush=True)))
+    except Exception as exc:  # noqa: BLE001 - shown to the user as is; the app shows the last line
+        print(f"install failed: {exc}")
+        return 1
+    return 0
+
+
 def _transfer(args) -> int:
     from . import transfer
     run = transfer.push if args.command == "push" else transfer.pull
@@ -415,6 +427,12 @@ def main(argv: list[str] | None = None) -> int:
     inst.add_argument("--host", help="console IP address (default: PS5_HOST)")
     inst.set_defaults(func=_install)
 
+    get_pbs = sub.add_parser("get-pbs", help="download the pinned PBS payload release (GPL-3.0) from GitHub, check "
+                             "its SHA256, and install it into Payload Manager")
+    get_pbs.add_argument("--run", action="store_true", help="also run it once it is installed")
+    get_pbs.add_argument("--host", help="console IP address (default: PS5_HOST)")
+    get_pbs.set_defaults(func=_get_pbs)
+
     for name, source, dest in (
             ("push", "local file or folder", "absolute console path (end with / to copy into it)"),
             ("pull", "absolute console path", "local path (an existing folder or one ending in / receives it)")):
@@ -449,7 +467,7 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     try:
-        if sys.platform == "linux" and args.command in ("padd", "pad", "install", "push", "pull", "latency"):
+        if sys.platform == "linux" and args.command in ("padd", "pad", "install", "get-pbs", "push", "pull", "latency"):
             from .linux.backend import console_enabled
             if not console_enabled():
                 raise capture.CaptureError("Console access disabled; Linux defaults to offline mode")

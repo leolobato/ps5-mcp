@@ -337,11 +337,76 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
             self.pbsBusy = false
             switch result {
             case .started(let name): self.pbsMessage = "Started \(name). Waiting for video…"
-            case .notInLibrary: self.pbsMessage = "PBS is not in Payload Manager's library. Add its .elf with `ps5mcp install`, then try again."
+            case .notInLibrary: self.offerPBSDownload()
             case .unreachable: self.pbsMessage = "Payload Manager did not answer on the console."
             }
             self.refreshPBSStatus()
         }
+    }
+
+    /// The app does not carry PBS (GPL-3.0). With the person's consent, `ps5mcp get-pbs` downloads the pinned upstream
+    /// release, checks its SHA256, adds it to Payload Manager's library and starts it.
+    private func offerPBSDownload() {
+        let cli = hub.padd.cli
+        guard !cli.isEmpty else {
+            pbsMessage = "PBS is not in Payload Manager's library. Add its .elf with `ps5mcp install`, then try again."
+            return
+        }
+        let host = hub.host
+        let alert = NSAlert()
+        alert.messageText = "Download PBS?"
+        alert.informativeText = "PBS is not in Payload Manager's library on \(host). PS5 MCP can download the tested "
+            + "release from github.com/seregonwar/PBS-Payload, check its checksum, add it to Payload Manager and start it. "
+            + "PBS is a separate program under the GPL-3.0 license."
+        alert.addButton(withTitle: "Download and Start"); alert.addButton(withTitle: "Cancel")
+        pbsMessage = "PBS is not in Payload Manager's library."
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .alertFirstButtonReturn else { return }
+            guard self.hub.host == host, self.consoleIsFreeForPBS() else { return }
+            self.runGetPBS(cli, host: host)
+        }
+    }
+
+    private func runGetPBS(_ cli: [String], host: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: cli[0])
+        process.arguments = Array(cli.dropFirst()) + ["get-pbs", "--run", "--host", host]
+        process.environment = hub.padd.cliEnvironment
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        process.standardInput = FileHandle.nullDevice
+        var lastLine = ""
+        pipe.fileHandleForReading.readabilityHandler = { handle in
+            let text = String(decoding: handle.availableData, as: UTF8.self)
+            guard let line = text.split(separator: "\n").last.map(String.init), !line.isEmpty else { return }
+            DispatchQueue.main.async { [weak self] in
+                lastLine = line
+                self?.pbsMessage = line.prefix(1).uppercased() + line.dropFirst()
+                self?.refreshPBSStatus()
+            }
+        }
+        process.terminationHandler = { process in
+            pipe.fileHandleForReading.readabilityHandler = nil
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.pbsBusy = false
+                if process.terminationStatus == 0 {
+                    self.pbsMessage = "PBS installed and started. Waiting for video…"
+                } else if !lastLine.hasPrefix("install failed") {
+                    self.pbsMessage = "Could not get PBS (exit \(process.terminationStatus))."
+                }
+                self.refreshPBSStatus()
+            }
+        }
+        do {
+            try process.run()
+            pbsBusy = true
+            pbsMessage = "Downloading PBS…"
+        } catch {
+            pbsMessage = "Could not start ps5mcp: \(error.localizedDescription)"
+        }
+        refreshPBSStatus()
     }
 
     @objc private func stopPBSPayload() {

@@ -5,7 +5,7 @@
 // - Local API on <state>/capture.sock (docs/app-api.md); the MCP server is a thin client of it.
 //
 // Usage: PS5 [--state-dir DIR] [--video NAME|remoteplay|pbs|file:PATH|synthetic] [--audio NAME|none] [--headless]
-//            [--host H] [--port N] [--pbs-port N (PBS=1 builds)] [--features] [--no-auto-assign] [--padd-cli EXE] [--snapshot-fps N]
+//            [--host H] [--port N] [--pbs-port N (PBS builds)] [--features] [--no-auto-assign] [--padd-cli EXE] [--snapshot-fps N]
 //            [--frame-diff-log PATH]
 //        PS5 --dialog-score IMAGE   (prints the assignment-dialog match score and exits)
 //        PS5 --dialog-users IMAGE   (prints the dialog's profile names, left to right, and exits)

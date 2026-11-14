@@ -18,10 +18,10 @@ APP_EXECUTABLE := build/PS5\ MCP.app/Contents/MacOS/PS5\ MCP
 APP_ARCH ?= $(shell uname -m)
 APP_SOURCES := $(wildcard app/*.swift app/*.c app/*.h)
 APP_ICON_ASSETS := $(wildcard app/Assets.xcassets/*.json app/Assets.xcassets/AppIcon.appiconset/*)
-# The PBS payload is an optional video source: `make app PBS=1` builds it in. A normal build has no PBS code or controls.
-# local.mk (gitignored) holds this machine's defaults: `PBS ?= 1` there builds it in unless PBS=0 is given.
+# The PBS payload is a video source, built in by default. `make app PBS=0` builds without any PBS code or controls.
+# local.mk (gitignored) holds this machine's defaults: `PBS ?= 0` there leaves it out unless PBS=1 is given.
 -include local.mk
-PBS ?= 0
+PBS ?= 1
 PBS_CONDITION := $(if $(filter 1,$(PBS)),PS5MCP_PBS)
 XCODE_OVERRIDES := $(if $(DEVELOPMENT_TEAM),DEVELOPMENT_TEAM=$(DEVELOPMENT_TEAM)) $(if $(APP_BUNDLE_ID),APP_BUNDLE_ID=$(APP_BUNDLE_ID))
 remoteplay-deps:

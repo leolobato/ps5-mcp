@@ -28,6 +28,8 @@ def main():
         "Account-Tools-GPL.txt": ROOT / "third-party/account-tools/LICENSE",
         "Account-Setup-Notice.md": ROOT / "payload/remoteplay-setup/NOTICE.md",
         "Account-Tools-Source.json": ROOT / "third-party/account-tools/SOURCE.json",
+        "PBS-Payload-GPL.txt": ROOT / "third-party/pbs-payload/LICENSE",
+        "PBS-Payload-Notice.md": ROOT / "third-party/pbs-payload/NOTICE.md",
     }
     for name, source in notices.items():
         shutil.copyfile(source, destination / name)
