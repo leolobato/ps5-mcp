@@ -10,11 +10,14 @@ import math
 import os
 import queue
 import re
+import select
 import signal
+import socket
 import socketserver
 import threading
 import time
 from dataclasses import asdict
+from importlib.metadata import version
 from pathlib import Path
 
 from PIL import Image, ImageDraw
@@ -203,7 +206,7 @@ class Hub:
             from ..protocol import version_string
             link["version"] = version_string(link["hello"]["payload_version"])
         controllers, users, pong = self.controller.cached() if isinstance(self.controller, LinuxController) else (None, None, None)
-        result = {"pid": os.getpid(), "backend": "LinuxHub", "version": "0.6.2", "build": "linux",
+        result = {"pid": os.getpid(), "backend": "LinuxHub", "version": version("ps5-mcp"), "build": "linux",
                 "frames": self.frames, "frame_age": time.monotonic() - self.frame_time if self.frame_time else -1,
                 "source": "unavailable" if self.capture_error else self.video, "configured_source": self.video,
                 "capture_error": self.capture_error,
@@ -286,12 +289,16 @@ class Hub:
             if cmd == "quit":
                 threading.Thread(target=self.server.shutdown, daemon=True).start()
                 return {}
-            if cmd not in ("set", "press", "ping", "command", "begin_sequence"):
+            if cmd not in ("set", "press", "ping", "command", "begin_sequence", "controller_verify"):
                 raise Refused(f"Linux backend does not support {cmd!r}", "unsupported")
             if not self.controller:
                 raise Refused("Console access disabled (offline mode)", "offline")
             if cmd != "ping" and self.input_owner not in (None, key):
                 raise Refused("Another session has active input; claim the console before acting", "leased")
+            if cmd == "controller_verify" and self.owner != key:
+                raise Refused("Claim console before verifying controller", "leased")
+            if request.get("require_claim") and self.owner != key:
+                raise Refused("Claim console before guarded input", "leased")
             epoch = session["epoch"]
             if expected_epoch is not None and expected_epoch != epoch:
                 raise Refused("Input was interrupted; queued actions are not replayed", "interrupted")
@@ -315,14 +322,23 @@ class Hub:
                     raise Refused("Input release is pending; retry after it is acknowledged", "interrupted")
                 if key not in self.sessions or epoch != session["epoch"] or self.owner not in (None, key):
                     raise Refused("Session input interrupted or ownership lost", "interrupted")
+                if request.get("require_claim") and self.owner != key:
+                    raise Refused("Console claim lost before guarded input", "leased")
                 if self.input_owner not in (None, key):
                     raise Refused("Another session has active input", "leased")
                 operation_epoch = request.get("operation_epoch")
                 if operation_epoch is not None and operation_epoch != epoch:
                     raise Refused("Sequence interrupted; reconnects never resume old steps", "interrupted")
+                if cmd == "controller_verify":
+                    if not isinstance(self.controller, LinuxController):
+                        raise Refused("Controller verification requires Linux padd", "unsupported")
+                    # Recheck ownership/epoch after bounded network read; no input is sent.
+                    verify_epoch = epoch
                 if cmd == "begin_sequence":
                     return {"input_epoch": epoch}
-                if cmd == "command":
+                if cmd == "controller_verify":
+                    pass
+                elif cmd == "command":
                     op, arg = request.get("op"), request.get("arg", "")
                     validate_command(op, arg)
                     if not isinstance(self.controller, LinuxController):
@@ -345,6 +361,16 @@ class Hub:
                     session["input_deadline"] = time.monotonic() + (duration / 1000 + 1 if cmd == "press" else 11)
                     self.merge()
                     revision = self.controller.revision
+            if cmd == "controller_verify":
+                with self.controller.operations:
+                    state = link.get_state(timeout=1)
+                    pong = link.ping(timeout=1)
+                with self.lock:
+                    self.expire()
+                    if self.owner != key or key not in self.sessions or session["epoch"] != verify_epoch:
+                        raise Refused("Ownership changed during verification", "interrupted")
+                return {"connected": True, "hello": asdict(link.hello), "pong": asdict(pong),
+                        "state": asdict(state), "neutral": state.is_neutral() and not any(t.active for t in state.touch)}
             if self.controller.ack_timeout is not None:
                 self.controller.wait_applied(revision, self.controller.ack_timeout + .2)
             if cmd == "command":
@@ -414,12 +440,46 @@ class Handler(socketserver.StreamRequestHandler):
     def handle(self):
         hub = self.server.hub
         key = object()
-        send_lock = threading.Lock()
+        outgoing = queue.Queue(maxsize=64)
+        writer_stopped = threading.Event()
 
         def send(message):
-            with send_lock, contextlib.suppress(OSError, ValueError):
-                self.wfile.write((json.dumps(message) + "\n").encode())
-                self.wfile.flush()
+            # Called under the hub lock: never wait for a slow subscriber here.
+            try:
+                outgoing.put_nowait((json.dumps(message) + "\n").encode())
+            except queue.Full:
+                writer_stopped.set()
+                with contextlib.suppress(OSError):
+                    self.connection.shutdown(socket.SHUT_RDWR)
+
+        def write():
+            while not writer_stopped.is_set():
+                try:
+                    data = memoryview(outgoing.get(timeout=.1))
+                except queue.Empty:
+                    continue
+                deadline = time.monotonic() + 2
+                try:
+                    while data and not writer_stopped.is_set():
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise TimeoutError("Local client is not reading replies")
+                        if not select.select([], [self.connection], [], min(.1, remaining))[1]:
+                            continue
+                        try:
+                            count = self.connection.send(data, socket.MSG_DONTWAIT)
+                        except BlockingIOError:
+                            continue
+                        if count == 0:
+                            raise ConnectionError("Local client disconnected")
+                        data = data[count:]
+                except OSError:
+                    writer_stopped.set()
+                    with contextlib.suppress(OSError):
+                        self.connection.shutdown(socket.SHUT_RDWR)
+
+        writer = threading.Thread(target=write, daemon=True, name="hub-writer")
+        writer.start()
         with hub.lock:
             hub.sessions[key] = {"state": PadState(), "events": [], "send": send, "client": "local",
                                  "reason": "", "idle_s": 600, "t": time.monotonic(), "socket": self.connection,
@@ -469,7 +529,9 @@ class Handler(socketserver.StreamRequestHandler):
             pass  # Peer reset/timeout is ordinary session cleanup, not a server failure.
         finally:
             ended.set()
+            writer_stopped.set()
             hub.disconnect(key)
+            writer.join(timeout=3)
 
 
 class Server(socketserver.ThreadingUnixStreamServer):
@@ -477,7 +539,7 @@ class Server(socketserver.ThreadingUnixStreamServer):
 
 
 def serve(hub: Hub, ready=None):
-    hub.root.mkdir(parents=True, exist_ok=True)
+    hub.root.mkdir(parents=True, exist_ok=True, mode=0o700)
     with (hub.root / "hub.lock").open("a") as lockfile:
         fcntl.flock(lockfile, fcntl.LOCK_EX | fcntl.LOCK_NB)
         path = hub.root / "capture.sock"

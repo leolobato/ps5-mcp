@@ -11,6 +11,27 @@ from pathlib import Path
 from . import backends, capture
 
 
+def _controller(args):
+    import asyncio
+    import json
+
+    from . import server
+
+    async def run():
+        server.runtime.start()
+        try:
+            if args.action == "status":
+                return await server.status()
+            await server.claim_console("CLI controller readiness")
+            return await server.controller_ready(wait_s=args.wait_s)
+        finally:
+            server.runtime.stop()
+    result = asyncio.run(run())
+    print(json.dumps(result, indent=2))
+    failed = isinstance(result, str) and result.startswith(("error:", "in use:", "human has control:"))
+    return 1 if failed or (args.action == "ready" and not result.get("neutral", False)) else 0
+
+
 def _devices(_args) -> int:
     if sys.platform == "linux":
         raise capture.CaptureError("Linux device selection is explicit: choose a /dev/v4l/by-id/ path and a supported capture mode")
@@ -111,6 +132,8 @@ def _latency(args) -> int:
 
 def _control(args) -> int:
     """Show the PS5 app (keyboard control lives in its window); optionally record until Ctrl-C."""
+    if sys.platform == "linux":
+        raise capture.CaptureError("Linux keyboard control is not implemented; use view for video and MCP for input")
     import signal
     import threading
 
@@ -334,6 +357,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--version", action="version", version=version_text())
     sub = parser.add_subparsers(dest="command", required=True)
 
+    controller = sub.add_parser("controller", help="shared-hub controller telemetry and neutral readiness")
+    controller.add_argument("action", choices=("status", "ready"))
+    controller.add_argument("--wait-s", type=float, default=8)
+    controller.set_defaults(func=_controller)
     sub.add_parser("devices", help="list AVFoundation capture devices").set_defaults(func=_devices)
 
     cap = sub.add_parser("capture", help="manage the daemon that owns the capture card")

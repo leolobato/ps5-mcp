@@ -25,7 +25,7 @@ from mcp.server.mcpserver import Image, MCPServer
 from . import backends, capture, recording, stream, vision
 from . import protocol as p
 from .client import ConsoleInUse, HumanHasControl, PadError
-from .hub import AppClient, state_from_json
+from .hub import AppClient, state_from_json, state_to_json
 from .probe_runner import ConsoleError
 from .protocol import PadState
 
@@ -141,12 +141,20 @@ def _check_duration(ms: int) -> float:
     return ms / 1000
 
 
-async def _apply_for(state: PadState, duration_ms: int) -> None:
+async def _apply_for(state: PadState, duration_ms: int, require_claim: bool = False) -> None:
     """Hold `state`, release, then the release gap; the app times it (waiting up to LINK_WAIT_S for the padd link)."""
     _check_duration(duration_ms)
     app = await _app()
     try:
-        await asyncio.to_thread(app.press, state, duration_ms, LINK_WAIT_S)
+        if require_claim:
+            from .linux.controller import LinuxAppClient
+            if not isinstance(app, LinuxAppClient):
+                raise PadError("Guarded presses require the Linux backend; claim_console is available on macOS")
+            await asyncio.to_thread(app.call, "press", state=state_to_json(state), hold_ms=duration_ms,
+                                    wait=LINK_WAIT_S, require_claim=True,
+                                    timeout=LINK_WAIT_S + duration_ms / 1000 + app.timeout)
+        else:
+            await asyncio.to_thread(app.press, state, duration_ms, LINK_WAIT_S)
     except asyncio.CancelledError:
         from .linux.controller import LinuxAppClient
         if isinstance(app, LinuxAppClient):
@@ -219,9 +227,11 @@ async def measure_frame_rate(seconds: float = 10.0) -> dict:
 
 @mcp.tool(structured_output=False)
 @_errors
-async def press(button: str, hold_ms: int = 80, snapshot_after_ms: int | None = None):
-    """Press and release one button (e.g. cross, circle, up, options). Optionally return a frame afterwards."""
-    await _apply_for(PadState(buttons=p.button_mask([button])), hold_ms)
+async def press(button: str, hold_ms: int = 80, snapshot_after_ms: int | None = None, require_claim: bool = False):
+    """Press and release one button. Optionally return a frame afterwards. Linux require_claim=True
+    refuses input unless this session still owns the console at the point input is applied.
+    """
+    await _apply_for(PadState(buttons=p.button_mask([button])), hold_ms, require_claim)
     return await _result(f"pressed {button} for {hold_ms} ms", snapshot_after_ms)
 
 
@@ -747,6 +757,26 @@ async def status() -> dict:
     info["claim"] = {"held_by_you": lease["granted"], "queue_position": lease["position"] if lease["position"] > 0
                      else None, "owner": lease["owner"], "queue": lease["queue"]}
     return info
+
+
+@mcp.tool(structured_output=False)
+@_errors
+async def controller_ready(wait_s: float = 8, release: bool = True) -> dict:
+    """Linux: wait for the shared hub to reconnect to existing padd, release and verify wire neutral.
+    Requires claim_console first. Never deploys/restarts payloads or forcibly breaks a live connection.
+    Returns protocol handshake and ping telemetry. Offline hubs need explicit local restart with console opt-in.
+    """
+    if not 0 <= wait_s <= 15:
+        raise ValueError("wait_s must be 0..15")
+    from .linux.backend import LinuxHub
+    if not isinstance(runtime.capture, LinuxHub):
+        raise PadError("controller_ready requires the Linux backend; use status on macOS")
+    app = await _app()
+    if not (await asyncio.to_thread(app.lease))["granted"]:
+        raise PadError("Call claim_console before controller_ready")
+    if release:
+        await asyncio.to_thread(app.release_all)
+    return await asyncio.to_thread(app.call, "controller_verify", wait=wait_s, timeout=wait_s + 5)
 
 
 def _holder(lease: dict) -> str:

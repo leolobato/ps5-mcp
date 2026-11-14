@@ -295,3 +295,51 @@ def test_backend_reconnect_after_service_restart(tmp_path):
         client.close()
     finally:
         backend.stop()
+
+
+def test_slow_subscriber_cannot_block_status_or_input_cleanup(hub):
+    # Stop consuming the subscriber's replies and fill its bounded outbound queue.
+    slow = socket.socket(socket.AF_UNIX)
+    slow.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024)
+    slow.connect(str(hub.root / 'capture.sock'))
+    slow.sendall(b'{"id":1,"cmd":"subscribe","events":["state"]}\n')
+    client = connect(hub)
+    try:
+        assert wait_for(lambda: any(s['events'] for s in hub.sessions.values()))
+        with hub.lock:
+            subscriber = next(s for s in hub.sessions.values() if s['events'])
+        began = time.monotonic()
+        for _ in range(100):
+            subscriber['send']({'event': 'state', 'padding': 'x' * 8192})
+        assert client.status()['backend'] == 'LinuxHub'
+        assert time.monotonic() - began < 2
+        assert wait_for(lambda: len(hub.sessions) == 1)
+    finally:
+        slow.close()
+        client.close()
+
+
+@pytest.mark.parametrize('key,value', [('PS5MCP_VIDEO_FORMAT', 'yuyv422'),
+                                      ('PS5MCP_VIDEO_SIZE', '1280x720'),
+                                      ('PS5MCP_VIDEO_FPS', '30')])
+def test_running_capture_rejects_conflicting_environment(tmp_path, monkeypatch, key, value):
+    backend = LinuxHub(tmp_path)
+    status = {'pid': 123, 'source': '/dev/video99', 'video_config': {
+        'source': '/dev/video99', 'input_format': 'mjpeg', 'size': '1920x1080', 'fps': '60'},
+        'pad': {'enabled': False}}
+    monkeypatch.setattr(backend, 'status', lambda: status)
+    monkeypatch.setenv(key, value)
+    with pytest.raises(capture.CaptureError, match='different capture settings'):
+        backend.start()
+
+
+def test_new_linux_state_directory_is_private(tmp_path):
+    import stat
+    root = tmp_path / 'private-hub'
+    backend = LinuxHub(root)
+    try:
+        backend.start()
+        assert stat.S_IMODE(root.stat().st_mode) == 0o700
+        assert stat.S_IMODE((root / 'capture.sock').stat().st_mode) == 0o600
+    finally:
+        backend.stop()

@@ -11,13 +11,14 @@ from pathlib import Path
 
 from PIL import Image
 
-from ..capture import CaptureError, NativeApp, state_dir
+from ..capture import CaptureError, NativeApp
 
 
 class LinuxHub(NativeApp):
     # Reuse the platform-independent socket/status helpers, never NativeApp.start/stop.
     def __init__(self, root: Path | None = None):
-        super().__init__(root or state_dir(), binary=Path(sys.executable))
+        root = root or Path(os.environ.get("PS5MCP_STATE", Path.home() / ".local/state/ps5-mcp"))
+        super().__init__(root, binary=Path(sys.executable))
         self.log = self.root / "linux-hub.log"
         self._process = None
 
@@ -29,7 +30,7 @@ class LinuxHub(NativeApp):
     def start(self, **options) -> int:
         import fcntl
 
-        self.root.mkdir(parents=True, exist_ok=True)
+        self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         # Serialize independent MCP startup attempts before creating any child process.
         with (self.root / "start.lock").open("a") as lock:
             deadline = time.monotonic() + options.get("timeout", 15)
@@ -70,12 +71,13 @@ class LinuxHub(NativeApp):
             actual = status.get("video_config", {}).get("source", status.get("configured_source", status["source"]))
             config = status.get("video_config", {})
             conflicts = requested is not None and requested != actual
-            for key, value in (("input_format", video_format), ("size", video_size), ("fps", video_fps)):
+            for key, value in (("input_format", env.get("PS5MCP_VIDEO_FORMAT")),
+                               ("size", env.get("PS5MCP_VIDEO_SIZE")), ("fps", env.get("PS5MCP_VIDEO_FPS"))):
                 conflicts |= value is not None and str(value) != config.get(key)
-            if stale_s is not None:
-                conflicts |= float(stale_s) != status.get("stale_after_s")
-            if viewer_port not in (None, 0):
-                conflicts |= status.get("viewer_url") != f"http://127.0.0.1:{viewer_port}/"
+            if (configured_stale := env.get("PS5MCP_VIDEO_STALE_S")) is not None:
+                conflicts |= float(configured_stale) != status.get("stale_after_s")
+            if port:
+                conflicts |= status.get("viewer_url") != f"http://127.0.0.1:{port}/"
             if host is not None:
                 conflicts |= status["pad"].get("host") != host
             if padd_port is not None:
@@ -96,7 +98,7 @@ class LinuxHub(NativeApp):
                             env.get("PS5MCP_VIDEO_FPS"), float(env.get("PS5MCP_VIDEO_STALE_S", "2"))).validate()
             except ValueError as exc:
                 raise CaptureError(f"Invalid capture settings: {exc}") from exc
-        self.root.mkdir(parents=True, exist_ok=True)
+        self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         command = [sys.executable, "-m", "ps5mcp.linux.hub", "--state-dir", str(self.root)]
         if video is not None:
             command += ["--video", video]

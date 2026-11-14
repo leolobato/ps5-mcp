@@ -18,13 +18,13 @@ and [controller results](docs/linux-controller-hardware-validation.md).
 ## Linux installation and usage
 
 Requires Python 3.12+, uv, FFmpeg with V4L2/lavfi/MJPEG support, Make and a C
-compiler for the offline padd host tests. Install these through your Linux
+compiler for the offline padd host tests. These test/build tools are not needed
+to run a preinstalled Python wheel; runtime requires Python and FFmpeg. Install these through your Linux
 package manager. No Xcode, macOS app or Remote Play build is needed for this backend.
 
 ```sh
-git clone https://github.com/isaacm0880/ps5-mcp-linux.git
-cd ps5-mcp-linux
-git switch feat/linux-support
+git clone https://github.com/leolobato/ps5-mcp.git
+cd ps5-mcp
 uv sync --locked
 make check-linux
 ```
@@ -83,13 +83,17 @@ export PS5_HOST=YOUR_PS5_IP
 export PS5MCP_PAD_PORT=9305
 export PS5MCP_ALLOW_CONSOLE=1
 uv run ps5mcp capture start
-uv run ps5mcp capture status
+uv run ps5mcp controller status   # JSON connection, version and capture telemetry
+uv run ps5mcp controller ready    # temporary claim, release and wire-state check
 uv run ps5mcp serve               # MCP stdio entry point for your MCP client
 ```
 
-Configure your MCP client to launch `uv run --directory /absolute/path/ps5-mcp-linux
+Configure your MCP client to launch `uv run --directory /absolute/path/ps5-mcp
 ps5mcp serve`, passing the same environment variables. Use the `status`, `snapshot`,
-`claim_console`, controller input, `release_all` and `release_console` tools.
+`claim_console`, `controller_ready`, controller input, `release_all` and
+`release_console` tools. For a guarded Linux button press, use
+`press(button="right", require_claim=True, snapshot_after_ms=500)` after inspecting
+a fresh `snapshot`. The hub checks ownership immediately before applying input.
 Inspect a fresh screen before input. Linux leaves controller assignment prompts
 to the user. Closing an MCP session releases its input; `uv run ps5mcp capture stop`
 shuts down the shared hub and capture, leaving the payload running.
@@ -101,11 +105,9 @@ handling have offline regression coverage; active-hold disconnect/watchdog recov
 has not been tested on the console. Automatic assignment, Linux Remote Play,
 audio, native GUI, frame metering and `watch_change` are unsupported.
 
-Playden integration is unfinished. The live tests observed an already-running
-Playden screen and navigated back to system home; they did not establish a Playden
-library/package API or validate installation, launching or packaging workflows.
-Minecraft Playden Packager is a separate project and is unchanged. App commands
-have mock coverage only; do not infer complete Playden support from controller input.
+Application-specific menu automation, configuration APIs and log collection are
+outside the Linux backend. Console launch/close/home commands have offline mock
+coverage only. They are separate from the bounded controller actions tested live.
 
 See [Linux controller behavior and limits](docs/linux-controller.md) for claims,
 release handling and unsupported operations. The remaining README sections describe

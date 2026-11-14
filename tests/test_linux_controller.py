@@ -78,6 +78,9 @@ class FakePadd:
                             elif kind == p.Type.PING and not fake.suppress_ping:
                                 token = struct.unpack("<I", payload)[0]
                                 send(p.Type.PING, p._PONG.pack(token, 1, 0x10A, 100, 1000, flags, 0, 0, 0))
+                            elif kind == p.Type.GET_STATE:
+                                state = fake.states[-1][1] if fake.states else p.PadState()
+                                self.request.sendall(p.encode_state(0, state))
                             elif kind == p.Type.GET_USERS:
                                 payload = struct.pack("<ii", 0, 11)
                                 for i in range(p.LOGIN_USERS):
@@ -628,3 +631,123 @@ async def test_mcp_status_uses_cache_during_pending_command(hub, fake, monkeypat
         client.close()
         server.runtime.stop()
     assert errors
+
+
+def test_public_verification_requires_claim_and_neutral(hub, fake):
+    a, b = connect(hub), connect(hub)
+    try:
+        with pytest.raises(ConsoleInUse):
+            a.call('controller_verify')
+        assert a.claim('verify')['granted']
+        result = a.call('controller_verify', wait=1)
+        assert result['neutral'] and result['hello']['protocol'] == 1
+        with pytest.raises(ConsoleInUse):
+            b.call('controller_verify')
+        a.release_all()
+        assert a.call('controller_verify')['neutral']
+        assert fake.commands == []
+    finally:
+        a.close()
+        b.close()
+
+
+def test_guarded_press_requires_explicit_claim(hub):
+    a = connect(hub)
+    try:
+        with pytest.raises(ConsoleInUse):
+            a.call('press', state={'buttons': 1}, hold_ms=20, require_claim=True)
+        a.claim('guarded')
+        a.call('press', state={'buttons': 1}, hold_ms=20, require_claim=True)
+        assert a.call('controller_verify')['neutral']
+    finally:
+        a.close()
+
+
+async def test_ready_refuses_native_backend_before_releasing(monkeypatch):
+    from types import SimpleNamespace
+    def forbidden():
+        pytest.fail('Must not obtain/release native controller for Linux-only readiness')
+    monkeypatch.setattr(server, 'runtime', SimpleNamespace(capture=object(), app=forbidden))
+    assert 'Linux backend' in await server.controller_ready()
+
+
+def test_cli_ready_reports_non_neutral_as_failure(monkeypatch):
+    from types import SimpleNamespace
+
+    from ps5mcp import cli
+    calls = []
+    async def claim(*args, **kwargs):
+        return 'claimed'
+    async def ready(*args, **kwargs):
+        return {'neutral': False}
+    monkeypatch.setattr(server, 'runtime', SimpleNamespace(start=lambda: calls.append('start'),
+                                                          stop=lambda: calls.append('stop')))
+    monkeypatch.setattr(server, 'claim_console', claim)
+    monkeypatch.setattr(server, 'controller_ready', ready)
+    assert cli.main(['controller', 'ready']) == 1
+    assert calls == ['start', 'stop']
+
+
+async def test_public_guarded_press_and_cancellation(hub, fake, monkeypatch):
+    monkeypatch.setenv('PS5MCP_STATE', str(hub.root))
+    monkeypatch.setattr(server, 'runtime', server.Runtime())
+    server.runtime.start()
+    try:
+        refused = await server.press('right', require_claim=True)
+        assert refused.startswith('in use:')
+        await server.claim_console('guarded MCP regression')
+        await server.press('right', hold_ms=20, require_claim=True)
+        assert (await server.controller_ready())['neutral']
+        task = asyncio.create_task(server.press('left', hold_ms=1000, require_claim=True))
+        assert await asyncio.to_thread(wait, lambda: fake.states[-1][1].buttons == p.BUTTONS['left'])
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert await asyncio.to_thread(wait, lambda: fake.states[-1][1].is_neutral())
+    finally:
+        server.runtime.stop()
+
+
+def test_wire_verification_timeout_recovers_without_input_replay(hub, fake, monkeypatch):
+    a = connect(hub)
+    try:
+        a.claim('wire timeout')
+        link = hub.controller.link()
+        def timeout(*args, **kwargs):
+            raise PadError('wire state timeout')
+        monkeypatch.setattr(link, 'get_state', timeout)
+        before = fake.counter
+        with pytest.raises(AppError, match='wire state timeout'):
+            a.call('controller_verify', wait=1)
+        assert wait(lambda: fake.counter > before and hub.controller.status().connected)
+        assert a.call('controller_verify', wait=1)['neutral']
+        assert all(state.is_neutral() for _, state in fake.states)
+    finally:
+        a.close()
+
+
+def test_wire_verification_rechecks_ownership_after_wait(hub, monkeypatch):
+    import concurrent.futures
+    a, b = connect(hub), connect(hub)
+    entered, unblock = threading.Event(), threading.Event()
+    link = hub.controller.link()
+    original = link.get_state
+    def delayed(*args, **kwargs):
+        entered.set()
+        assert unblock.wait(2)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(link, 'get_state', delayed)
+    try:
+        a.claim('first')
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            future = pool.submit(a.call, 'controller_verify', wait=1)
+            assert entered.wait(1)
+            a.unclaim()
+            assert b.claim('second')['granted']
+            unblock.set()
+            with pytest.raises(AppError, match='Ownership changed'):
+                future.result(timeout=3)
+    finally:
+        unblock.set()
+        a.close()
+        b.close()

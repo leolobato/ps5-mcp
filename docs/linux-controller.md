@@ -1,11 +1,9 @@
-# Linux padd controller integration (Phase 3)
+# Linux padd controller integration
 
-For Phase 3.5 assignment, Cross/PS, system-home navigation, D-pad and hold-cancellation
-results, see [live hardware validation](linux-controller-hardware-validation.md).
-
-Phase 3 is validated against localhost protocol fixtures and the compiled padd-host
-recording stub only. No real PS5 connection or input was used. Capture hardware was
-not accessed during this phase. The macOS Swift implementation is unchanged.
+For controller assignment, Cross/PS, system-home navigation, D-pad and
+hold-cancellation results, see [live hardware validation](linux-controller-hardware-validation.md).
+Offline coverage uses localhost protocol fixtures and the compiled padd-host
+recording stub. The macOS Swift implementation is unchanged.
 
 ## Explicit configuration and offline default
 
@@ -13,7 +11,7 @@ The default is offline. Setting `PS5_HOST` alone does not create a padd connecti
 Both an explicit host and `PS5MCP_ALLOW_CONSOLE=1` are required. The TCP port defaults
 to 9305 and can be changed with `PS5MCP_PAD_PORT`.
 
-For a separately authorised validation, configure the hub and each MCP client with:
+To enable controller access, configure the hub and each MCP client with:
 
 ```text
 PS5MCP_BACKEND=linux
@@ -23,9 +21,8 @@ PS5MCP_PAD_PORT=9305
 PS5MCP_STATE=<shared state directory>
 ```
 
-These are configuration instructions, not permission to connect. No real endpoint
-has been configured or tested as part of Phase 3. `capture start --host ...
---padd-port ...` can supply the endpoint, but still requires the environment opt-in.
+`capture start --host ... --padd-port ...` can supply the endpoint, but still
+requires the environment opt-in.
 A missing host or invalid port fails before starting a connection. There is no
 network discovery, account preparation, payload loading or pairing.
 
@@ -49,7 +46,8 @@ authentication boundary against deliberately crafted requests.
 | Sharing | `claim_console`, `release_console`, FIFO waiting and idle expiry |
 | Virtual controllers | `connect_controller`, `disconnect_controller`, `use_controller` when padd advertises support |
 | Basic console commands | `home`, `close_app`, `launch` mapped to existing padd commands; mock-tested only |
-| Diagnostics | Cached controller/user/connection data in `status`; read-only ping |
+| Diagnostics | Cached controller/user/connection data in `status`; Linux `controller_ready` for a claimed wire-state check |
+| Guarded input | Linux `press(..., require_claim=True)` refuses an absent/lost claim before input |
 | Visual tools | Existing shared capture, snapshots, templates and viewer |
 
 Virtual-controller connect selects the newly added controller. Linux deliberately
@@ -59,8 +57,8 @@ restoration of additional controllers after padd restarts remain unsupported.
 
 Payload lifecycle, uninstall and arbitrary console commands are not accepted by
 the Linux hub. Remote Play keyboard/GUI features remain unsupported. Existing
-file-transfer/installer code is outside Phase 3 and was not exercised against a
-console; this phase does not grant permission to use it.
+file-transfer/installer code has offline fixture coverage only on Linux; those
+operations are separate from capture and controller readiness.
 
 ## Connection and input safety
 
@@ -106,11 +104,11 @@ another session owns the claim.
 
 Without an explicit claim, the first active input session owns input until it
 releases or expires. A competing session gets an `in use`/`leased` response rather
-than having its buttons or opposing axes merged into the first session. This is a
-safety change from the Phase 1 Linux behavior. Claim the console for an entire
+than having its buttons or opposing axes merged into the first session. Claim the console for an entire
 multi-step task, including pauses, to prevent another agent acting between steps.
 
-Each session has one bounded work queue. EOF and emergency release are handled
+Each session has a bounded work queue and a bounded reply queue. A slow
+subscriber is disconnected without blocking the hub lock or neutral cleanup. EOF and emergency release are handled
 independently of a long hold or command, and network waits do not hold the hub lock.
 Read-only status remains responsive during command timeouts. A command already
 sent cannot be undone by cancellation; timeout means its outcome may be unknown.
@@ -149,8 +147,7 @@ stub, synthetic capture and local HTTP/FTP fixtures.
 No packages, personal configuration, console files or GitHub state are changed by
 this validation. Real PS5 validation remains a separate, explicitly authorised step.
 
-Phase 3 final result: **179 Linux regression cases passed**, including 24 new
-controller cases. The 15 warnings came from existing anonymous-FTP fixtures.
-Ruff, Python compilation and whitespace checks passed. No type checker is
-configured or installed in this checkout. The local JUnit report is saved at
-`build/validation-phase3/regressions.xml` (gitignored).
+Run the commands above for counts on the current checkout. Native Swift/app tests
+require macOS and Xcode; their Linux skips do not establish native compatibility.
+No Python type checker is configured. Build artifacts and raw hardware evidence
+belong in ignored local directories and must not be included in a source PR.

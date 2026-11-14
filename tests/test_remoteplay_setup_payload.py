@@ -4,6 +4,7 @@ import hashlib
 import json
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -11,13 +12,15 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "payload/remoteplay-setup"
+# Clang is also the macOS host compiler; keep strict warnings on both hosts.
+CC = shutil.which("clang") or "cc"
 
 
 @pytest.fixture(scope="module")
 def helper(tmp_path_factory):
     build = tmp_path_factory.mktemp("setup-helper")
     executable = build / "setup-host"
-    subprocess.run(["cc", "-std=c11", "-D_DARWIN_C_SOURCE", "-D_DEFAULT_SOURCE",
+    subprocess.run([CC, "-std=c11", "-D_DARWIN_C_SOURCE", "-D_DEFAULT_SOURCE",
                     "-Wall", "-Wextra", "-Werror", "-fsanitize=undefined", "-g",
                     *[str(SOURCE / name) for name in ("setup.c", "api.c", "files.c", "host_test.c")],
                     "-o", str(executable)], check=True)
@@ -87,7 +90,7 @@ def test_failed_recovery_blocks_retry_instead_of_claiming_success(helper):
 @pytest.fixture(scope="module")
 def api(tmp_path_factory):
     library = tmp_path_factory.mktemp("setup-api") / "api.dylib"
-    subprocess.run(["cc", "-dynamiclib", str(SOURCE / "api.c"), str(SOURCE / "setup.c"),
+    subprocess.run([CC, *(["-dynamiclib"] if sys.platform == "darwin" else ["-shared", "-fPIC"]), str(SOURCE / "api.c"), str(SOURCE / "setup.c"),
                     "-o", str(library)], check=True)
     lib = ctypes.CDLL(str(library))
     lib.rp_parse_form.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_uint32),
@@ -129,7 +132,7 @@ def test_vendored_source_and_template_assets_match_pinned_manifest():
 @pytest.fixture(scope="module")
 def http_helper(tmp_path_factory):
     executable = tmp_path_factory.mktemp("setup-http") / "http-host"
-    subprocess.run(["cc", "-std=c11", "-D_DARWIN_C_SOURCE", "-D_DEFAULT_SOURCE",
+    subprocess.run([CC, "-std=c11", "-D_DARWIN_C_SOURCE", "-D_DEFAULT_SOURCE",
                     "-Wall", "-Wextra", "-Werror", "-fsanitize=undefined",
                     *[str(SOURCE / name) for name in ("setup.c", "api.c", "files.c", "admission.c", "http_test.c")],
                     "-o", str(executable)], check=True)
@@ -396,7 +399,7 @@ int rp_test_write_report(const char *path,const unsigned char *data,size_t size)
 }
 ''')
     executable = tmp_path / "diagnostic-metadata"
-    subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-I", str(SOURCE),
+    subprocess.run([CC, "-std=c11", "-Wall", "-Wextra", "-Werror", "-I", str(SOURCE),
                     "-Drp_file_write=rp_test_write_report", str(SOURCE / "diagnostic_main.c"),
                     str(stub), "-o", str(executable)], check=True)
     import os

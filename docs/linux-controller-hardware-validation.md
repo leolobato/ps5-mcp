@@ -28,15 +28,13 @@ socket observations, not physical display/input latency. Controller 1 remains
 registered in the running payload after disconnect; this is its expected lifecycle.
 
 The console was left at system home with neutral input. No unexpected behavior,
-game launch, settings/file change or payload deployment occurred. The existing
-Playden app was observed, not launched or modified. Minecraft Playden Packager
-was untouched.
+game launch, settings/file change or payload deployment occurred. The existing console application was observed without launch or modification.
 
 ## Limits and regression evidence
 
 Live coverage is deliberately bounded. Analogue/touch input, multiple controllers,
 active-hold TCP failure, watchdog recovery, launch/close/home command mappings and
-Playden workflows are not established by these hardware results. Mock tests cover
+Application-specific workflows are not established by these hardware results. Mock tests cover
 input contention, ACK timeouts, session cancellation, reconnect neutrality,
 sequence invalidation and command mapping. Automatic profile assignment is unsupported.
 

@@ -1,12 +1,13 @@
 """Compile production bridge against real pinned headers, substituting only the network backend."""
 import subprocess
+import sys
 from pathlib import Path
 
 
 def test_native_bridge_lifecycle(tmp_path):
     root = Path(__file__).resolve().parents[1]
     binary = tmp_path / "bridge-tests"
-    subprocess.run(["clang", "-std=c11", "-Wall", "-Wextra", "-Werror", "-pthread", "-I", str(root / "app"), "-I", str(root / "third-party/chiaki-ng/lib/include"), str(root / "app/RemotePlayBridge.c"), str(root / "tests/native/RemotePlayBridgeTests.c"), "-o", str(binary)], check=True)
+    subprocess.run(["clang", "-std=c11", *(["-D_DEFAULT_SOURCE"] if sys.platform == "linux" else []), "-Wall", "-Wextra", "-Werror", "-pthread", "-I", str(root / "app"), "-I", str(root / "third-party/chiaki-ng/lib/include"), str(root / "app/RemotePlayBridge.c"), str(root / "tests/native/RemotePlayBridgeTests.c"), "-o", str(binary)], check=True)
     subprocess.run([str(binary)], check=True, timeout=15)
 
 

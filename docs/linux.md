@@ -129,7 +129,7 @@ Other players/consumers may need their own reconnect handling.
 
 The [upstream v4l2loopback documentation](https://github.com/v4l2loopback/v4l2loopback)
 describes a kernel module that exposes application-generated video as a virtual
-V4L2 camera. It needs a module built for the running CachyOS kernel; DKMS needs
+V4L2 camera. It needs a module built for the running Linux kernel; DKMS needs
 matching kernel headers. `exclusive_caps=1` advertises output capability until a
 producer attaches, then capture capability to readers. Start the producer before
 selecting the virtual camera in the viewer.
@@ -162,11 +162,10 @@ Console networking is disabled by default even with `PS5_HOST` set. An explicit
 `PS5MCP_PAD_PORT` defaults to 9305. Capture does not require console access.
 Changing the endpoint or enabling an offline hub requires an explicit restart.
 
-The Phase 3 controller manager supports ACK-checked input, cancellable holds,
+The controller manager supports ACK-checked input, cancellable holds,
 sticks/triggers, sequences, virtual-controller management, FIFO claims and cached
 status. Competing unclaimed input is rejected. Reconnects start neutral and never
-resume old sequences. Phase 3 used local mocks/stubs. The authorised Phase 3.5
-live runs verified handshake, existing-controller connection, profile assignment,
+resume old sequences. The recorded live runs verified handshake, existing-controller connection, profile assignment,
 short Cross/PS presses and acknowledged neutral cleanup. A resumed run verified
 a long PS hold to system home, short D-pad Left/Right and early timed-hold
 cancellation. Physical active-hold disconnect/watchdog recovery remains untested.
@@ -191,3 +190,84 @@ PS5, kernel module or personal configuration is touched.
 
 Native app/framework tests skip on Linux. Existing Remote Play helper/bridge
 build limitations remain outside this target.
+
+## Reconnecting a new controller session
+
+Use the same `PS5MCP_STATE` as the running hub. After updating the Python hub
+implementation, stop/start only the local capture hub to load the new code; a
+running hub continues to use its original code. This does not redeploy padd. `ps5mcp controller status`
+prints JSON controller/capture/claim telemetry, including the payload version,
+protocol handshake and connection error. `ps5mcp controller ready --wait-s 8`
+claims the console for this CLI connection, releases input, waits for the shared
+hub's existing automatic padd reconnect loop and queries the actual wire state.
+It reports buttons, axes, triggers, touches and `neutral`. Its claim is released
+when the CLI client closes. It never deploys or restarts padd.
+
+In MCP, use `status()`, `claim_console(reason)`, `controller_ready(wait_s=8)`,
+then `playden_observe()`. Inspect the image before `playden_step`; use
+`playden_verify` for the final screen. `controller_ready` requires ownership,
+returns the protocol handshake and ping counters, and defaults to releasing
+input before checking. `release=false` inspects without releasing. A false
+neutral result means navigation must wait for release and successful verification.
+For generic guarded input, inspect a fresh `snapshot`, then call
+`press(button="right", hold_ms=80, require_claim=True, snapshot_after_ms=500)`.
+The hub rechecks ownership after connection waits and immediately before applying
+input. Inspect the returned image before another action. Image interpretation is
+performed by the calling agent; the generic backend does not identify screens or
+approve focused controls automatically. `require_claim` defaults to false to retain
+the existing cross-platform API behavior, and true is currently Linux-only.
+
+The existing `connect_controller`, `disconnect_controller`, and `use_controller`
+tools manage virtual controller assignment, not TCP payload lifecycle. Normal
+`status`, `release_all`, `claim_console`, and `release_console` already existed.
+Readiness is Linux-only and refuses a native backend before releasing any input.
+CLI readiness returns failure when the actual wire state is non-neutral. A
+connection alone does not assign a controller to a PS5 user; inspect `status` and
+use the existing assignment tools or the console's user picker as appropriate.
+
+If connection fails, inspect `controller status` for host, port and transport
+error, check that the configured payload is reachable, then retry readiness.
+A stale disconnected link is replaced by the hub's automatic reconnect loop;
+readiness never resumes old held inputs. Offline hubs require explicit local
+restart with `PS5MCP_ALLOW_CONSOLE=1` and `PS5_HOST`; setting those variables on
+a new client cannot enable an already-running offline hub. Device configuration
+conflicts require stopping only the local hub before starting it with the
+intended capture mode. Do not use `padd start` to repair a client connection.
+
+Additional hardware validation confirmed public readiness reporting with protocol 1 /
+padd 1.10, an actual neutral wire state, fresh physical HDMI frames and harmless
+screenshot-verified navigation through registered MCP tools. Only the local hub
+was restarted to load code; the running console application and padd were preserved.
+New audit fixes have offline coverage; no hardware test was repeated for this PR audit.
+
+## Full host validation and package checks
+
+`make check-linux` runs the core offline Linux regression set. For the broader
+Python/C host suite, install Clang and initialize the pinned header submodule:
+
+```sh
+git submodule update --init --depth 1 third-party/chiaki-ng
+uv run --locked pytest -q -ra
+uv lock --check
+uv build
+```
+
+Some tests compile C host fixtures with Clang; they do not execute payloads on a
+console. The full suite skips macOS Swift/framework/app checks on Linux and skips
+the PS5 ELF check when the pinned SDK payload was not built. Xcode/macOS testing
+is still required before claiming native app compatibility. No Python type checker
+is configured. Ruff, compile/import checks and wheel installation are separate
+from native validation.
+
+Tests isolate their state directory, clear inherited console/capture configuration
+and reject non-loopback Python socket connections. Controller fault tests use
+local protocol fixtures; video tests use generated frames. No console deployment,
+physical device or personal configuration is required by the offline suite.
+
+Local API sockets are mode 0600; the built-in viewer binds only to 127.0.0.1.
+New Linux state directories are mode 0700; existing directory permissions are retained.
+Ensure an existing state directory is also private. The viewer has no authentication
+and serves private video/status to local processes;
+do not forward its port to untrusted users. State directories can contain account
+telemetry and captured frames and should be private. Slow local subscribers have
+bounded output queues and are disconnected instead of blocking input cleanup.
