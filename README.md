@@ -490,7 +490,9 @@ ships, including a new padd, and tag it `v<version>`.
 
 ## License
 
-MIT, see [LICENSE](LICENSE). The virtual-pad interface values come from
+AGPL-3.0-only, see [LICENSE](LICENSE). Code written before the Remote Play source keeps its MIT notice in
+[third-party/PS5-MCP-MIT-NOTICE.txt](third-party/PS5-MCP-MIT-NOTICE.txt); dependencies keep their own licenses
+([notices](third-party/README.md)). The virtual-pad interface values come from
 [FGG-XSense](https://github.com/FGGstore/FGG-XSense) and the launch parameter layout from zftpd; this code is a
 separate implementation.
 
