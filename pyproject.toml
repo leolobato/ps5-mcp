@@ -33,7 +33,7 @@ packages = ["src/ps5mcp"]
 [tool.hatch.build.targets.sdist]
 exclude = [
     "/build", "/dist", "/.deps", "/.venv", "/screenshots", "/validation-output",
-    "/results", "/credentials", "/playden-evidence", "/.env*", "/local.mk",
+    "/results", "/credentials", "/.env*", "/local.mk",
     "/app/Configuration/LocalSigning.xcconfig", "/*.key", "/*.pem", "/*.p12", "/*.pfx",
 ]
 

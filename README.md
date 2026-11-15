@@ -5,113 +5,11 @@
 # PS5 MCP
 
 See and control a jailbroken PS5 from an MCP agent or your keyboard, with live video and audio.
-The macOS app is the full implementation. Linux has a headless Python hub for
-shared V4L2/FFmpeg HDMI capture, screenshots, a local MJPEG viewer and padd input.
-Physical 1080p60 capture and bounded controller actions have been tested; see
-[Linux setup](docs/linux.md), [capture results](docs/linux-hardware-validation.md)
-and [controller results](docs/linux-controller-hardware-validation.md).
+It runs on macOS; a headless [Linux backend](#linux) covers capture, screenshots and controller input.
 
 <p align="center">
   <img src="assets/screenshots/app.png" width="1000" alt="The PS5 MCP app: live video of the Playden library on the PS5, next to a sidebar with capture, console, launch and controller controls">
 </p>
-
-## Linux installation and usage
-
-Requires Python 3.12+, uv, FFmpeg with V4L2/lavfi/MJPEG support, Make and a C
-compiler for the offline padd host tests. These test/build tools are not needed
-to run a preinstalled Python wheel; runtime requires Python and FFmpeg. Install these through your Linux
-package manager. No Xcode, macOS app or Remote Play build is needed for this backend.
-
-```sh
-git clone https://github.com/leolobato/ps5-mcp.git
-cd ps5-mcp
-uv sync --locked
-make check-linux
-```
-
-The Linux hub is Python: `uv sync --locked` installs it into the project environment.
-For a distributable Python package, use `uv build` (output stays in `dist/`).
-The default `make`/`make check` targets build the macOS app; use the Linux targets above.
-
-Start with generated video and console access disabled:
-
-```sh
-export PS5MCP_BACKEND=linux
-export PS5MCP_ALLOW_CONSOLE=0
-export PS5MCP_VIDEO='lavfi:testsrc2=size=1280x720:rate=30'
-uv run ps5mcp capture start
-uv run ps5mcp view                 # prints the loopback browser viewer URL
-uv run ps5mcp snapshot -o /tmp/ps5-synthetic.png
-uv run ps5mcp capture status
-uv run ps5mcp capture stop
-```
-
-For physical video, connect the PS5 HDMI output to a Linux-compatible V4L2 capture
-card. The HDMI signal must be capturable (HDCP already disabled for this setup).
-Give your user permission to open the device, and close other viewers using the
-physical input. Select the card's video capture node and a supported mode explicitly;
-metadata nodes cannot supply pictures. For example:
-
-```sh
-export PS5MCP_VIDEO=/dev/v4l/by-id/YOUR-CAPTURE-CARD-video-index0
-export PS5MCP_VIDEO_FORMAT=mjpeg
-export PS5MCP_VIDEO_SIZE=1920x1080
-export PS5MCP_VIDEO_FPS=60
-uv run ps5mcp capture start
-uv run ps5mcp view
-```
-
-One hub owns the card; MCP sessions and browser viewers share its cached frames.
-All clients must share `PS5MCP_STATE` (default `~/.local/state/ps5-mcp`). Stop the hub
-before changing configuration. Linux captures video only; audio and keyboard GUI
-control are unfinished.
-
-Controller input requires padd already running on a compatible jailbroken PS5 and
-TCP access to its port (9305 by default). Padd 1.10 was tested. Loading padd is a
-separate, explicit console operation; capture startup never deploys it. To build
-only `build/padd.elf`, provision the checksum-pinned PS5 Payload SDK v0.43 under
-`.deps/ps5-payload-sdk` (or set `PS5_PAYLOAD_SDK`), install the pinned LLVM 18.1.8
-with `llvm-config-18` available (or set `LLVM_CONFIG`), then run
-`make build/padd.elf`. See `toolchain.lock.json`; do not run the macOS app build.
-
-After configuring your own console address, explicitly enable the connection in
-the hub and each client process:
-
-```sh
-uv run ps5mcp capture stop
-export PS5_HOST=YOUR_PS5_IP
-export PS5MCP_PAD_PORT=9305
-export PS5MCP_ALLOW_CONSOLE=1
-uv run ps5mcp capture start
-uv run ps5mcp controller status   # JSON connection, version and capture telemetry
-uv run ps5mcp controller ready    # temporary claim, release and wire-state check
-uv run ps5mcp serve               # MCP stdio entry point for your MCP client
-```
-
-Configure your MCP client to launch `uv run --directory /absolute/path/ps5-mcp
-ps5mcp serve`, passing the same environment variables. Use the `status`, `snapshot`,
-`claim_console`, `controller_ready`, controller input, `release_all` and
-`release_console` tools. For a guarded Linux button press, use
-`press(button="right", require_claim=True, snapshot_after_ms=500)` after inspecting
-a fresh `snapshot`. The hub checks ownership immediately before applying input.
-Inspect a fresh screen before input. Linux leaves controller assignment prompts
-to the user. Closing an MCP session releases its input; `uv run ps5mcp capture stop`
-shuts down the shared hub and capture, leaving the payload running.
-
-Tested live: padd handshake, existing-profile assignment, short Cross/PS presses,
-one long PS hold to verified system home, short D-pad Left/Right, early hold
-cancellation and acknowledged neutral cleanup. Reconnect, contention and fault
-handling have offline regression coverage; active-hold disconnect/watchdog recovery
-has not been tested on the console. Automatic assignment, Linux Remote Play,
-audio, native GUI, frame metering and `watch_change` are unsupported.
-
-Application-specific menu automation, configuration APIs and log collection are
-outside the Linux backend. Console launch/close/home commands have offline mock
-coverage only. They are separate from the bounded controller actions tested live.
-
-See [Linux controller behavior and limits](docs/linux-controller.md) for claims,
-release handling and unsupported operations. The remaining README sections describe
-the upstream macOS app unless explicitly stated otherwise.
 
 ## Requirements
 
@@ -464,6 +362,15 @@ It replaces capture-card video/audio while `padd` continues controlling the cons
 full replacement acceptance remains pending; see [setup, validation status, and recovery](docs/remote-play.md).
 Chiaki-ng is pinned as a submodule and built statically for the app. PS5 MCP now uses AGPL-3.0-only;
 [dependency notices](third-party/README.md) retain their upstream licenses.
+
+## Linux
+
+A headless Python hub runs the same MCP server on Linux: shared V4L2/FFmpeg HDMI capture, screenshots, a local
+MJPEG browser viewer and padd controller input. Audio, the keyboard window, Remote Play, the frame meter and
+`watch_change` are not available there. Physical 1080p60 capture and short controller actions have been tested on
+the console. See [Linux setup](docs/linux.md), [capture results](docs/linux-hardware-validation.md),
+[controller behavior and limits](docs/linux-controller.md) and
+[controller results](docs/linux-controller-hardware-validation.md).
 
 ## Hardware runs
 
