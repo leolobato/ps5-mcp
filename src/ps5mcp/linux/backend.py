@@ -22,6 +22,19 @@ class LinuxHub(NativeApp):
         self.log = self.root / "linux-hub.log"
         self._process = None
 
+    start_options = ("video_format", "video_size", "video_fps", "stale_s", "viewer_port", "host", "padd_port")
+    browser_viewer = True
+    guarded_input = True
+
+    def console_allowed(self) -> bool:
+        return console_enabled()
+
+    def viewer_url(self) -> str | None:
+        return (self.status() or {}).get("viewer_url")
+
+    def capture_error(self) -> str | None:
+        return (self.status() or {}).get("capture_error")
+
     @property
     def client_type(self):
         from .controller import LinuxAppClient
@@ -150,6 +163,8 @@ class LinuxHub(NativeApp):
         return base64.b64decode(reply.pop("jpeg_base64")), reply
 
     def save_snapshot(self, destination, max_width=None):
+        if self.pid() is None:
+            self.start()
         data, _ = self.read_frame()
         destination = Path(destination)
         destination.parent.mkdir(parents=True, exist_ok=True)

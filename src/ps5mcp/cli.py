@@ -33,7 +33,7 @@ def _controller(args):
 
 
 def _devices(_args) -> int:
-    if sys.platform == "linux":
+    if backends.selected() == "linux":
         raise capture.CaptureError("Linux device selection is explicit: choose a /dev/v4l/by-id/ path and a supported capture mode")
     devices = capture.list_devices()
     print("video:", *(f"  {d}" for d in devices.video), sep="\n")
@@ -43,7 +43,7 @@ def _devices(_args) -> int:
 
 def _backend(args):
     if getattr(args, "backend", None) == "ffmpeg":
-        if sys.platform == "linux":
+        if backends.selected() == "linux":
             raise capture.CaptureError("Linux FFmpeg capture runs inside the shared hub; select --backend linux")
         return capture.Daemon()
     if getattr(args, "backend", None) in ("native", "linux"):
@@ -56,45 +56,42 @@ def _capture(args) -> int:
     name = type(backend).__name__
     if args.action == "start":
         options = {"video": args.video}
-        from .linux.backend import LinuxHub
-        if isinstance(backend, LinuxHub):
-            for field in ("video_format", "video_size", "video_fps", "stale_s", "viewer_port", "host", "padd_port"):
-                if (value := getattr(args, field, None)) is not None:
-                    options[field] = value
+        for field in backend.start_options:
+            if (value := getattr(args, field, None)) is not None:
+                options[field] = value
         if args.no_audio or args.audio is not None:
             options["audio"] = None if args.no_audio else args.audio
         pid = backend.start(**options)
         print(f"{name} running (pid {pid})")
-        if isinstance(backend, LinuxHub):
-            info = backend.status()
-            print(f"Live viewer: {info['viewer_url']}")
-            if info.get("capture_error"):
-                print(f"Capture: {info['capture_error']}")
+        _print_service(backend)
     elif args.action == "stop":
-        services = (backend,) if sys.platform == "linux" else (capture.NativeApp(), capture.Daemon())
+        services = (backend,) if backends.selected() == "linux" else (capture.NativeApp(), capture.Daemon())
         stopped = [type(b).__name__ for b in services if b.stop()]
         print(f"stopped {', '.join(stopped)}" if stopped else "not running")
     else:
         pid, age = backend.pid(), backend.frame_age()
         frame_status = f"frame age {age:.2f}s" if age is not None else "no frames yet"
         print(f"{name} running pid {pid}, {frame_status}" if pid else f"{name} not running")
-        from .linux.backend import LinuxHub
-        if pid and isinstance(backend, LinuxHub):
-            info = backend.status()
-            print(f"Live viewer: {info['viewer_url']}")
-            if info.get("capture_error"):
-                print(f"Capture: {info['capture_error']}")
-                return 1
+        if pid and _print_service(backend):
+            return 1
         return 0 if pid else 1
     return 0
 
 
+def _print_service(backend) -> bool:
+    """Print the browser viewer's URL and any capture error (Linux hub); True when capture is failing."""
+    if url := backend.viewer_url():
+        print(f"Live viewer: {url}")
+    if error := backend.capture_error():
+        print(f"Capture: {error}")
+    return error is not None
+
+
 def _view(args) -> int:
     backend = _backend(args)
-    from .linux.backend import LinuxHub
-    if isinstance(backend, LinuxHub):
+    if backend.browser_viewer:
         backend.start()
-        print(f"Live viewer: {backend.status()['viewer_url']}")
+        print(f"Live viewer: {backend.viewer_url()}")
         return 0
     if isinstance(backend, capture.NativeApp):
         pid = backend.start(visible=True)
@@ -119,8 +116,7 @@ def _running_app():
     if os.environ.get("PS5MCP_IN_APP") == "1":  # the app itself runs this CLI with its link paused
         return None
     try:
-        backend = backends.select()
-        return getattr(backend, "client_type", hub.AppClient)(backend.socket, client="cli")
+        return hub.client_for(backends.select(), "cli")
     except hub.AppNotRunning:
         return None
 
@@ -132,7 +128,7 @@ def _latency(args) -> int:
 
 def _control(args) -> int:
     """Show the PS5 app (keyboard control lives in its window); optionally record until Ctrl-C."""
-    if sys.platform == "linux":
+    if backends.selected() == "linux":
         raise capture.CaptureError("Linux keyboard control is not implemented; use view for video and MCP for input")
     import signal
     import threading
@@ -467,10 +463,9 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     try:
-        if sys.platform == "linux" and args.command in ("padd", "pad", "install", "get-pbs", "push", "pull", "latency"):
-            from .linux.backend import console_enabled
-            if not console_enabled():
-                raise capture.CaptureError("Console access disabled; Linux defaults to offline mode")
+        if (args.command in ("padd", "pad", "install", "get-pbs", "push", "pull", "latency")
+                and not backends.console_allowed()):
+            raise capture.CaptureError("Console access disabled; Linux defaults to offline mode")
         return args.func(args)
     except capture.CaptureError as exc:
         print(f"capture error: {exc}", file=sys.stderr)

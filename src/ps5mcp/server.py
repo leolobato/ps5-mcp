@@ -21,11 +21,12 @@ from importlib.metadata import version
 from pathlib import Path
 
 from mcp.server.mcpserver import Image, MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 
 from . import backends, capture, recording, stream, vision
 from . import protocol as p
 from .client import ConsoleInUse, HumanHasControl, PadError
-from .hub import AppClient, state_from_json, state_to_json
+from .hub import AppClient, client_for, state_from_json
 from .probe_runner import ConsoleError
 from .protocol import PadState
 
@@ -53,6 +54,7 @@ class Runtime:
 
     def start(self) -> None:
         self.capture = backends.select()
+        _use_tools(self.capture.guarded_input)
         with contextlib.suppress(capture.CaptureError, OSError):
             self.app()  # reported by status(); every tool retries
         if port := os.environ.get("PS5MCP_STREAM_PORT"):
@@ -65,7 +67,7 @@ class Runtime:
         with self._lock:
             if self._app is None or self._app.closed:
                 self.capture.start(visible=os.environ.get("PS5MCP_VIEW") == "1", host=HOST)
-                client = getattr(self.capture, "client_type", AppClient)(self.capture.socket, client=f"mcp-{os.getpid()}")
+                client = client_for(self.capture, f"mcp-{os.getpid()}")
                 client.on("state", self._on_state)
                 client.subscribe("state")
                 self._app = client
@@ -146,19 +148,9 @@ async def _apply_for(state: PadState, duration_ms: int, require_claim: bool = Fa
     _check_duration(duration_ms)
     app = await _app()
     try:
-        if require_claim:
-            from .linux.controller import LinuxAppClient
-            if not isinstance(app, LinuxAppClient):
-                raise PadError("Guarded presses require the Linux backend; claim_console is available on macOS")
-            await asyncio.to_thread(app.call, "press", state=state_to_json(state), hold_ms=duration_ms,
-                                    wait=LINK_WAIT_S, require_claim=True,
-                                    timeout=LINK_WAIT_S + duration_ms / 1000 + app.timeout)
-        else:
-            await asyncio.to_thread(app.press, state, duration_ms, LINK_WAIT_S)
+        await asyncio.to_thread(app.press_guarded if require_claim else app.press, state, duration_ms, LINK_WAIT_S)
     except asyncio.CancelledError:
-        from .linux.controller import LinuxAppClient
-        if isinstance(app, LinuxAppClient):
-            app.close()  # EOF cancels the hold, including an in-flight ACK wait.
+        app.abort_input()
         raise
 
 
@@ -176,10 +168,9 @@ def _errors(fn):
     @functools.wraps(fn)
     async def wrapper(*args, **kwargs):
         try:
-            if fn.__name__ in ("list_apps", "install", "push", "pull"):
-                from .linux.backend import LinuxHub, console_enabled
-                if isinstance(runtime.capture, LinuxHub) and not console_enabled():
-                    raise PadError("Console access disabled (offline mode)")
+            if (fn.__name__ in ("list_apps", "install", "push", "pull") and runtime.capture is not None
+                    and not runtime.capture.console_allowed()):
+                raise PadError("Console access disabled (offline mode)")
             return await fn(*args, **kwargs)
         except HumanHasControl as exc:
             return f"human has control: {exc}"
@@ -225,14 +216,18 @@ async def measure_frame_rate(seconds: float = 10.0) -> dict:
     return reply
 
 
-@mcp.tool(structured_output=False)
 @_errors
 async def press(button: str, hold_ms: int = 80, snapshot_after_ms: int | None = None, require_claim: bool = False):
-    """Press and release one button. Optionally return a frame afterwards. Linux require_claim=True
-    refuses input unless this session still owns the console at the point input is applied.
+    """Press and release one button (e.g. cross, circle, up, options). Optionally return a frame afterwards.
+    require_claim=True refuses input unless this session still owns the console at the point input is applied.
     """
     await _apply_for(PadState(buttons=p.button_mask([button])), hold_ms, require_claim)
     return await _result(f"pressed {button} for {hold_ms} ms", snapshot_after_ms)
+
+
+async def _press(button: str, hold_ms: int = 80, snapshot_after_ms: int | None = None):
+    """Press and release one button (e.g. cross, circle, up, options). Optionally return a frame afterwards."""
+    return await press(button, hold_ms, snapshot_after_ms)
 
 
 @mcp.tool(structured_output=False)
@@ -297,16 +292,11 @@ async def _run_steps(steps: list[dict], max_total_ms: int) -> int:
         raise ValueError(f"steps last {total} ms; the limit is {max_total_ms} ms")
     states = [(recording.step_to_state(step), _check_duration(int(step.get("duration_ms", 0)))) for step in steps]
     app = await _app()
-    from .linux.controller import LinuxAppClient
-    epoch = (await asyncio.to_thread(app.call, "begin_sequence"))["input_epoch"] if isinstance(app, LinuxAppClient) else None
+    epoch = await asyncio.to_thread(app.begin_sequence)
     deadline = time.monotonic()
     try:
         for index, (state, seconds) in enumerate(states):
-            wait = LINK_WAIT_S if index == 0 else 0.0
-            if isinstance(app, LinuxAppClient):
-                await asyncio.to_thread(app.set_sequence, state, wait, epoch)
-            else:
-                await asyncio.to_thread(app.set, state, wait)
+            await asyncio.to_thread(app.set_sequence, state, LINK_WAIT_S if index == 0 else 0.0, epoch)
             deadline += seconds
             await asyncio.sleep(max(0.0, deadline - time.monotonic()))
     finally:
@@ -733,19 +723,18 @@ async def status() -> dict:
     info["payload"]["controllers"] = hub.get("controllers")
     info["payload"]["login_users"] = hub.get("login_users")
     if link["connected"]:
-        if hub.get("backend") == "LinuxHub":
-            if hub.get("pong"):
-                info["payload"]["pong"] = hub["pong"]  # Cached read-only telemetry; never wait behind a command.
+        if "pong" in hub:  # the Linux hub caches it, so status never waits behind a command
+            if hub["pong"]:
+                info["payload"]["pong"] = hub["pong"]
         else:
             with contextlib.suppress(PadError):
                 info["payload"]["pong"] = await asyncio.to_thread(app.ping)
     info["capture"] = {"backend": hub.get("backend", "NativeApp"), "running": True, "source": hub["source"],
                        "frame_age_s": hub["frame_age"] if hub["frame_age"] >= 0 else None}
-    if hub.get("backend") == "LinuxHub":
-        for field in ("frame_sequence", "frame_timestamp", "frame_timestamp_unix", "capture_error",
-                      "ffmpeg_pid", "capture_starts", "stale_after_s", "video_config", "viewer_url"):
-            if field in hub:
-                info["capture"][field] = hub[field]
+    for field in ("frame_sequence", "frame_timestamp", "frame_timestamp_unix", "capture_error",
+                  "ffmpeg_pid", "capture_starts", "stale_after_s", "video_config", "viewer_url"):
+        if field in hub:  # Linux hub only
+            info["capture"][field] = hub[field]
     if hub.get("remote_play"):
         info["capture"]["remote_play"] = hub["remote_play"]  # state, readiness, keyboard.open for type_text
     if hub.get("frame_meter"):
@@ -759,7 +748,6 @@ async def status() -> dict:
     return info
 
 
-@mcp.tool(structured_output=False)
 @_errors
 async def controller_ready(wait_s: float = 8, release: bool = True) -> dict:
     """Linux: wait for the shared hub to reconnect to existing padd, release and verify wire neutral.
@@ -768,8 +756,7 @@ async def controller_ready(wait_s: float = 8, release: bool = True) -> dict:
     """
     if not 0 <= wait_s <= 15:
         raise ValueError("wait_s must be 0..15")
-    from .linux.backend import LinuxHub
-    if not isinstance(runtime.capture, LinuxHub):
+    if not getattr(runtime.capture, "guarded_input", False):
         raise PadError("controller_ready requires the Linux backend; use status on macOS")
     app = await _app()
     if not (await asyncio.to_thread(app.lease))["granted"]:
@@ -828,10 +815,22 @@ async def show_viewer() -> str:
     """Open the live video window for a human (keyboard in that window drives the console too)."""
     await _app()
     await asyncio.to_thread(runtime.capture.show)
-    from .linux.backend import LinuxHub
-    if isinstance(runtime.capture, LinuxHub):
-        return f"Live viewer: {runtime.capture.status()['viewer_url']}"
+    if url := await asyncio.to_thread(runtime.capture.viewer_url):
+        return f"Live viewer: {url}"
     return "viewer shown"
+
+
+def _use_tools(guarded: bool) -> None:
+    """Register the tools that differ by backend: claim-checked presses and controller_ready exist on Linux only."""
+    for name in ("press", "controller_ready"):
+        with contextlib.suppress(ToolError):  # not registered yet
+            mcp.remove_tool(name)
+    mcp.add_tool(press if guarded else _press, name="press", structured_output=False)
+    if guarded:
+        mcp.add_tool(controller_ready, structured_output=False)
+
+
+_use_tools(backends.selected() == "linux")
 
 
 def main() -> None:

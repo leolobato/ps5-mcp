@@ -4,27 +4,24 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
-from typing import Protocol
 
 from . import capture
 
+Backend = capture.Service
 
-class Backend(Protocol):
-    root: Path
-    latest: Path
-    socket: Path
 
-    def start(self, **options) -> int: ...
-    def stop(self, grace: float = 3) -> bool: ...
-    def pid(self) -> int | None: ...
-    def frame_age(self) -> float | None: ...
-    def refresh(self) -> None: ...
-    def show(self) -> None: ...
-    def watch_change(self, threshold: float = 6, timeout: float = 2) -> tuple[float, dict]: ...
+def selected() -> str:
+    """"linux" (the Python hub) or "native" (the macOS app): PS5MCP_BACKEND, else the platform's own."""
+    return os.environ.get("PS5MCP_BACKEND") or ("linux" if sys.platform == "linux" else "native")
+
+
+def console_allowed() -> bool:
+    """The Linux hub stays offline unless PS5MCP_ALLOW_CONSOLE=1; the macOS app always talks to the console."""
+    return selected() != "linux" or os.environ.get("PS5MCP_ALLOW_CONSOLE") == "1"
 
 
 def select(root: Path | None = None, name: str | None = None) -> Backend:
-    name = name or os.environ.get("PS5MCP_BACKEND") or ("linux" if sys.platform == "linux" else "native")
+    name = name or selected()
     if name == "linux":
         from .linux.backend import LinuxHub
         return LinuxHub(root)

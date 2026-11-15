@@ -1,8 +1,19 @@
 """Tests use isolated state and loopback services, never an inherited console endpoint."""
 import ipaddress
+import shutil
 import socket
+import tempfile
+from pathlib import Path
 
 import pytest
+
+
+@pytest.fixture
+def tmp_path():
+    # Unix socket paths are limited to 104 bytes on macOS; pytest's own tmp_path there is often longer.
+    path = Path(tempfile.mkdtemp(prefix="ps5t-", dir="/tmp")).resolve()
+    yield path
+    shutil.rmtree(path, ignore_errors=True)
 
 
 @pytest.fixture(autouse=True)

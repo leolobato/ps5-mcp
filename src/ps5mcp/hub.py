@@ -150,6 +150,20 @@ class AppClient:
         self.call("press", state=state_to_json(state), hold_ms=hold_ms, wait=wait,
                   timeout=wait + hold_ms / 1000 + self.timeout)
 
+    def press_guarded(self, state: PadState, hold_ms: int, wait: float = 2.0) -> None:
+        """Press only while this client still holds the console claim (the Linux hub checks it as input applies)."""
+        raise PadError("Guarded presses need the Linux backend; use claim_console and press")
+
+    def begin_sequence(self) -> int | None:
+        """Start a timed sequence; returns an epoch that later steps pass to set_sequence, or None."""
+        return None
+
+    def set_sequence(self, state: PadState, wait: float, epoch: int | None) -> None:
+        self.set(state, wait)
+
+    def abort_input(self) -> None:
+        """A tool call was cancelled mid-input; the app releases on its own."""
+
     def release(self) -> None:
         self.call("release")
 
@@ -209,4 +223,9 @@ def connect(root: Path | None = None, client: str | None = None, start: bool = T
         app.start(visible=visible, timeout=timeout)
     elif visible:
         app.show()
-    return getattr(app, "client_type", AppClient)(app.socket, client=client)
+    return client_for(app, client)
+
+
+def client_for(backend, client: str | None = None) -> AppClient:
+    """An API client of the kind `backend` (a capture.Service) speaks."""
+    return backend.client_type(backend.socket, client=client)

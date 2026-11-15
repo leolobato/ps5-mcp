@@ -137,7 +137,32 @@ def view_command(port: int = STREAM_PORT, ipc: Path | None = None) -> list[str]:
             "-fflags", "nobuffer", "-flags", "low_delay", "-framedrop", url]
 
 
-class Daemon:
+class Service:
+    """Defaults for a capture service; the Linux hub (linux/backend.py) overrides what it does differently."""
+
+    start_options: tuple[str, ...] = ()  # extra `capture start` flags the backend accepts, beyond video and audio
+    browser_viewer = False  # `view` prints a URL instead of opening a window
+    guarded_input = False  # the API supports claim-checked presses and wire-neutral verification
+
+    @property
+    def client_type(self):
+        from .hub import AppClient
+        return AppClient
+
+    def console_allowed(self) -> bool:
+        return True
+
+    def viewer_url(self) -> str | None:
+        return None
+
+    def capture_error(self) -> str | None:
+        return None
+
+    def save_snapshot(self, destination: Path, max_width: int | None = None) -> Path:
+        return _snapshot_from(self, destination, max_width)
+
+
+class Daemon(Service):
     def __init__(self, root: Path | None = None):
         self.root = root or state_dir()
         self.pidfile = self.root / "capture.pid"
@@ -219,7 +244,7 @@ def app_binary() -> Path:
     return (INSTALLED_APP if INSTALLED_APP.exists() else APP_BUNDLE) / "Contents/MacOS/PS5 MCP"
 
 
-class NativeApp:
+class NativeApp(Service):
     """The PS5 app (app/*.swift): capture card, the padd link, keyboard, and the local API on capture.sock."""
 
     def __init__(self, root: Path | None = None, binary: Path | None = None):
@@ -250,9 +275,10 @@ class NativeApp:
 
     def status(self) -> dict | None:
         try:
-            return self.request("status", timeout=1.0)[0]
+            replies = self.request("status", timeout=1.0)
         except OSError:
             return None
+        return replies[0] if replies else None  # a service shutting down can close without replying
 
     def pid(self) -> int | None:
         status = self.status()
@@ -391,12 +417,10 @@ def grab_direct(destination: Path, video: str | None = None, timeout: float = 10
 
 def snapshot(destination: Path, max_width: int | None = None, daemon: Daemon | NativeApp | None = None) -> Path:
     """Save the current frame as JPEG or PNG (by extension), optionally scaled down."""
-    daemon = daemon or backend()
-    from .linux.backend import LinuxHub
-    if isinstance(daemon, LinuxHub):
-        if daemon.pid() is None:
-            daemon.start()
-        return daemon.save_snapshot(destination, max_width)
+    return (daemon or backend()).save_snapshot(destination, max_width)
+
+
+def _snapshot_from(daemon: Daemon | NativeApp, destination: Path, max_width: int | None) -> Path:
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as scratch:
