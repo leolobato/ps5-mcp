@@ -326,3 +326,25 @@ async def test_input_follows_the_selected_controller(tmp_path, monkeypatch):
         server.runtime.stop()
         app.stop()
         daemon.stop()
+
+
+async def test_guarded_press_needs_this_sessions_claim(runtime):
+    refused = text(await server.mcp.call_tool("press", {"button": "right", "require_claim": True}))
+    assert refused.startswith("in use:") and "claim_console" in refused
+    assert p.BUTTONS["right"] not in reports(runtime)
+    await server.mcp.call_tool("claim_console", {"reason": "guarded press"})
+    result = await server.mcp.call_tool("press", {"button": "right", "hold_ms": 40, "require_claim": True})
+    assert "pressed right" in text(result)
+    assert p.BUTTONS["right"] in reports(runtime) and reports(runtime)[-1] == 0
+
+
+async def test_controller_ready_reads_the_wire_state(hub):
+    assert "claim_console" in text(await server.mcp.call_tool("controller_ready", {"wait_s": 2}))
+    await server.mcp.call_tool("claim_console", {"reason": "readiness"})
+    app = await server._app()
+    await asyncio.to_thread(app.set, p.PadState(buttons=p.BUTTONS["cross"]), 2.0)
+    held = await server.controller_ready(wait_s=2, release=False)
+    assert held["state"]["buttons"] == p.BUTTONS["cross"] and held["neutral"] is False
+    ready = await server.controller_ready(wait_s=2)
+    assert ready["neutral"] is True and ready["connected"] is True
+    assert ready["hello"]["protocol"] == p.VERSION and "pong" in ready

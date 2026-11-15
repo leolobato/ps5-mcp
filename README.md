@@ -194,12 +194,13 @@ Quit with **⌘Q** or `uv run ps5mcp capture stop`.
 | File transfer | `push`, `pull` |
 | Visual automation | `save_template`, `list_templates`, `wait_for`, `wait_for_change` |
 | Recording | `record_start`, `record_stop`, `list_recordings`, `play_recording` |
-| Sharing | `claim_console`, `release_console` |
+| Sharing | `claim_console`, `release_console`, `controller_ready` |
 
 Input tools can return a frame with `snapshot_after_ms`. `ps_button` presses the PS button (a tap opens the
 control center) and `home` suspends the running game; use `press("circle")` to back out of system screens. With Remote Play as
 the video source, `type_text` fills the text field whose on-screen keyboard is open. A game takes input only from the controller that launched it,
-so launch games with `launch` to control them through the MCP.
+so launch games with `launch` to control them through the MCP. After `claim_console`, `controller_ready` checks that
+padd holds a neutral controller, and `press(..., require_claim=True)` presses only while the claim is still yours.
 
 ### More players
 

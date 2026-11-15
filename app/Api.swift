@@ -195,7 +195,7 @@ extension Hub {
 
     /// Quick commands run in order on the connection's thread; blocking ones run concurrently.
     private func handle(_ cmd: String, _ request: [String: Any], _ conn: Connection) {
-        let blocking: Set<String> = ["press", "status", "watch_change", "command", "ping", "padd_start", "padd_stop", "padd_update", "snapshot",
+        let blocking: Set<String> = ["press", "controller_verify", "status", "watch_change", "command", "ping", "padd_start", "padd_stop", "padd_update", "snapshot",
                                      "rp_button", "rp_text", "rp_keyboard_close", "measure_frame_rate"]
         lease.touch(conn: conn.id)
         let work = {
@@ -295,7 +295,10 @@ extension Hub {
             let holdMS = request["hold_ms"] as? Int ?? 80
             guard holdMS > 0 && holdMS <= maxHoldMS else { throw BadInput("duration must be 1..\(maxHoldMS) ms") }
             try lease.check(conn: conn.id)
+            let guarded = request["require_claim"] as? Bool ?? false
+            if guarded { try lease.requireOwner(conn: conn.id) }
             _ = try requireLink(request, default: 2)
+            if guarded { try lease.requireOwner(conn: conn.id) }  // the claim can lapse while the link comes up
             let layer = conn.layer(request["client"] as? String)
             try controller.set(client: layer, state, epoch: epoch)
             Thread.sleep(forTimeInterval: Double(holdMS) / 1000)
@@ -303,6 +306,16 @@ extension Hub {
             Thread.sleep(forTimeInterval: releaseGapSeconds)
             try controller.checkInputEpoch(epoch)
             reply(conn, request, ["ok": true])
+        case "controller_verify":
+            // What padd actually holds, read once the current merged state has reached it.
+            try lease.requireOwner(conn: conn.id)
+            let link = try requireLink(request, default: 2)
+            try controller.waitSent(timeout: 2)
+            let state = try link.getState(timeout: 1)
+            let pong = try link.ping(timeout: 1)
+            try lease.requireOwner(conn: conn.id)
+            reply(conn, request, ["ok": true, "connected": true, "hello": link.hello.json, "pong": pong.json,
+                                  "state": state.json, "neutral": state.isNeutral])
         case "release":
             controller.release(client: conn.layer(request["client"] as? String))
             reply(conn, request, ["ok": true])

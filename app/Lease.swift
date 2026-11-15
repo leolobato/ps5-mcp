@@ -117,6 +117,15 @@ final class Lease {
                        + "for \(held) s; \(place)")
     }
 
+    /// Fails with `leased` unless `conn` itself holds the claim (`press` with `require_claim`, `controller_verify`).
+    func requireOwner(conn: Int) throws {
+        try check(conn: conn)
+        lock.lock()
+        let holds = owner?.conn == conn
+        lock.unlock()
+        guard holds else { throw ApiError(code: "leased", message: "claim the console first (claim_console)") }
+    }
+
     /// Takes the console from its holder (only if it is `client`, when given) and passes it to the next in the
     /// queue. Returns the evicted holder.
     @discardableResult

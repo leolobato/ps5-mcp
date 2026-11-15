@@ -21,7 +21,6 @@ from importlib.metadata import version
 from pathlib import Path
 
 from mcp.server.mcpserver import Image, MCPServer
-from mcp.server.mcpserver.exceptions import ToolError
 
 from . import backends, capture, recording, stream, vision
 from . import protocol as p
@@ -54,7 +53,6 @@ class Runtime:
 
     def start(self) -> None:
         self.capture = backends.select()
-        _use_tools(self.capture.guarded_input)
         with contextlib.suppress(capture.CaptureError, OSError):
             self.app()  # reported by status(); every tool retries
         if port := os.environ.get("PS5MCP_STREAM_PORT"):
@@ -216,6 +214,7 @@ async def measure_frame_rate(seconds: float = 10.0) -> dict:
     return reply
 
 
+@mcp.tool(structured_output=False)
 @_errors
 async def press(button: str, hold_ms: int = 80, snapshot_after_ms: int | None = None, require_claim: bool = False):
     """Press and release one button (e.g. cross, circle, up, options). Optionally return a frame afterwards.
@@ -223,11 +222,6 @@ async def press(button: str, hold_ms: int = 80, snapshot_after_ms: int | None = 
     """
     await _apply_for(PadState(buttons=p.button_mask([button])), hold_ms, require_claim)
     return await _result(f"pressed {button} for {hold_ms} ms", snapshot_after_ms)
-
-
-async def _press(button: str, hold_ms: int = 80, snapshot_after_ms: int | None = None):
-    """Press and release one button (e.g. cross, circle, up, options). Optionally return a frame afterwards."""
-    return await press(button, hold_ms, snapshot_after_ms)
 
 
 @mcp.tool(structured_output=False)
@@ -748,22 +742,22 @@ async def status() -> dict:
     return info
 
 
+@mcp.tool(structured_output=False)
 @_errors
 async def controller_ready(wait_s: float = 8, release: bool = True) -> dict:
-    """Linux: wait for the shared hub to reconnect to existing padd, release and verify wire neutral.
-    Requires claim_console first. Never deploys/restarts payloads or forcibly breaks a live connection.
-    Returns protocol handshake and ping telemetry. Offline hubs need explicit local restart with console opt-in.
+    """Check that the controller is idle before driving the console: waits up to wait_s for the padd link,
+    releases all input (unless release=False), then reads the state padd actually holds. Requires claim_console
+    first. Returns the handshake, a ping, the state and `neutral`; if neutral is false, do not navigate yet.
+    Never starts or restarts padd.
     """
     if not 0 <= wait_s <= 15:
         raise ValueError("wait_s must be 0..15")
-    if not getattr(runtime.capture, "guarded_input", False):
-        raise PadError("controller_ready requires the Linux backend; use status on macOS")
     app = await _app()
     if not (await asyncio.to_thread(app.lease))["granted"]:
         raise PadError("Call claim_console before controller_ready")
     if release:
         await asyncio.to_thread(app.release_all)
-    return await asyncio.to_thread(app.call, "controller_verify", wait=wait_s, timeout=wait_s + 5)
+    return await asyncio.to_thread(app.verify_controller, wait_s)
 
 
 def _holder(lease: dict) -> str:
@@ -819,18 +813,6 @@ async def show_viewer() -> str:
         return f"Live viewer: {url}"
     return "viewer shown"
 
-
-def _use_tools(guarded: bool) -> None:
-    """Register the tools that differ by backend: claim-checked presses and controller_ready exist on Linux only."""
-    for name in ("press", "controller_ready"):
-        with contextlib.suppress(ToolError):  # not registered yet
-            mcp.remove_tool(name)
-    mcp.add_tool(press if guarded else _press, name="press", structured_output=False)
-    if guarded:
-        mcp.add_tool(controller_ready, structured_output=False)
-
-
-_use_tools(backends.selected() == "linux")
 
 
 def main() -> None:

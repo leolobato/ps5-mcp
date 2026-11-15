@@ -197,6 +197,21 @@ final class PadController {
         return layers.reduce(PadState.neutral) { $0.merged($1) }
     }
 
+    /// Returns once the link has carried the current merged state; padd applies it before it answers any later
+    /// request on the same link. Waits for two sends: one may already be under way with the state from before.
+    func waitSent(timeout: Double) throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        cond.lock(); defer { cond.unlock() }
+        let target = statesSent + 2
+        dirty = true
+        cond.broadcast()
+        while statesSent < target {
+            if link?.closed ?? true { throw PadError.failed("padd disconnected before the state reached it") }
+            if Date() >= deadline { throw PadError.failed("timed out waiting for the state to reach padd") }
+            _ = cond.wait(until: min(deadline, Date().addingTimeInterval(0.02)))
+        }
+    }
+
     func current() -> (merged: PadState, keys: Int, agents: [String: PadState]) {
         cond.lock(); defer { cond.unlock() }
         return (merged(), keys.count, agents)

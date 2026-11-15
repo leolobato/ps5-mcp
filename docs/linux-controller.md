@@ -46,8 +46,8 @@ authentication boundary against deliberately crafted requests.
 | Sharing | `claim_console`, `release_console`, FIFO waiting and idle expiry |
 | Virtual controllers | `connect_controller`, `disconnect_controller`, `use_controller` when padd advertises support |
 | Basic console commands | `home`, `close_app`, `launch` mapped to existing padd commands; mock-tested only |
-| Diagnostics | Cached controller/user/connection data in `status`; Linux `controller_ready` for a claimed wire-state check |
-| Guarded input | Linux `press(..., require_claim=True)` refuses an absent/lost claim before input |
+| Diagnostics | Cached controller/user/connection data in `status`; `controller_ready` for a claimed wire-state check |
+| Guarded input | `press(..., require_claim=True)` refuses an absent/lost claim before input |
 | Visual tools | Existing shared capture, snapshots, templates and viewer |
 
 Virtual-controller connect selects the newly added controller. Linux deliberately

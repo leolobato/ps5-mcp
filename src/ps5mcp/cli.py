@@ -365,7 +365,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--version", action="version", version=version_text())
     sub = parser.add_subparsers(dest="command", required=True)
 
-    controller = sub.add_parser("controller", help="shared-hub controller telemetry and neutral readiness")
+    controller = sub.add_parser("controller", help="controller telemetry and neutral readiness")
     controller.add_argument("action", choices=("status", "ready"))
     controller.add_argument("--wait-s", type=float, default=8)
     controller.set_defaults(func=_controller)

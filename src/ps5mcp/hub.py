@@ -151,8 +151,13 @@ class AppClient:
                   timeout=wait + hold_ms / 1000 + self.timeout)
 
     def press_guarded(self, state: PadState, hold_ms: int, wait: float = 2.0) -> None:
-        """Press only while this client still holds the console claim (the Linux hub checks it as input applies)."""
-        raise PadError("Guarded presses need the Linux backend; use claim_console and press")
+        """`press`, refused unless this client holds the console claim, checked again just before input applies."""
+        self.call("press", state=state_to_json(state), hold_ms=hold_ms, wait=wait, require_claim=True,
+                  timeout=wait + hold_ms / 1000 + self.timeout)
+
+    def verify_controller(self, wait: float = 2.0) -> dict:
+        """Needs the claim. The state padd actually holds, read once the current input has reached it."""
+        return self.call("controller_verify", wait=wait, timeout=wait + 5)
 
     def begin_sequence(self) -> int | None:
         """Start a timed sequence; returns an epoch that later steps pass to set_sequence, or None."""

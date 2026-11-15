@@ -24,7 +24,6 @@ class LinuxHub(NativeApp):
 
     start_options = ("video_format", "video_size", "video_fps", "stale_s", "viewer_port", "host", "padd_port")
     browser_viewer = True
-    guarded_input = True
 
     def console_allowed(self) -> bool:
         return console_enabled()

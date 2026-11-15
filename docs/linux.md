@@ -305,13 +305,12 @@ For generic guarded input, inspect a fresh `snapshot`, then call
 The hub rechecks ownership after connection waits and immediately before applying
 input. Inspect the returned image before another action. Image interpretation is
 performed by the calling agent; the generic backend does not identify screens or
-approve focused controls automatically. `controller_ready` and the `require_claim`
-option of `press` exist only on the Linux backend; macOS MCP clients do not see them.
+approve focused controls automatically. The macOS app offers `controller_ready` and
+`require_claim` too.
 
 The existing `connect_controller`, `disconnect_controller`, and `use_controller`
 tools manage virtual controller assignment, not TCP payload lifecycle. Normal
 `status`, `release_all`, `claim_console`, and `release_console` already existed.
-Readiness is Linux-only and refuses a native backend before releasing any input.
 CLI readiness returns failure when the actual wire state is non-neutral. A
 connection alone does not assign a controller to a PS5 user; inspect `status` and
 use the existing assignment tools or the console's user picker as appropriate.

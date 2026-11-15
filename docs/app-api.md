@@ -33,11 +33,12 @@ The JSON fields carry raw protocol values (`docs/protocol.md`):
 | cmd | fields | effect |
 |---|---|---|
 | `set` | `state`, `client?`, `wait?` | Sets this client's agent layer until it changes or the connection closes. Neutral clears it. |
-| `press` | `state`, `hold_ms` (1..10000, default 80), `client?`, `wait?` (default 2) | Holds the state, releases it, waits the 60 ms release gap, then replies. |
+| `press` | `state`, `hold_ms` (1..10000, default 80), `client?`, `wait?` (default 2), `require_claim?` | Holds the state, releases it, waits the 60 ms release gap, then replies. With `require_claim`, it fails with `leased` unless this connection holds the claim, checked again after waiting for the link. |
 | `release` | `client?` | Clears this client's layer. |
 | `release_all` | | Clears every layer and every held key. |
 | `key` | `key`, `down` | Keyboard input, the same path as the window (keymap below). |
 | `state` | | Returns the merged state, the number of held keys and the agent layers. |
+| `controller_verify` | `wait?` (default 2) | Needs this connection's claim. Waits until the link has carried the current merged state, then asks padd for the state it holds: replies `connected`, `hello`, `pong`, `state` and `neutral`. Sends no input. |
 
 - **Layers:** each agent layer is keyed by connection and `client` (default `default`). The layers OR together, so
   several agents never get "busy".

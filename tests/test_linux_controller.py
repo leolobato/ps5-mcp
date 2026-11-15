@@ -663,14 +663,6 @@ def test_guarded_press_requires_explicit_claim(hub):
         a.close()
 
 
-async def test_ready_refuses_native_backend_before_releasing(monkeypatch):
-    from types import SimpleNamespace
-    def forbidden():
-        pytest.fail('Must not obtain/release native controller for Linux-only readiness')
-    monkeypatch.setattr(server, 'runtime', SimpleNamespace(capture=object(), app=forbidden))
-    assert 'Linux backend' in await server.controller_ready()
-
-
 def test_cli_ready_reports_non_neutral_as_failure(monkeypatch):
     from types import SimpleNamespace
 

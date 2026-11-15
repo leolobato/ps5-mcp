@@ -142,7 +142,6 @@ class Service:
 
     start_options: tuple[str, ...] = ()  # extra `capture start` flags the backend accepts, beyond video and audio
     browser_viewer = False  # `view` prints a URL instead of opening a window
-    guarded_input = False  # the API supports claim-checked presses and wire-neutral verification
 
     @property
     def client_type(self):

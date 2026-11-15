@@ -45,10 +45,6 @@ class LinuxAppClient(AppClient):
             self.close()
             raise
 
-    def press_guarded(self, state, hold_ms, wait=2.0):
-        self.call("press", state=state_to_json(state), hold_ms=hold_ms, wait=wait, require_claim=True,
-                  timeout=wait + hold_ms / 1000 + self.timeout)
-
     def begin_sequence(self):
         return self.call("begin_sequence")["input_epoch"]
 
