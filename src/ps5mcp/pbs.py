@@ -32,7 +32,7 @@ def fetch(cache: Path | None = None, url: str = URL, sha256: str = SHA256, timeo
     if target.is_file() and _sha256(target) == sha256:
         return target
     cache.mkdir(parents=True, exist_ok=True)
-    with urllib.request.urlopen(url, timeout=timeout) as response:  # noqa: S310 - a fixed https URL, hash-checked
+    with urllib.request.urlopen(url, timeout=timeout) as response:  # a fixed https URL, hash-checked below
         data = response.read(MAX_BYTES + 1)
     if len(data) > MAX_BYTES:
         raise RuntimeError(f"{NAME} from {url} is larger than {MAX_BYTES >> 20} MB")
