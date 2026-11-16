@@ -6,6 +6,35 @@ Linux selects the Python hub; macOS continues to use the Swift app. Override wit
 Physical MJPEG 1080p60 has been validated on the local MACROSILICON card; see
 [hardware results and remaining limits](linux-hardware-validation.md).
 
+## What works on Linux
+
+The Linux hub runs the same MCP server and tools as the macOS app. It has no window, so everything a person does in
+the app's window is missing. "Offline tests only" means mock or fixture coverage, without a console.
+
+| Feature | macOS app | Linux hub |
+|---|---|---|
+| Video capture and `snapshot` | Yes | Yes. V4L2 through FFmpeg; the device, format, size and rate are set explicitly |
+| Audio | Yes | No |
+| Live view | App window | Browser page on a loopback URL (`view`, `show_viewer`); view only |
+| Keyboard control (window keys, `ps5mcp control`) | Yes | No |
+| Video recording to MP4 | Yes (window) | No |
+| Button recordings | Record from the window or `control --record`; `play_recording` | `record_start`/`record_stop` and `play_recording` only; not tested yet |
+| `press`, `hold`, `stick`, `trigger`, `touchpad`, `sequence`, `ps_button`, `release_all` | Yes | Yes. Every state is acknowledged by padd |
+| `claim_console`, `release_console`, `controller_ready`, `press(require_claim=True)` | Yes | Yes |
+| Force release of another agent's claim | Window menu | No |
+| `connect_controller`, `disconnect_controller`, `use_controller` | Yes | Yes |
+| Answering "Who's using this controller?" | The app picks the user when the name matches | No; a person picks the user |
+| `home`, `close_app`, `launch` | Yes | Yes; offline tests only |
+| `uninstall_apps` | Yes | No; the hub refuses it |
+| `list_apps`, `install`, `push`, `pull` | Yes | Yes with `PS5MCP_ALLOW_CONSOLE=1`; they reach the console directly, offline tests only |
+| `ps5mcp padd start/stop/update` | Through the running app | Only while the hub is stopped |
+| `wait_for` (templates) | Yes | Yes |
+| `wait_for_change` | Yes | No |
+| `frame_meter`, `measure_frame_rate` | Yes | No |
+| Remote Play video source, `type_text`, `close_keyboard` | Yes (in development) | No |
+| Settings | Settings window, saved | Environment variables and `capture start` flags |
+| Frame sequence and timestamps in `status` | No | Yes |
+
 ## Quick start
 
 Requires Python 3.12+, uv, FFmpeg with V4L2/lavfi/MJPEG support, Make and a C
@@ -54,8 +83,7 @@ uv run ps5mcp view
 
 One hub owns the card; MCP sessions and browser viewers share its cached frames.
 All clients must share `PS5MCP_STATE` (default `~/.local/state/ps5-mcp`). Stop the hub
-before changing configuration. Linux captures video only; audio and keyboard GUI
-control are unfinished.
+before changing configuration.
 
 Controller input requires padd already running on a compatible jailbroken PS5 and
 TCP access to its port (9305 by default). Padd 1.10 was tested. Loading padd is a
@@ -80,25 +108,17 @@ uv run ps5mcp serve               # MCP stdio entry point for your MCP client
 ```
 
 Configure your MCP client to launch `uv run --directory /absolute/path/ps5-mcp
-ps5mcp serve`, passing the same environment variables. Use the `status`, `snapshot`,
-`claim_console`, `controller_ready`, controller input, `release_all` and
-`release_console` tools. For a guarded Linux button press, use
-`press(button="right", require_claim=True, snapshot_after_ms=500)` after inspecting
-a fresh `snapshot`. The hub checks ownership immediately before applying input.
-Inspect a fresh screen before input. Linux leaves controller assignment prompts
-to the user. Closing an MCP session releases its input; `uv run ps5mcp capture stop`
-shuts down the shared hub and capture, leaving the payload running.
+ps5mcp serve`, passing the same environment variables. Start a task with `claim_console`
+and `controller_ready`, then inspect a fresh `snapshot` before each input. For a guarded
+button press, use `press(button="right", require_claim=True, snapshot_after_ms=500)`:
+the hub checks ownership immediately before applying input. A person must answer the
+console's controller-assignment prompts. Closing an MCP session releases its input;
+`uv run ps5mcp capture stop` shuts down the shared hub and capture, leaving the payload running.
 
-Tested live: padd handshake, existing-profile assignment, short Cross/PS presses,
-one long PS hold to verified system home, short D-pad Left/Right, early hold
-cancellation and acknowledged neutral cleanup. Reconnect, contention and fault
-handling have offline regression coverage; active-hold disconnect/watchdog recovery
-has not been tested on the console. Automatic assignment, Linux Remote Play,
-audio, native GUI, frame metering and `watch_change` are unsupported.
-
-Application-specific menu automation, configuration APIs and log collection are
-outside the Linux backend. Console launch/close/home commands have offline mock
-coverage only. They are separate from the bounded controller actions tested live.
+Tested on the console: padd handshake, existing-profile assignment, short Cross/PS presses,
+one long PS hold to system home, short D-pad Left/Right, early hold cancellation and
+acknowledged neutral cleanup. Reconnect, contention and fault handling have offline tests
+only; active-hold disconnect and watchdog recovery have not been tested on the console.
 
 ## One physical owner, many consumers
 
@@ -263,9 +283,9 @@ a long PS hold to system home, short D-pad Left/Right and early timed-hold
 cancellation. Physical active-hold disconnect/watchdog recovery remains untested.
 See the [detailed live report](linux-controller-hardware-validation.md).
 
-See [Linux controller setup, safety and limits](linux-controller.md). Automatic
-user assignment, Remote Play, GUI/keyboard control, audio, frame metering and
-`watch_change` remain unsupported. No payload is automatically deployed.
+See [Linux controller setup, safety and limits](linux-controller.md), and
+[What works on Linux](#what-works-on-linux) for the features that are missing. No payload is
+automatically deployed.
 
 ## Validation
 
@@ -296,7 +316,7 @@ It reports buttons, axes, triggers, touches and `neutral`. Its claim is released
 when the CLI client closes. It never deploys or restarts padd.
 
 In MCP, use `status()`, `claim_console(reason)` and `controller_ready(wait_s=8)`
-before driving the console. `controller_ready` requires ownership,
+before driving the console. `controller_ready` requires the claim,
 returns the protocol handshake and ping counters, and defaults to releasing
 input before checking. `release=false` inspects without releasing. A false
 neutral result means navigation must wait for release and successful verification.
@@ -305,13 +325,10 @@ For generic guarded input, inspect a fresh `snapshot`, then call
 The hub rechecks ownership after connection waits and immediately before applying
 input. Inspect the returned image before another action. Image interpretation is
 performed by the calling agent; the generic backend does not identify screens or
-approve focused controls automatically. The macOS app offers `controller_ready` and
-`require_claim` too.
+approve focused controls automatically.
 
-The existing `connect_controller`, `disconnect_controller`, and `use_controller`
-tools manage virtual controller assignment, not TCP payload lifecycle. Normal
-`status`, `release_all`, `claim_console`, and `release_console` already existed.
-CLI readiness returns failure when the actual wire state is non-neutral. A
+`connect_controller`, `disconnect_controller` and `use_controller` manage virtual
+controllers, not the padd payload itself. CLI readiness returns failure when the actual wire state is non-neutral. A
 connection alone does not assign a controller to a PS5 user; inspect `status` and
 use the existing assignment tools or the console's user picker as appropriate.
 
@@ -324,11 +341,9 @@ a new client cannot enable an already-running offline hub. Device configuration
 conflicts require stopping only the local hub before starting it with the
 intended capture mode. Do not use `padd start` to repair a client connection.
 
-Additional hardware validation confirmed public readiness reporting with protocol 1 /
-padd 1.10, an actual neutral wire state, fresh physical HDMI frames and harmless
-screenshot-verified navigation through registered MCP tools. Only the local hub
-was restarted to load code; the running console application and padd were preserved.
-New audit fixes have offline coverage; no hardware test was repeated for this PR audit.
+On the console, readiness reported protocol 1 and padd 1.10 with a neutral wire state,
+next to fresh HDMI frames and screenshot-checked navigation through the MCP tools.
+Later fixes have offline tests only.
 
 ## Full host validation and package checks
 

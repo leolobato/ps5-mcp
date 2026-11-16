@@ -3,7 +3,8 @@
 For controller assignment, Cross/PS, system-home navigation, D-pad and
 hold-cancellation results, see [live hardware validation](linux-controller-hardware-validation.md).
 Offline coverage uses localhost protocol fixtures and the compiled padd-host
-recording stub. The macOS Swift implementation is unchanged.
+recording stub. For the features missing on Linux, see
+[What works on Linux](linux.md#what-works-on-linux).
 
 ## Explicit configuration and offline default
 
@@ -55,16 +56,16 @@ does not answer the console's user-assignment dialog automatically. A status not
 explains that a person must choose the user. Automatic assignment, profile OCR and
 restoration of additional controllers after padd restarts remain unsupported.
 
-Payload lifecycle, uninstall and arbitrary console commands are not accepted by
-the Linux hub. Remote Play keyboard/GUI features remain unsupported. Existing
-file-transfer/installer code has offline fixture coverage only on Linux; those
-operations are separate from capture and controller readiness.
+The hub accepts only the `pad`, `select_pad`, `home`, `close` and `launch` console
+commands: payload start/stop/update, uninstall and other commands are refused.
+File transfer and installs reach the console directly, not through the hub; on
+Linux they have offline fixture tests only.
 
 ## Connection and input safety
 
 The Linux manager reuses `PadLink`, `PadController`, `PadState` and the existing
 wire protocol. ACK checking is an optional extension to the shared Python
-controller class, enabled by Linux without changing the Swift backend.
+controller class; only the Linux hub turns it on (the macOS app has its own Swift controller).
 
 - A neutral state must be acknowledged before a new link is exposed as connected.
 - Input states are repeated at approximately 100 ms intervals and ACK-checked.
