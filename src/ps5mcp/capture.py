@@ -264,13 +264,20 @@ class NativeApp(Service):
             conn.settimeout(timeout)
             conn.connect(str(self.socket))
             conn.sendall((json.dumps({"cmd": cmd, **fields}) + "\n").encode())
-            data = b""
-            while data.count(b"\n") < expected:
-                chunk = conn.recv(4096)
-                if not chunk:
-                    break
-                data += chunk
-        return [json.loads(line) for line in data.splitlines() if line]
+            data, replies = b"", []
+            while len(replies) < expected:  # an error is the last reply, even for watch_change
+                if b"\n" not in data:
+                    chunk = conn.recv(4096)
+                    if not chunk:
+                        break
+                    data += chunk
+                    continue
+                line, data = data.split(b"\n", 1)
+                if line.strip():
+                    replies.append(json.loads(line))
+                    if replies[-1].get("ok") is False:
+                        break
+        return replies
 
     def status(self) -> dict | None:
         try:

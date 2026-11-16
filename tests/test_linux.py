@@ -64,7 +64,7 @@ def test_socket_status_synthetic_and_unsupported(hub):
         assert client.call("snapshot")["path"] == str(hub.latest)
         with Image.open(hub.latest) as image:
             assert image.size == (1280, 720)
-        for cmd in ("frame_meter", "watch_change", "rp_text", "padd_start"):
+        for cmd in ("frame_meter", "rp_text", "padd_start"):
             with pytest.raises(AppError, match="does not support"):
                 client.call(cmd)
         with pytest.raises(AppError, match="offline"):
@@ -343,3 +343,47 @@ def test_new_linux_state_directory_is_private(tmp_path):
         assert stat.S_IMODE((root / 'capture.sock').stat().st_mode) == 0o600
     finally:
         backend.stop()
+
+
+def test_watch_change_reports_a_changed_frame(hub, tmp_path):
+    source = tmp_path / "watched.png"
+    Image.new("RGB", (320, 180), "black").save(source)
+    with hub.lock:
+        hub.video = f"file:{source}"
+    backend = LinuxHub(hub.root)
+    armed, result = backend.watch_change(threshold=6, timeout=0.5)
+    assert not result["ok"] and result["error"] == "timeout"  # an unchanged picture
+
+    def change():
+        time.sleep(0.4)
+        Image.new("RGB", (320, 180), "white").save(source)
+    changer = threading.Thread(target=change)
+    changer.start()
+    start = time.monotonic()
+    armed, result = backend.watch_change(threshold=6, timeout=3)
+    changer.join()
+    assert result["ok"] and result["diff"] > 200
+    assert start <= armed <= result["changed_at"] <= time.monotonic()
+
+
+def test_watch_change_refusal_answers_at_once(hub):
+    start = time.monotonic()
+    replies = LinuxHub(hub.root).request("watch_change", timeout=10, threshold=0, timeout_s=60)
+    assert len(replies) == 1 and not replies[0]["ok"] and "threshold" in replies[0]["error"]
+    assert time.monotonic() - start < 2  # not the socket timeout
+
+
+def test_watch_change_stops_when_its_client_leaves(hub, monkeypatch):
+    import json
+    import socket
+    reads = []
+    read_frame = hub.read_frame
+    monkeypatch.setattr(hub, "read_frame", lambda: reads.append(1) or read_frame())
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+        conn.connect(str(hub.root / "capture.sock"))
+        conn.sendall((json.dumps({"cmd": "watch_change", "threshold": 6, "timeout_s": 60}) + "\n").encode())
+        assert b"armed_at" in conn.recv(4096)
+    time.sleep(0.5)  # the watch notices the disconnect
+    count = len(reads)
+    time.sleep(0.5)
+    assert len(reads) == count

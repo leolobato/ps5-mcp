@@ -123,10 +123,12 @@ class LinuxController(PadController):
             return self.controllers, self.login_users, self.pong
 
     def command(self, op, arg, cancelled=None):
-        operations = {"pad": p.Command.PAD, "select_pad": p.Command.SELECT_PAD,
-                      "home": p.Command.HOME, "close": p.Command.CLOSE, "launch": p.Command.LAUNCH}
+        operations = {"pad": p.Command.PAD, "select_pad": p.Command.SELECT_PAD, "home": p.Command.HOME,
+                      "close": p.Command.CLOSE, "launch": p.Command.LAUNCH, "uninstall": p.Command.UNINSTALL}
         if op not in operations:
             raise ValueError(f"Unsupported Linux console command: {op}")
+        if op == "uninstall" and not self.link().hello.flags & p.FLAG_UNINSTALL:
+            raise ValueError("this padd cannot uninstall; deploy padd 1.3 or later")
         def check_cancelled():
             if cancelled is not None and cancelled.is_set():
                 raise ValueError("Controller command interrupted; remaining operations are not replayed")

@@ -5,6 +5,7 @@ import argparse
 import base64
 import contextlib
 import fcntl
+import io
 import json
 import math
 import os
@@ -134,6 +135,39 @@ class Hub:
             self.capture_error = None
         except (OSError, ValueError) as exc:
             self.capture_error = str(exc)
+
+    def watch_change(self, request, ended=None):
+        """Yields two replies, as the macOS app does: armed, then the first frame that differs from the reference
+        (the first frame after arming) by `threshold` mean luma steps on a 32x18 grid, or a timeout.
+        Stops early, without a reply, when `ended` is set (the client went away)."""
+        ended = ended or threading.Event()
+        threshold, timeout = request.get("threshold", 6.0), request.get("timeout_s", 2.0)
+        for name, value, top in (("threshold", threshold, 255), ("timeout_s", timeout, 60)):
+            if type(value) not in (int, float) or not math.isfinite(value) or not 0 < value <= top:
+                raise Refused(f"{name} must be in (0, {top}]")
+        armed = time.monotonic()
+        yield {"armed_at": armed}
+        reference, seen = None, None
+        while time.monotonic() < armed + timeout and not self.stopping.is_set():
+            if ended.is_set():
+                return
+            try:
+                frame = self.read_frame()
+            except CaptureError:
+                frame = None
+            if frame is None or frame.sequence == seen or frame.monotonic < armed:
+                self.stopping.wait(0.01)
+                continue
+            seen = frame.sequence
+            grid = luma_grid(frame.jpeg)
+            if reference is None:
+                reference = grid
+                continue
+            diff = sum(abs(a - b) for a, b in zip(grid, reference)) / len(grid)
+            if diff >= threshold:
+                yield {"changed_at": frame.monotonic, "diff": diff}
+                return
+        yield {"ok": False, "error": "timeout"}
 
     def maintain(self):
         while not self.stopping.wait(0.1):
@@ -404,12 +438,19 @@ class Hub:
 
 def validate_command(op, arg):
     patterns = {"pad": r"(?:connect(?: [1-9][0-9]{0,9})?|disconnect(?: [2-4])?)",
-                "select_pad": r"[1-4]", "launch": r"[A-Z]{4}[0-9]{5}",
+                "select_pad": r"[1-4]", "launch": r"[A-Z]{4}[0-9]{5}", "uninstall": r"[A-Z]{4}[0-9]{5}",
                 "home": r"(?:system|shellcore|suspend)", "close": r""}
     if op not in patterns:
         raise Refused(f"Unsupported Linux console command: {op}", "unsupported")
     if not isinstance(arg, str) or re.fullmatch(patterns[op], arg) is None:
         raise Refused(f"Invalid argument for {op}")
+
+
+def luma_grid(jpeg: bytes) -> list[int]:
+    """32x18 luma cells. JPEG draft mode decodes at reduced scale, so a 1080p frame stays cheap at 60 fps."""
+    with Image.open(io.BytesIO(jpeg)) as image:
+        image.draft("L", (64, 36))
+        return list(image.convert("L").resize((32, 18), Image.Resampling.BOX).getdata())
 
 
 def checked_state(data):
@@ -490,6 +531,10 @@ class Handler(socketserver.StreamRequestHandler):
 
         def execute(request, epoch=None):
             try:
+                if request.get("cmd") == "watch_change":  # read-only; answers twice
+                    for result in hub.watch_change(request, ended):
+                        send({"id": request.get("id"), "ok": True, **result})
+                    return
                 result = hub.dispatch(key, request, expected_epoch=epoch)
                 send({"id": request.get("id"), "ok": True, **result})
             except (ValueError, TypeError, KeyError, PadError, OSError) as exc:

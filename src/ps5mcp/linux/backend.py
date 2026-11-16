@@ -180,9 +180,6 @@ class LinuxHub(NativeApp):
         if not reply.get("ok"):
             raise CaptureError(reply.get("error", "Linux viewer is unavailable"))
 
-    def watch_change(self, threshold=6, timeout=2):
-        raise CaptureError("Linux watch_change is not supported; use wait_for templates")
-
 
 def console_enabled() -> bool:
     return os.environ.get("PS5MCP_ALLOW_CONSOLE") == "1"

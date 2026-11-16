@@ -46,7 +46,7 @@ authentication boundary against deliberately crafted requests.
 | Input cleanup | `release_all`, session close, cancellation, inactivity and transport failure |
 | Sharing | `claim_console`, `release_console`, FIFO waiting and idle expiry |
 | Virtual controllers | `connect_controller`, `disconnect_controller`, `use_controller` when padd advertises support |
-| Basic console commands | `home`, `close_app`, `launch` mapped to existing padd commands; mock-tested only |
+| Basic console commands | `home`, `close_app`, `launch`, `uninstall_apps` mapped to existing padd commands; mock-tested only |
 | Diagnostics | Cached controller/user/connection data in `status`; `controller_ready` for a claimed wire-state check |
 | Guarded input | `press(..., require_claim=True)` refuses an absent/lost claim before input |
 | Visual tools | Existing shared capture, snapshots, templates and viewer |
@@ -56,8 +56,9 @@ does not answer the console's user-assignment dialog automatically. A status not
 explains that a person must choose the user. Automatic assignment, profile OCR and
 restoration of additional controllers after padd restarts remain unsupported.
 
-The hub accepts only the `pad`, `select_pad`, `home`, `close` and `launch` console
-commands: payload start/stop/update, uninstall and other commands are refused.
+The hub accepts only the `pad`, `select_pad`, `home`, `close`, `launch` and `uninstall`
+console commands (`uninstall` needs padd 1.3 or later): payload start/stop/update and
+other commands are refused.
 File transfer and installs reach the console directly, not through the hub; on
 Linux they have offline fixture tests only.
 

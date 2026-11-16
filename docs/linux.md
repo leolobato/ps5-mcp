@@ -25,11 +25,11 @@ the app's window is missing. "Offline tests only" means mock or fixture coverage
 | `connect_controller`, `disconnect_controller`, `use_controller` | Yes | Yes |
 | Answering "Who's using this controller?" | The app picks the user when the name matches | No; a person picks the user |
 | `home`, `close_app`, `launch` | Yes | Yes; offline tests only |
-| `uninstall_apps` | Yes | No; the hub refuses it |
+| `uninstall_apps` | Yes | Yes (padd 1.3 or later); offline tests only |
 | `list_apps`, `install`, `push`, `pull` | Yes | Yes with `PS5MCP_ALLOW_CONSOLE=1`; they reach the console directly, offline tests only |
 | `ps5mcp padd start/stop/update` | Through the running app | Only while the hub is stopped |
 | `wait_for` (templates) | Yes | Yes |
-| `wait_for_change` | Yes | No |
+| `wait_for_change` | Yes | Yes |
 | `frame_meter`, `measure_frame_rate` | Yes | No |
 | Remote Play video source, `type_text`, `close_keyboard` | Yes (in development) | No |
 | Settings | Settings window, saved | Environment variables and `capture start` flags |

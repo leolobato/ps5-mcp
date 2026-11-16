@@ -46,7 +46,7 @@ class FakePadd:
         self.handles = [1000, -1, -1, -1]
         self.users = [11, -1, -1, -1]
         fake = self
-        flags = p.FLAG_PAD_READY | p.FLAG_USERS | p.FLAG_PADS | p.FLAG_USER_NAME
+        self.flags = p.FLAG_PAD_READY | p.FLAG_USERS | p.FLAG_PADS | p.FLAG_USER_NAME | p.FLAG_UNINSTALL
 
         class Handler(socketserver.BaseRequestHandler):
             def handle(self):
@@ -60,7 +60,7 @@ class FakePadd:
                     if fake.bad_hello:
                         send(p.Type.HELLO, b"bad")
                         return
-                    send(p.Type.HELLO, p._HELLO.pack(1, 0x10A, 1000, 11, flags, 0))
+                    send(p.Type.HELLO, p._HELLO.pack(1, 0x10A, 1000, 11, fake.flags, 0))
                     reader = p.Reader()
                     while True:
                         try:
@@ -77,7 +77,7 @@ class FakePadd:
                                     send(p.Type.ACK, p._ACK.pack(seq, 0))
                             elif kind == p.Type.PING and not fake.suppress_ping:
                                 token = struct.unpack("<I", payload)[0]
-                                send(p.Type.PING, p._PONG.pack(token, 1, 0x10A, 100, 1000, flags, 0, 0, 0))
+                                send(p.Type.PING, p._PONG.pack(token, 1, 0x10A, 100, 1000, fake.flags, 0, 0, 0))
                             elif kind == p.Type.GET_STATE:
                                 state = fake.states[-1][1] if fake.states else p.PadState()
                                 self.request.sendall(p.encode_state(0, state))
@@ -336,7 +336,7 @@ def test_virtual_controller_connect_select_disconnect(hub, fake):
         assert client.command("select_pad", "1") == 0
         assert client.command("pad", "disconnect 2") == 0
         assert len(client.status()["controllers"]["list"]) == 1
-        for op in ("uninstall", "padd_start", "shutdown"):
+        for op in ("padd_start", "shutdown"):
             with pytest.raises(AppError, match="Unsupported"):
                 client.command(op)
     finally:
@@ -743,3 +743,34 @@ def test_wire_verification_rechecks_ownership_after_wait(hub, monkeypatch):
         unblock.set()
         a.close()
         b.close()
+
+
+def test_uninstall_reaches_padd_only_when_it_can_uninstall(hub, fake):
+    client = connect(hub)
+    try:
+        with pytest.raises(AppError, match="Invalid argument"):
+            client.command("uninstall", "not-a-title")
+        assert client.command("uninstall", "PPSA01325") == 0
+        assert (p.Command.UNINSTALL, "PPSA01325") in fake.commands
+    finally:
+        client.close()
+    fake.flags &= ~p.FLAG_UNINSTALL
+    fake.drop()  # the next HELLO lacks the flag
+    assert wait(lambda: hub.controller.status().connected and hub.controller.reconnects > 0)
+    client = connect(hub)
+    try:
+        with pytest.raises(AppError, match="padd 1.3"):
+            client.command("uninstall", "PPSA01325")
+        assert fake.commands.count((p.Command.UNINSTALL, "PPSA01325")) == 1
+    finally:
+        client.close()
+
+
+async def test_uninstall_apps_tool(hub, fake, monkeypatch):
+    monkeypatch.setattr(server, "HOST", "127.0.0.1")
+    monkeypatch.setattr(server, "runtime", server.Runtime())
+    server.runtime.start()
+    try:
+        assert await server.uninstall_apps(["PPSA01325"]) == [f"PPSA01325: {p.uninstall_text(0)}"]
+    finally:
+        server.runtime.stop()
