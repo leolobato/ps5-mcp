@@ -51,3 +51,11 @@ def test_command_argument_limit():
     assert len(p.encode_command(1, p.Command.LAUNCH, "PPSA01325")) == 8 + 40
     with pytest.raises(ValueError):
         p.encode_command(1, p.Command.LAUNCH, "x" * 32)
+
+
+def test_launch_results_in_words():
+    assert p.launch_text(0) == "launched"
+    assert p.launch_text(-0x7F6BFFF0) == "launched; it replaced the app that was in front"  # 0x80940010 as int32
+    assert p.launch_text(-0x7F6BFFF4) == "launch failed: already running"  # 0x8094000c
+    assert p.launch_text(-0x7F6BFFCF).startswith("launch failed: not installed")  # 0x80940031
+    assert p.launch_text(-0x7F6BFFFB) == "launch failed: status 0x80940005"

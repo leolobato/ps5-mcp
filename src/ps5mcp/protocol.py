@@ -97,6 +97,24 @@ def uninstall_text(status: int) -> str:
         return "uninstall requested"
     return UNINSTALL_ERRORS.get(status, f"refused, status {status & 0xFFFFFFFF:#010x}")
 
+# LAUNCH answers, as seen on 13.60 (docs/ps-button.md). With an app in front the title starts and replaces it, yet the
+# console answers LAUNCH_REPLACED.
+LAUNCH_REPLACED = 0x80940010
+LAUNCH_ERRORS = {
+    0x8094000C: "already running",
+    0x80940031: "not installed (see list_apps)",
+}
+
+
+def launch_text(status: int) -> str:
+    code = status & 0xFFFFFFFF
+    if code == 0:
+        return "launched"
+    if code == LAUNCH_REPLACED:
+        return "launched; it replaced the app that was in front"
+    return "launch failed: " + LAUNCH_ERRORS.get(code, f"status {code:#010x}")
+
+
 BUTTONS = {
     "l3": 0x2, "r3": 0x4, "options": 0x8,
     "up": 0x10, "right": 0x20, "down": 0x40, "left": 0x80,

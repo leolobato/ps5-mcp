@@ -123,7 +123,7 @@ def buttons(padd) -> list[int]:
 def test_status_reports_api_link_and_frames(app):
     status = app.client().status()
     assert status["api"] == 1 and status["frames"] > 0 and 0 <= status["frame_age"] < 1
-    assert status["pad"]["connected"] and status["pad"]["version"] == "1.10"
+    assert status["pad"]["connected"] and status["pad"]["version"] == "1.11"
     assert status["pad"]["hello"]["pad_handle"] == 1000 and status["source"].startswith("file:")
     assert status["pad"]["hello"]["user_name"] == "Test Player"
     assert status["title"] == "PS5 MCP · pad connected"

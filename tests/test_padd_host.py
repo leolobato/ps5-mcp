@@ -102,7 +102,7 @@ def test_ping_reports_uptime_and_counters(padd):
     link = padd.connect()
     link.send_state(PadState(buttons=RIGHT), wait=True)
     pong = link.ping()
-    assert pong.protocol == 1 and p.version_string(pong.payload_version) == "1.10"
+    assert pong.protocol == 1 and p.version_string(pong.payload_version) == "1.11"
     assert pong.reports_sent >= 1 and pong.report_failures == 0 and pong.flags & p.FLAG_PAD_READY
     link.close()
 
@@ -181,7 +181,10 @@ def test_commands_report_system_status(padd):
     assert link.command(p.Command.CLOSE) == 0
     assert link.command(p.Command.LAUNCH, "PPSA01325") == 0
     assert link.command(p.Command.LAUNCH, "BADTITLE") == -0x7F6BFFFB  # 0x80940005 as int32
-    assert [c["call"] for c in padd.calls()][-6:] == ["go_home", "go_home", "go_home", "close_app", "launch", "launch"]
+    # A launch brings the new app to the front (from the home screen it would start behind); a failed one does not.
+    assert [c["call"] for c in padd.calls()][-7:] == ["go_home", "go_home", "go_home", "close_app", "launch", "focus_app",
+                                                        "launch"]
+    assert padd.calls("focus_app") == [{"call": "focus_app", "app_id": 0x60000100}]
     assert [c.get("method") for c in padd.calls("go_home")] == ["", "suspend", "bogus"]
     assert padd.calls("launch")[0] == {"call": "launch", "title_id": "PPSA01325", "user_id": 0x11ECF8B9}
     link.close()

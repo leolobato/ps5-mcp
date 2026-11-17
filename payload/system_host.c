@@ -123,13 +123,21 @@ int system_close_app(void) {
     return 0;
 }
 
-int system_launch(const char *title_id, int32_t user_id) {
+int system_launch(const char *title_id, int32_t user_id, int32_t *app_id) {
+    *app_id = strcmp(title_id, "BADTITLE") == 0 ? -1 : 0x60000100;
     char line[128];
     snprintf(line, sizeof line, "{\"call\":\"launch\",\"title_id\":\"%.31s\",\"user_id\":%d}\n", title_id, user_id);
     emit(line);
     const char *delay = getenv("PADD_LAUNCH_DELAY_MS");  /* a slow launch, as the console's can be */
     if (delay) usleep((useconds_t)atoi(delay) * 1000);
     return strcmp(title_id, "BADTITLE") == 0 ? (int)0x80940005u : 0;
+}
+
+int system_focus_app(int32_t app_id) {
+    char line[64];
+    snprintf(line, sizeof line, "{\"call\":\"focus_app\",\"app_id\":%d}\n", app_id);
+    emit(line);
+    return 0;
 }
 
 int system_uninstall(const char *title_id) {

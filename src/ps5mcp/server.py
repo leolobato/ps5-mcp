@@ -492,8 +492,7 @@ async def launch(title_id: str, snapshot_after_ms: int | None = 5000):
     if reason := runtime.title_uploads.get(title_id):
         return f"{title_id}: launch blocked: {reason}"
     status = await _command("launch", title_id)
-    text = "launched" if status == 0 else f"launch failed: status {status & 0xFFFFFFFF:#010x}"
-    return await _result(f"{title_id}: {text}", snapshot_after_ms)
+    return await _result(f"{title_id}: {p.launch_text(status)}", snapshot_after_ms)
 
 
 @mcp.tool(structured_output=False)

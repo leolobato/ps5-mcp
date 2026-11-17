@@ -28,7 +28,10 @@ int pad_remove(int32_t handle);
 int system_go_home(const char *method);
 /* Close (kill) the running big app; the system returns to the home screen. */
 int system_close_app(void);
-int system_launch(const char *title_id, int32_t user_id);
+/* Returns 0 (and the new app's id in *app_id, or -1 when the console gave none) or an SCE error code. */
+int system_launch(const char *title_id, int32_t user_id, int32_t *app_id);
+/* Bring a running app to the front: a launch from the home screen leaves it behind (docs/ps-button.md). */
+int system_focus_app(int32_t app_id);
 /* Ask the system to uninstall a title. Returns once the request is accepted; files go away afterwards. */
 int system_uninstall(const char *title_id);
 

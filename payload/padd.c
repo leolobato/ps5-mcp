@@ -36,8 +36,9 @@
    launch always uses the foreground user. 1.7: a second pad for the second signed-in user instead of PAD_USER
    (SECOND_PAD, SELECT_PAD, GET_PADS), and GET_USERS lists the foreground and signed-in users. 1.8: SECOND_PAD
    "connect <user id>". 1.9: up to four pads (COMMAND PAD, the former SECOND_PAD, and "disconnect <pad>"). 1.10: PAD
-   "user <pad> <user id>", so the record of who has a pad can follow the console's picker. */
-#define PADD_VERSION 0x010A
+   "user <pad> <user id>", so the record of who has a pad can follow the console's picker. 1.11: LAUNCH brings the new
+   app to the front; from the home screen the console otherwise starts it behind it. */
+#define PADD_VERSION 0x010B
 
 struct config {
     int port;
@@ -413,7 +414,12 @@ static void handle_message(struct daemon *d, uint8_t type, const uint8_t *payloa
             int32_t user_id;
             if (system_foreground_user(&user_id)) user_id = d->pads[0].user_id;
             log_event("command", "\"op\":\"launch\",\"title_id\":\"%s\",\"user_id\":%d", command.arg, user_id);
-            status = system_launch(command.arg, user_id);
+            int32_t app_id;
+            status = system_launch(command.arg, user_id, &app_id);
+            if (status == 0 && app_id >= 0) {
+                int focus = system_focus_app(app_id);
+                log_event("launch_focus", "\"app_id\":%d,\"rc\":%d", app_id, focus);
+            }
         } else if (command.op == PMCP_CMD_PAD) {
             log_event("command", "\"op\":\"pad\",\"arg\":\"%s\"", command.arg);
             status = pad_command(d, command.arg);

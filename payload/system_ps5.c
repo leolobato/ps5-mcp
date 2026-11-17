@@ -22,6 +22,7 @@ __attribute__((weak)) int sceShellCoreUtilNavigateToGoHome(void);
 __attribute__((weak)) int sceLncUtilGetAppIdOfRunningBigApp(void);
 __attribute__((weak)) int sceLncUtilSuspendApp(int app_id, int flag);
 __attribute__((weak)) int sceLncUtilKillApp(int app_id);
+__attribute__((weak)) int sceLncUtilSetAppFocus(int app_id, int flag);
 /* As ps5-payload-dev/ftpsrv declares them. */
 __attribute__((weak)) int sceAppInstUtilInitialize(void);
 __attribute__((weak)) int sceAppInstUtilAppUnInstall(const char *title_id);
@@ -177,7 +178,8 @@ int system_close_app(void) {
     return sceLncUtilKillApp(app);
 }
 
-int system_launch(const char *title_id, int32_t user_id) {
+int system_launch(const char *title_id, int32_t user_id, int32_t *app_id) {
+    *app_id = -1;
     if (!sceLncUtilLaunchApp) return ENOSYS;
     int rc = launcher_init();
     if (rc) return rc;
@@ -190,7 +192,16 @@ int system_launch(const char *title_id, int32_t user_id) {
         if (result != 0x80940005u) break;
     }
     /* Success returns the new app id; SCE errors have bit 31 set. */
-    return (result & 0x80000000u) ? (int)result : 0;
+    if (result & 0x80000000u) return (int)result;
+    *app_id = (int32_t)result;
+    return 0;
+}
+
+int system_focus_app(int32_t app_id) {
+    if (!sceLncUtilSetAppFocus) return ENOSYS;
+    int rc = launcher_init();
+    if (rc) return rc;
+    return sceLncUtilSetAppFocus(app_id, 0);
 }
 
 int system_uninstall(const char *title_id) {

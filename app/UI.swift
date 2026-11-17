@@ -1614,8 +1614,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         hub.notice = "Launching \(title.name)…"
         background {
             let status = try self.hub.command("launch", title.id, link: self.hub.controller.currentLink())
-            self.hub.notice = status == 0 ? "Launched \(title.name)."
-                : String(format: "Launch of %@ failed (status 0x%08X).", title.name, UInt32(bitPattern: status))
+            // With an app in front the title replaces it, yet the console answers 0x80940010 (docs/ps-button.md).
+            switch UInt32(bitPattern: status) {
+            case 0, 0x8094_0010: self.hub.notice = "Launched \(title.name)."
+            case 0x8094_000C: self.hub.notice = "\(title.name) is already running."
+            case 0x8094_0031: self.hub.notice = "\(title.name) is not installed."
+            default: self.hub.notice = String(format: "Launch of %@ failed (status 0x%08X).", title.name, UInt32(bitPattern: status))
+            }
         }
     }
 
