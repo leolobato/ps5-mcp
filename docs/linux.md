@@ -16,7 +16,7 @@ the app's window is missing. "Offline tests only" means mock or fixture coverage
 | Video capture and `snapshot` | Yes | Yes. V4L2 through FFmpeg; the device, format, size and rate are set explicitly |
 | PBS video source (no capture card) | Yes, with audio | Video only, with `PS5MCP_ALLOW_CONSOLE=1`; see [PBS video](#pbs-video-no-capture-card) |
 | Audio | Yes | No |
-| Live view | App window | Browser page on a loopback URL (`view`, `show_viewer`); view only |
+| Live view | App window | Browser page on a loopback URL (`view`, `show_viewer`) (view only), or the macOS app over SSH |
 | Keyboard control (window keys, `ps5mcp control`) | Yes | No |
 | Video recording to MP4 | Yes (window) | No |
 | Button recordings | Record from the window or `control --record`; `play_recording` | `record_start`/`record_stop` and `play_recording` only; not tested yet |
@@ -120,6 +120,23 @@ Tested on the console: padd handshake, existing-profile assignment, short Cross/
 one long PS hold to system home, short D-pad Left/Right, early hold cancellation and
 acknowledged neutral cleanup. Reconnect, contention and fault handling have offline tests
 only; active-hold disconnect and watchdog recovery have not been tested on the console.
+
+## Using it from the macOS app
+
+The macOS app can use a Linux hub on another machine instead of this Mac. In Settings > Hub, choose
+Linux machine, enter its SSH destination (a host alias, host or user@host) and click Use Linux Machine. The app
+connects with your SSH keys, so connect once with `ssh DESTINATION` in Terminal first. The hub must already run
+there (`uv run ps5mcp capture start`).
+
+The app then shows the hub's live video and status, and MCP servers on the Mac work as usual: the app passes their
+claims and input to the Linux hub. Agents can also run on the Linux machine. All of them share the Linux hub's
+claims, so `claim_console` queues Mac and Linux agents together.
+
+padd accepts one client, so the hubs hand it over. Choosing Linux machine makes the app let go of padd and tells
+the Linux hub to take it (`padd_take`). Choosing This Mac again tells the Linux hub to let go (`padd_release`). A
+released hub stays off padd, also after a restart, until it is told to take it again. Its status shows
+`pad.released: true`, and its agents' input fails until then. Details are in
+[docs/app-api.md](app-api.md#linux-hub-from-the-macos-app).
 
 ## One physical owner, many consumers
 

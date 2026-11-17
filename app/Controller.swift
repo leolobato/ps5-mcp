@@ -14,6 +14,8 @@ func uptimeSeconds() -> Double { Double(clock_gettime_nsec_np(CLOCK_UPTIME_RAW))
 struct LinkStatus {
     var connected: Bool
     var paused: Bool
+    /// What holds the link paused, for the title ("Linux hub"); nil for padd start/stop.
+    var pausedFor: String? = nil
     var host: String
     var port: UInt16
     var hello: Hello?
@@ -38,7 +40,7 @@ struct LinkStatus {
 
     /// Window title, as keys.title_for did.
     var title: String {
-        if paused { return "PS5 MCP · padd start/stop running" }
+        if paused { return "PS5 MCP · " + (pausedFor ?? "padd start/stop running") }
         if !connected { return "PS5 MCP · no payload" + (error.map { " (\($0))" } ?? "") }
         let pad = hello?.padReady == true ? "pad connected" : "payload up, NO pad"
         return "PS5 MCP · \(pad)" + (humanActive ? " · you have control" : "")
@@ -224,7 +226,7 @@ final class PadController {
         cond.lock(); defer { cond.unlock() }
         while true {
             if let link, !link.closed { return link }
-            if paused { throw PadError.failed("padd start/stop is running; the link is paused") }
+            if paused { throw PadError.failed(pauseReason) }
             if Date() >= deadline {
                 throw PadError.failed("padd not connected at \(target):\(port): \(error ?? "connecting")")
             }
@@ -235,14 +237,21 @@ final class PadController {
     func status() -> LinkStatus {
         cond.lock(); defer { cond.unlock() }
         let up = link.map { !$0.closed } ?? false
-        return LinkStatus(connected: up, paused: paused, host: target, port: port, hello: up ? link?.hello : nil,
+        return LinkStatus(connected: up, paused: paused, pausedFor: pausers.last?.title, host: target, port: port, hello: up ? link?.hello : nil,
                           error: error, unreachable: unreachable, reconnects: reconnects, statesSent: statesSent, humanActive: !keys.isEmpty,
                           agents: agents.count)
     }
 
-    /// Close the link (neutral first) and stop reconnecting until `resume()`. Returns once the link is down.
-    func pause() {
+    /// Who holds the link paused ("padd" for start/stop, "linux" for a Linux hub) and why. Each lets go on its own,
+    /// so a padd update that ends while a Linux hub is in use leaves the link paused.
+    private var pausers: [(key: String, reason: String, title: String?)] = []
+    private var pauseReason: String { pausers.last?.reason ?? "" }
+
+    /// Close the link (neutral first) and stop reconnecting until `resume(key)`. Returns once the link is down.
+    func pause(_ key: String = "padd", reason: String = "padd start/stop is running; the link is paused", title: String? = nil) {
         cond.lock()
+        pausers.removeAll { $0.key == key }
+        pausers.append((key, reason, title))
         paused = true
         cond.broadcast()
         while link != nil || connecting { _ = cond.wait(until: Date().addingTimeInterval(0.05)) }
@@ -250,9 +259,10 @@ final class PadController {
         onStatus?()
     }
 
-    func resume() {
+    func resume(_ key: String = "padd") {
         cond.lock()
-        paused = false
+        pausers.removeAll { $0.key == key }
+        paused = !pausers.isEmpty
         cond.broadcast()
         cond.unlock()
         onStatus?()

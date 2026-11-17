@@ -63,6 +63,7 @@ final class TestHub {
     var ui: TestUI?
     var visible=false
     init(_ store: RemotePlayCredentialStore) { remotePlayCredentials=store }
+    func prepareCaptureChange(to video: String) {}
     func configureCapture(video: String, audio: String?) {}
     func statusChanged() {}
 }

@@ -113,6 +113,9 @@ final class PaddRunner {
     /// `ask`: after a start or an update, the person answers the dialogs (`Hub.askOnNextRestore`).
     func run(_ action: String, firmware: String?, ask: Bool = false) throws -> [String: Any] {
         guard let hub else { throw BadInput("hub gone") }
+        if hub.linuxHub != nil {
+            throw ApiError(code: "linux_hub", message: "padd belongs to the Linux hub this app shows; manage it on that machine")
+        }
         let base = cli
         guard !base.isEmpty else {
             let repo = config.repo.map { "the checkout this app was built from (\($0)) is gone" } ?? "no repo/uv known to the app"

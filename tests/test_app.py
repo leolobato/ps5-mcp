@@ -1584,3 +1584,117 @@ def test_measure_frame_rate_refuses_bad_input_and_remote_play(app):
     with pytest.raises(AppError) as error:
         client.call("measure_frame_rate", seconds=1.0)
     assert "capture card" in str(error.value)
+
+
+def test_linux_hub_mode_relays_mac_agents_to_the_linux_hub(padd, monkeypatch):
+    """Mac agents reach the console through the Linux hub (reached directly here; over SSH in use), whose claims also
+    cover agents running on the Linux machine. The app shows the hub's picture and never opens padd's slot itself."""
+    from ps5mcp.linux.hub import Hub, serve
+    monkeypatch.setenv("PS5MCP_ALLOW_CONSOLE", "1")
+    root = Path(tempfile.mkdtemp(prefix="l", dir="/tmp"))
+    picture = root / "picture.png"
+    Image.new("RGB", (1280, 720), (200, 30, 30)).save(picture)
+    (root / "hub").mkdir()
+    linux = Hub(root / "hub", video=f"file:{picture}", host="127.0.0.1", port=padd.port)
+    ready = threading.Event()
+    server = threading.Thread(target=serve, args=(linux, ready), daemon=True)
+    server.start()
+    assert ready.wait(5)
+    assert wait_for(lambda: linux.status()["pad"]["connected"], 5)
+    state = root / "app"
+    state.mkdir()
+    log = state / "app.log"
+    process = subprocess.Popen(
+        [str(APP), "--state-dir", str(state), "--linux-hub", str(root / "hub/capture.sock"), "--audio", "none",
+         "--headless", "--host", "127.0.0.1", "--port", str(padd.port), "-frameMeterShown", "NO"],
+        stdout=log.open("ab"), stderr=subprocess.STDOUT, env={**os.environ, "PS5MCP_STATE": str(state)})
+    mac = there = None
+    try:
+        native = capture.NativeApp(state)
+        deadline = time.monotonic() + 15
+        while not ((status := native.status()) and status["frames"] > 0 and status["pad"]["connected"]
+                   and (status["linux_hub"] or {}).get("state") == "streaming"):
+            assert time.monotonic() < deadline and process.poll() is None, f"{status}\n{log.read_text()}"
+            time.sleep(0.1)
+        assert status["source"] == f"linux:{root / 'hub/capture.sock'}"
+        assert status["linux_hub"]["status"]["backend"] == "LinuxHub"
+        shot = native.save_snapshot(state / "shot.png")
+        with Image.open(shot) as image:
+            r, g, b = image.convert("RGB").resize((1, 1)).getpixel((0, 0))
+        assert r > 150 and g < 80 and b < 80  # the hub's red picture
+
+        mac = AppClient(state / "capture.sock", client="mac-agent")
+        there = AppClient(root / "hub/capture.sock", client="linux-agent")  # an agent on the Linux machine
+        events = []
+        mac.on("state", events.append)
+        mac.subscribe("status", "state")
+        mac.subscribe("status")  # a later, narrower subscription keeps the earlier ones, as in this app
+        mac.press(PadState(buttons=CROSS), hold_ms=50)
+        assert wait_for(lambda: CROSS in buttons(padd))
+        assert wait_for(lambda: any(e["state"]["buttons"] == CROSS for e in events))  # from the Linux hub
+        assert None not in mac._replies and "ps5mcp-relay" not in mac._replies  # the app's own requests stay hidden
+
+        assert there.claim("linux task")["granted"]
+        lease = mac.lease()
+        assert not lease["granted"] and lease["owner"]["client"] == "linux-agent"
+        with pytest.raises(ConsoleInUse):
+            mac.press(PadState(buttons=L1), hold_ms=50)
+        there.unclaim()
+        assert mac.claim("mac task")["granted"]
+        assert there.lease()["owner"]["client"] == "mac-agent"
+        mac.press_guarded(PadState(buttons=L1), hold_ms=50)
+        assert wait_for(lambda: L1 in buttons(padd))
+        with pytest.raises(AppError, match="Linux hub"):
+            mac.call("padd_update", firmware="13.60")
+        mac.close()
+        assert wait_for(lambda: there.lease()["owner"] is None)  # a Mac agent that leaves gives its claim back
+
+        connected = [e for e in padd.events() if e.get("event") == "client_connected"]
+        assert len(connected) == 1  # the Linux hub's link, never the app's
+    finally:
+        for client in (mac, there):
+            if client:
+                client.close()
+        process.send_signal(signal.SIGTERM)
+        process.wait(5)
+        linux.server.shutdown()
+        server.join(5)
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_switching_to_a_linux_hub_and_back_hands_padd_over(app, padd, monkeypatch):
+    """Settings' Hub switch at runtime (`capture_restart`): padd's only slot goes to the Linux hub and comes back."""
+    from ps5mcp.linux.hub import Hub, serve
+    monkeypatch.setenv("PS5MCP_ALLOW_CONSOLE", "1")
+    root = Path(tempfile.mkdtemp(prefix="l", dir="/tmp"))
+    (root / "hub").mkdir()
+    (root / "hub/padd-released").touch()  # as a hub that handed padd to this Mac earlier
+    linux = Hub(root / "hub", video="synthetic", host="127.0.0.1", port=padd.port)
+    ready = threading.Event()
+    server = threading.Thread(target=serve, args=(linux, ready), daemon=True)
+    server.start()
+    assert ready.wait(5)
+    native = capture.NativeApp(app.root)
+    try:
+        time.sleep(0.5)
+        assert native.status()["pad"]["connected"] and not linux.status()["pad"]["connected"]
+        client = app.client("switcher")
+        client.call("capture_restart", video=f"linux:{root / 'hub/capture.sock'}", audio="none")
+        assert wait_for(lambda: linux.status()["pad"]["connected"], 10)  # the app let go, the hub took it
+        assert wait_for(lambda: native.status()["pad"]["connected"], 5)  # as the hub reports it
+        assert not (root / "hub/padd-released").exists()
+        holder = app.client("holder")
+        assert holder.claim("on the Linux hub")["granted"]
+        holder.press(PadState(buttons=L1), hold_ms=50)
+        assert wait_for(lambda: L1 in buttons(padd))
+
+        client.call("capture_restart", video=f"file:{app.frame}", audio="none")
+        assert wait_for(lambda: holder.closed, 5)  # its claim was the Linux hub's: the switch ends it
+        assert linux.status()["pad"]["released"] and (root / "hub/padd-released").exists()
+        assert wait_for(lambda: native.status()["pad"]["connected"], 10)
+        assert native.status()["linux_hub"] is None and native.status()["notice"] is None
+        client.press(PadState(buttons=CROSS), hold_ms=50)
+    finally:
+        linux.server.shutdown()
+        server.join(5)
+        shutil.rmtree(root, ignore_errors=True)

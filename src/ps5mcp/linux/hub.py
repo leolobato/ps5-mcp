@@ -88,9 +88,27 @@ class Hub:
         if isinstance(self.controller, LinuxController):
             self.controller.abort()
 
+    @property
+    def released_file(self):
+        """Present while padd is left to another hub (the macOS app): kept across restarts of this hub."""
+        return self.root / "padd-released"
+
     def start_controller(self):
         if self.controller is None and self.config.enabled:
-            self.controller = LinuxController(self.config, self.reset_input)
+            self.controller = LinuxController(self.config, self.reset_input, released=self.released_file.exists())
+
+    def hand_over(self, release):
+        """padd_release / padd_take: padd accepts one client, so a hub that hands it over must stay off it."""
+        if not self.controller:
+            raise Refused("Console access disabled (offline mode)", "offline")
+        if release:
+            self.released_file.touch()
+            self.reset_input()
+            self.controller.release()
+        else:
+            self.released_file.unlink(missing_ok=True)
+            self.controller.take()
+        return {"released": release}
 
     def start_capture(self):
         if self.video.startswith(("/dev/", "v4l2:", "lavfi:")):
@@ -547,6 +565,10 @@ class Handler(socketserver.StreamRequestHandler):
                     for result in hub.watch_change(request, ended):
                         send({"id": request.get("id"), "ok": True, **result})
                     return
+                if request.get("cmd") in ("padd_release", "padd_take"):  # outside the hub lock: the link closes first
+                    result = hub.hand_over(request["cmd"] == "padd_release")
+                    send({"id": request.get("id"), "ok": True, **result})
+                    return
                 result = hub.dispatch(key, request, expected_epoch=epoch)
                 send({"id": request.get("id"), "ok": True, **result})
             except (ValueError, TypeError, KeyError, PadError, OSError) as exc:
@@ -563,7 +585,8 @@ class Handler(socketserver.StreamRequestHandler):
                     execute(request, epoch)
         worker = threading.Thread(target=work, daemon=True, name="hub-session")
         worker.start()
-        immediate = {"release", "release_all", "unclaim", "status", "state", "lease", "show", "snapshot", "quit"}
+        immediate = {"release", "release_all", "unclaim", "status", "state", "lease", "show", "snapshot", "quit",
+                     "padd_release", "padd_take"}
         try:
             while line := self.rfile.readline(65537):
                 if len(line) > 65536:

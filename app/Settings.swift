@@ -9,6 +9,8 @@ import AppKit
 import AVFoundation
 
 let captureVideoKey = "captureVideoID"
+/// The SSH destination of a Linux hub to use instead of this Mac (empty or missing: this Mac).
+let linuxHubKey = "linuxHub"
 let captureAudioKey = "captureAudioID"
 
 /// The UserDefaults key for the capture folder chosen in Settings (its name is from when only snapshots used it).
@@ -38,6 +40,13 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
     private let folder = NSPathControl()
     private let onSaved: () -> Void
     private let onFloatingChanged: () -> Void
+    private let hubPicker = NSSegmentedControl(labels: ["This Mac", "Linux machine"], trackingMode: .selectOne,
+                                               target: nil, action: nil)
+    private let hubAddress = NSTextField()
+    private let useHub = NSButton(title: "", target: nil, action: nil)
+    private let hubNote = NSTextField(wrappingLabelWithString: "")
+    private let hubTarget = NSStackView()
+    private var videoSection: NSView!
     private let sourcePicker = NSSegmentedControl()
     private var sources = ["", "remoteplay"]
     private let useSource = NSButton(title: "", target: nil, action: nil)
@@ -116,7 +125,17 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
         folder.setContentHuggingPriority(.defaultLow, for: .horizontal)
         let choose = NSButton(title: "Choose…", target: self, action: #selector(chooseFolder))
 
-        var notes = [note, captureNote, remotePlayNote, connectionNote]
+        hubPicker.segmentDistribution = .fillEqually
+        hubPicker.target = self
+        hubPicker.action = #selector(hubChanged)
+        hubPicker.setAccessibilityLabel("Hub")
+        hubAddress.placeholderString = "user@linux-box"
+        hubAddress.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        hubAddress.delegate = self
+        useHub.target = self
+        useHub.action = #selector(applyHub)
+
+        var notes = [note, captureNote, remotePlayNote, connectionNote, hubNote]
         #if PS5MCP_PBS
         notes.append(pbsNote)
         #endif
@@ -186,9 +205,14 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
         pickNote.textColor = .secondaryLabelColor
         pickNote.preferredMaxLayoutWidth = Self.innerWidth
 
+        hubTarget.addArrangedSubview(NSTextField(labelWithString: "SSH destination"))
+        hubTarget.addArrangedSubview(hubAddress)
+        hubTarget.spacing = 8
+        videoSection = section("Video and audio", [sourcePicker] + panes + [row([spacer(), useSource])])
         let body = column([
+            section("Hub", [hubPicker, hubTarget, hubNote, row([spacer(), useHub])]),
             section("Console", [row([NSTextField(labelWithString: "PS5 IP address"), address, save]), note]),
-            section("Video and audio", [sourcePicker] + panes + [row([spacer(), useSource])]),
+            videoSection,
             section("Capture files", [row([NSTextField(labelWithString: "Save snapshots and videos to"), folder, choose]), snapshotFrameMeter]),
             section("Controllers", [pickByHand, pickNote]),
             section("Keyboard panel", [floatOverAll, hotKey]),
@@ -220,7 +244,7 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
         box.pin(inner)
         for view in views {
             inner.addArrangedSubview(view)
-            if !(view is NSButton) && !(view is NSTextField) || view === sourcePicker {
+            if !(view is NSButton) && !(view is NSTextField) || view === sourcePicker || view === hubPicker {
                 view.translatesAutoresizingMaskIntoConstraints = false
                 view.widthAnchor.constraint(equalTo: inner.widthAnchor, constant: -28).isActive = true
             }
@@ -240,7 +264,12 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
         snapshotFrameMeter.state = UserDefaults.standard.bool(forKey: snapshotIncludesFrameMeterKey) ? .on : .off
         pickByHand.state = hub.pickByHand ? .on : .off
         floatOverAll.state = KeyboardPanel.floats ? .on : .off
-        fillDevices(video: hub.captureVideo, audio: hub.captureAudio)
+        let linux = hub.linuxHub
+        hubPicker.selectedSegment = linux == nil ? 0 : 1
+        hubAddress.stringValue = linux?.target ?? UserDefaults.standard.string(forKey: linuxHubKey) ?? ""
+        fillDevices(video: linux == nil ? hub.captureVideo : UserDefaults.standard.string(forKey: captureVideoKey),
+                    audio: linux == nil ? hub.captureAudio : UserDefaults.standard.string(forKey: captureAudioKey))
+        hubChanged()
         refreshCaptureStatus()
         update()
         window.center()
@@ -294,6 +323,7 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
             .replacingOccurrences(of: " in Settings", with: "")
             ?? "Selections are saved for future launches. Restarting capture keeps connected MCP clients running."
         refreshRemotePlayStatus()
+        refreshHubStatus()
         updateUseSource()
         #if PS5MCP_PBS
         refreshPBSStatus()
@@ -452,6 +482,74 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
         } catch { connectionNote.stringValue = error.localizedDescription }
     }
 
+    // MARK: hub
+
+    private var enteredHub: String { hubAddress.stringValue.trimmingCharacters(in: .whitespaces) }
+
+    /// An SSH destination as `ssh` takes it: a host alias, host or user@host. No spaces, and no option.
+    private var validHub: Bool {
+        !enteredHub.isEmpty && !enteredHub.hasPrefix("-") && enteredHub.rangeOfCharacter(from: .whitespacesAndNewlines) == nil
+    }
+
+    @objc private func hubChanged() {
+        hubTarget.isHidden = hubPicker.selectedSegment == 0
+        videoSection.isHidden = hub.linuxHub != nil
+        refreshHubStatus()
+        fitWindow()
+    }
+
+    private func refreshHubStatus() {
+        let wantLinux = hubPicker.selectedSegment == 1
+        let current = hub.linuxHub
+        if wantLinux {
+            useHub.title = current == nil ? "Use Linux Machine" : "Reconnect"
+            useHub.isEnabled = validHub
+        } else {
+            useHub.title = "Use This Mac"
+            useHub.isEnabled = current != nil
+        }
+        useHub.isHidden = !wantLinux && current == nil
+        guard wantLinux else {
+            hubNote.stringValue = current == nil
+                ? "This Mac owns the capture card, the padd link and the claims."
+                : "Switching back reconnects this Mac's padd link and capture device."
+            return
+        }
+        guard let current else {
+            hubNote.stringValue = "A Linux machine running the PS5 MCP hub (ps5mcp capture start) owns the capture card, the padd "
+                + "link and the claims. This app shows its picture over SSH, with your SSH keys, and passes this Mac's agents to it."
+            return
+        }
+        let status = current.status
+        var text = status.issue.map { "Not connected: \($0)" } ?? (status.phase == .streaming
+            ? "Showing \(current.target)'s picture." : "Connecting to \(current.target)…")
+        if let pad = status.remote?["pad"] as? [String: Any] {
+            text += pad["connected"] as? Bool == true
+                ? " padd \(pad["version"] as? String ?? "") is connected there." : " padd is not connected there."
+        }
+        hubNote.stringValue = text
+    }
+
+    @objc private func applyHub() {
+        let linux = hubPicker.selectedSegment == 1
+        guard !linux || validHub else { NSSound.beep(); return }
+        let video = linux ? LinuxHubSource.prefix + enteredHub : UserDefaults.standard.string(forKey: captureVideoKey) ?? ""
+        let audio = linux ? nil : UserDefaults.standard.string(forKey: captureAudioKey)
+        do {
+            guard let ui = hub.ui else { throw BadInput("Capture is not ready.") }
+            try ui.restartCapture(video: video, audio: audio)
+            if linux { UserDefaults.standard.set(enteredHub, forKey: linuxHubKey) }
+            else { UserDefaults.standard.removeObject(forKey: linuxHubKey) }
+            hubChanged()
+            refreshCaptureStatus()
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Could not change the hub"
+            alert.informativeText = (error as? BadInput)?.description ?? error.localizedDescription
+            alert.beginSheetModal(for: window)
+        }
+    }
+
     /// "" is the capture card; the others are network sources, with their own id.
     private var selectedSource: String { sources[max(0, sourcePicker.selectedSegment)] }
 
@@ -574,7 +672,9 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
         !entered.isEmpty && entered.rangeOfCharacter(from: CharacterSet(charactersIn: " /:\\")) == nil
     }
 
-    func controlTextDidChange(_ notification: Notification) { update() }
+    func controlTextDidChange(_ notification: Notification) {
+        if notification.object as? NSTextField === hubAddress { refreshHubStatus() } else { update() }
+    }
 
     private func update() {
         save.isEnabled = valid && entered != hub.host
@@ -602,6 +702,11 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
     }
 
     @objc private func saved() {
+        // Return in the SSH destination reaches the Console section's default button first.
+        if (window.firstResponder as? NSTextView)?.delegate === hubAddress {
+            if hubPicker.selectedSegment == 1 && validHub { applyHub() } else { NSSound.beep() }
+            return
+        }
         guard valid else { NSSound.beep(); return }
         hub.setHost(entered)
         update()

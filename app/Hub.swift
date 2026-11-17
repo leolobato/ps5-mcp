@@ -26,6 +26,8 @@ final class Hub {
     private(set) var captureGeneration: UInt64 = 0
     private(set) var captureAudio: String?
     private var captureIssueText: String?
+    /// Why padd may stay busy after leaving a Linux hub; shown until the next capture change.
+    private var handoffIssue: String?
     private(set) var captureIssue: String? {
         get { lock.lock(); defer { lock.unlock() }; return captureIssueText }
         set { lock.lock(); captureIssueText = newValue; lock.unlock() }
@@ -148,7 +150,12 @@ final class Hub {
         }
         #endif
         captureGeneration &+= 1
-        controller.setInputBlock(video == "remoteplay" ? "Remote Play is not delivering video; reconnect before sending input." : nil)
+        let linux = video.hasPrefix(LinuxHubSource.prefix)
+        controller.setInputBlock(video == "remoteplay" ? "Remote Play is not delivering video; reconnect before sending input."
+            : linux ? Self.linuxInput : nil)
+        // The console accepts one padd client, and the Linux hub is it.
+        if captureVideo.hasPrefix(LinuxHubSource.prefix) { dropUpstreams() }  // claims there end with the switch
+        if linux { controller.pause("linux", reason: Self.linuxInput, title: "Linux hub") } else { controller.resume("linux") }
         captureVideo = video
         captureAudio = audio
         captureIssue = nil
@@ -219,6 +226,15 @@ final class Hub {
                 source = pbs
             }
         #endif
+        case let video where linux:
+            captureAudio = nil
+            let remote = LinuxHubSource(target: String(video.dropFirst(LinuxHubSource.prefix.count)), stateDir: stateDir, sink: sink)
+            remote.onStatus = { [weak self, weak remote] status in
+                guard let self, let remote, self.source === remote else { return }
+                self.captureIssue = status.issue.map { "Linux hub: \($0)" }
+                self.statusChanged()
+            }
+            source = remote
         case "synthetic":
             source = SyntheticSource(sink: sink)
         case let video where video.hasPrefix("file:"):
@@ -239,6 +255,7 @@ final class Hub {
                 self.statusChanged()
             }
         }
+        if captureIssue == nil { captureIssue = handoffIssue }
         if let captureIssue { say(captureIssue) }
     }
 
@@ -259,12 +276,15 @@ final class Hub {
         lock.lock()
         connections.removeValue(forKey: conn.id)
         lock.unlock()
+        conn.takeUpstream()?.close()
         lease.unclaim(conn: conn.id)
         lease.forget(conn: conn.id)
         for layer in conn.allLayers() { controller.release(client: layer) }
         conn.keys.drop()
-        close(conn.fd)
+        conn.closeNow()
     }
+
+    func allConnections() -> [Connection] { lock.lock(); defer { lock.unlock() }; return Array(connections.values) }
 
     func broadcast(_ event: String, _ body: [String: Any]) {
         lock.lock()
@@ -395,7 +415,26 @@ final class Hub {
     func clientPID(conn: Int) -> pid_t? { lock.lock(); defer { lock.unlock() }; return connections[conn]?.peerPID }
 
     /// Network sources are a compressed stream: whether a frame repeats says nothing about the game.
-    private static func frameMeterSupported(_ video: String) -> Bool { video != "remoteplay" && video != "pbs" }
+    private static func frameMeterSupported(_ video: String) -> Bool {
+        video != "remoteplay" && video != "pbs" && !video.hasPrefix(LinuxHubSource.prefix)
+    }
+
+    static let linuxInput = "The Linux hub owns the controller: agents reach it through this app, but this window's keys and Remote Play input cannot yet."
+
+    /// Leaving a Linux hub for this Mac's own padd link: the hub must let go of padd first (padd takes one client),
+    /// and stay off it. Runs while the hub is still reachable.
+    func prepareCaptureChange(to video: String) {
+        handoffIssue = nil
+        guard let linux = linuxHub, !video.hasPrefix(LinuxHubSource.prefix) else { return }
+        if let problem = linux.releasePadd() {
+            handoffIssue = "The Linux hub at \(linux.target) did not release padd (\(problem)). Stop it there, or this Mac "
+                + "cannot connect to padd."
+            say(handoffIssue!)
+        }
+    }
+
+    /// The Linux hub in use instead of this Mac, if any.
+    var linuxHub: LinuxHubSource? { source as? LinuxHubSource }
 
     var frameMeterSupported: Bool { Self.frameMeterSupported(captureVideo) }
 
@@ -420,15 +459,21 @@ final class Hub {
         let shown = visible, clients = connections.count, note = noticeText ?? captureIssueText
         let sink = currentSink, source = currentSource
         lock.unlock()
-        return ["ok": true, "api": apiVersion, "version": AppVersion.short, "build": AppVersion.build, "pid": Int(getpid()), "frames": sink.frames, "preview_frames": sink.previewFrames, "frame_age": sink.frameAge,
+        var result: [String: Any] = ["ok": true, "api": apiVersion, "version": AppVersion.short, "build": AppVersion.build, "pid": Int(getpid()), "frames": sink.frames, "preview_frames": sink.previewFrames, "frame_age": sink.frameAge,
                 "frame_meter": sink.frameMeterReading()?.json as Any? ?? NSNull(),
                 "visible": shown, "now": uptimeSeconds(), "source": source?.name ?? "none", "clients": clients,
                 "pad": link.json, "title": link.title, "notice": note ?? NSNull(), "padd": padd.json,
                 "remote_play": (source as? RemotePlaySource)?.json as Any? ?? (captureVideo == "remoteplay"
                     ? RemotePlayStatus(phase: .setupNeeded, issue: note).json : NSNull()),
                 "pbs": pbsJSON,
+                "linux_hub": (source as? LinuxHubSource)?.json as Any? ?? NSNull(),
                 "auto_assign": config.autoAssign && assigner != nil, "camera": cameraPermission, "lease": lease.json,
                 "controllers": controllersJSON, "login_users": loginUsers?.json as Any? ?? NSNull()]
+        // The console side is the Linux hub's: its padd link, controllers and users, as of its last status.
+        if let remote = (source as? LinuxHubSource)?.status.remote {
+            for key in ["pad", "controllers", "login_users", "pong"] { result[key] = remote[key] ?? NSNull() }
+        }
+        return result
     }
 
     var cameraPermission: String {

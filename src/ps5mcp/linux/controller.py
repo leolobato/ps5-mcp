@@ -57,7 +57,7 @@ class LinuxAppClient(AppClient):
 
 
 class LinuxController(PadController):
-    def __init__(self, config: ConnectionConfig, reset):
+    def __init__(self, config: ConnectionConfig, reset, released=False):
         config.validate()
         if not config.enabled:
             raise ValueError("Console connections require explicit opt-in")
@@ -75,7 +75,8 @@ class LinuxController(PadController):
                 self.controllers = self.login_users = self.pong = None
             reset()
         super().__init__(config.host, config.port, connect=lambda host, port: PadLink(host, port, self.timeout),
-                         ack_timeout=self.timeout, on_ready=clear_connection, on_disconnect=clear_connection)
+                         ack_timeout=self.timeout, on_ready=clear_connection, on_disconnect=clear_connection,
+                         released=released)
         self._telemetry_thread = threading.Thread(target=self._telemetry, daemon=True, name="padd-telemetry")
         self._telemetry_thread.start()
 

@@ -210,6 +210,7 @@ class LinkStatus:
     reconnects: int
     states_sent: int
     human_active: bool
+    released: bool = False
 
 
 class PadController:
@@ -223,8 +224,10 @@ class PadController:
     """
 
     def __init__(self, host: str, port: int = p.PORT, keepalive: float = 0.1, connect=PadLink,
-                 ack_timeout: float | None = None, on_ready=None, on_disconnect=None):
+                 ack_timeout: float | None = None, on_ready=None, on_disconnect=None, released: bool = False):
         self.host, self.port, self.keepalive = host, port, keepalive
+        # Released: padd's only client slot is left to another hub until `take()`.
+        self.released = released
         self._connect = connect
         self.ack_timeout = ack_timeout
         self.on_ready, self.on_disconnect = on_ready, on_disconnect
@@ -340,7 +343,29 @@ class PadController:
         with self._lock:
             link = self._link
             return LinkStatus(bool(link and not link.closed), self.host, self.port, link.hello if link else None,
-                              self.error, self.reconnects, self.states_sent, bool(self._keys))
+                              self.error, self.reconnects, self.states_sent, bool(self._keys), self.released)
+
+    def release(self) -> None:
+        """Give padd's only client slot to another hub: input goes neutral, the link closes, and it stays closed."""
+        with self._lock:
+            self.released = True
+            self._agent = PadState()
+            self._keys.clear()
+            self._dirty = True
+            self._lock.notify_all()
+            link = self._link
+        deadline = time.monotonic() + 3
+        while link and not link.closed and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self._notify()
+
+    def take(self) -> None:
+        """Connect to padd again after `release`."""
+        with self._lock:
+            self.released = False
+            self.error = None
+            self._lock.notify_all()
+        self._notify()
 
     def _notify(self) -> None:
         if self.on_change:
@@ -352,6 +377,11 @@ class PadController:
     def _run(self) -> None:
         backoff = 0.25
         while not self._stop:
+            if self.released:
+                self.error = "released to another hub"
+                with self._lock:
+                    self._lock.wait(0.2)
+                continue
             try:
                 link = self._connect(self.host, self.port)
             except PadError as exc:
@@ -367,9 +397,9 @@ class PadController:
                 backoff = min(backoff * 2, 5.0)
                 continue
             backoff = 0.25
-            if self._stop:
+            if self._stop or self.released:
                 link.close()
-                break
+                continue
             if self.ack_timeout is not None:
                 try:
                     if link.send_state(PadState(), wait=True, timeout=self.ack_timeout) != 0:
@@ -410,7 +440,7 @@ class PadController:
 
     def _stream(self, link: PadLink) -> None:
         last_sent = 0.0
-        while not self._stop:
+        while not self._stop and not self.released:
             with self._lock:
                 if not self._dirty:
                     self._lock.wait(max(0.0, self.keepalive - (time.monotonic() - last_sent)))

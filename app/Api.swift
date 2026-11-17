@@ -105,11 +105,17 @@ final class Connection {
             return
         }
         data.append(0x0A)
+        write(data)
+    }
+
+    /// Writes unless the client is gone: after `closeNow` its descriptor number may belong to another client.
+    private func write(_ data: Data) {
         writeLock.lock(); defer { writeLock.unlock() }
+        guard !isClosed else { return }
         data.withUnsafeBytes { raw in
             var offset = 0
             while offset < raw.count {
-                let n = write(fd, raw.baseAddress! + offset, raw.count - offset)
+                let n = Darwin.write(fd, raw.baseAddress! + offset, raw.count - offset)
                 if n <= 0 { return }
                 offset += n
             }
@@ -129,6 +135,49 @@ final class Connection {
     }
 
     func subscribe(_ names: [String]) { lock.lock(); events.formUnion(names); lock.unlock() }
+
+    private var closedNow = false
+    private var upstreamNow: LinuxHubUpstream?
+    /// Whether this client's Linux hub connection carries `state` events.
+    var upstreamState = false
+    private var isClosed: Bool { lock.lock(); defer { lock.unlock() }; return closedNow }
+
+    /// This client's connection to the Linux hub, made on first use.
+    func upstream(_ make: () throws -> LinuxHubUpstream) throws -> LinuxHubUpstream {
+        lock.lock(); defer { lock.unlock() }
+        if let upstreamNow { return upstreamNow }
+        let made = try make()
+        upstreamNow = made
+        return made
+    }
+
+    func takeUpstream() -> LinuxHubUpstream? {
+        lock.lock(); defer { lock.unlock() }
+        let taken = upstreamNow
+        upstreamNow = nil
+        return taken
+    }
+
+    /// Ends the client's connection (it reads EOF), unless it is already gone: its descriptor may be reused by then.
+    func hangUp() {
+        lock.lock(); defer { lock.unlock() }
+        if !closedNow { shutdown(fd, SHUT_RDWR) }
+    }
+
+    /// Closes the descriptor, with both locks held so no write or `hangUp` can reach a reused number.
+    func closeNow() {
+        writeLock.lock(); defer { writeLock.unlock() }
+        lock.lock(); defer { lock.unlock() }
+        guard !closedNow else { return }
+        closedNow = true
+        close(fd)
+    }
+
+    func sendLine(_ line: Data) {
+        var data = line
+        data.append(0x0A)
+        write(data)
+    }
     func wants(_ name: String) -> Bool { lock.lock(); defer { lock.unlock() }; return events.contains(name) }
 }
 
@@ -170,7 +219,8 @@ extension Hub {
                     conn.send(["ok": false, "error": "bad request", "code": "bad_request"])
                     continue
                 }
-                handle(cmd, request, conn)
+                if linuxHub != nil && Self.relayed.contains(cmd) { relay(cmd, line, request, conn) }
+                else { handle(cmd, request, conn) }
             }
         }
     }
@@ -191,6 +241,53 @@ extension Hub {
         default: (code, message) = ("pad_error", "\(error)")
         }
         reply(conn, request, ["ok": false, "error": message, "code": code])
+    }
+
+    /// With a Linux hub, what goes to it: claims, input and controller commands. Status, frames, the window and padd
+    /// management stay here (padd belongs to the Linux machine).
+    static let relayed: Set<String> = ["set", "press", "controller_verify", "release", "release_all", "state", "command",
+                                       "ping", "claim", "unclaim", "lease", "force_release", "key", "begin_sequence"]
+
+    /// Replies to requests the app makes on a client's behalf carry this id; the client never sees them.
+    static let relayID = "ps5mcp-relay"
+
+    private func relay(_ cmd: String, _ line: Data, _ request: [String: Any], _ conn: Connection) {
+        do {
+            guard let path = linuxHub?.apiSocket else {
+                throw ApiError(code: "not_connected", message: "the Linux hub is not connected: \(captureIssue ?? "connecting")")
+            }
+            try upstream(conn, path).send(line)
+        } catch let error as ApiError {
+            fail(conn, request, error)
+        } catch {
+            fail(conn, request, ApiError(code: "not_connected", message: "the Linux hub is not connected: \(error)"))
+        }
+    }
+
+    private func upstream(_ conn: Connection, _ path: String) throws -> LinuxHubUpstream {
+        let own = Data("{\"id\": \"\(Self.relayID)\"".utf8)
+        return try conn.upstream {
+            try LinuxHubUpstream(path: path, onLine: { [weak conn] line in
+                if !line.starts(with: own) { conn?.sendLine(line) }
+            }, onLost: { [weak conn] in conn?.hangUp() })
+        }
+    }
+
+    /// `state` events come from the Linux hub, on the client's own connection there. Subscriptions only grow, as here.
+    private func subscribeUpstream(_ conn: Connection) {
+        guard !conn.upstreamState, let path = linuxHub?.apiSocket else { return }
+        let line = try? JSONSerialization.data(withJSONObject: ["cmd": "subscribe", "id": Self.relayID, "events": ["state"]])
+        if let line, (try? upstream(conn, path).send(line)) != nil { conn.upstreamState = true }
+    }
+
+    /// Ends every client's Linux hub connection, and the client with it: its claim there is gone.
+    func dropUpstreams() {
+        for conn in allConnections() {
+            if let upstream = conn.takeUpstream() {
+                upstream.close()
+                conn.hangUp()
+            }
+        }
     }
 
     /// Quick commands run in order on the connection's thread; blocking ones run concurrently.
@@ -370,6 +467,7 @@ extension Hub {
         case "subscribe":
             let names = request["events"] as? [String] ?? ["status", "state"]
             conn.subscribe(names)
+            if linuxHub != nil && names.contains("state") { subscribeUpstream(conn) }
             reply(conn, request, ["ok": true, "events": names])
             if names.contains("status") { conn.send(["event": "status"].merging(status()) { a, _ in a }) }
         case "padd_start", "padd_stop", "padd_update":

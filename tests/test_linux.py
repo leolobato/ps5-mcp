@@ -387,3 +387,49 @@ def test_watch_change_stops_when_its_client_leaves(hub, monkeypatch):
     count = len(reads)
     time.sleep(0.5)
     assert len(reads) == count
+
+
+def test_padd_release_frees_the_slot_until_taken_back_even_across_restarts(tmp_path, monkeypatch):
+    from .test_padd_host import BINARY, Padd, wait_for
+    if not BINARY.exists():
+        pytest.skip("run make (padd-host)")
+    monkeypatch.setenv("PS5MCP_ALLOW_CONSOLE", "1")
+    (tmp_path / "padd").mkdir()
+    padd = Padd(tmp_path / "padd")
+    root = tmp_path / "hub"
+    root.mkdir()
+
+    def started():
+        service = Hub(root, host="127.0.0.1", port=padd.port)
+        ready = threading.Event()
+        thread = threading.Thread(target=serve, args=(service, ready), daemon=True)
+        thread.start()
+        assert ready.wait(5)
+        return service, thread
+
+    def stopped(service, thread):
+        service.server.shutdown()
+        thread.join(5)
+    service, thread = started()
+    try:
+        assert wait_for(lambda: service.status()["pad"]["connected"], 5)
+        client = connect(service, "mac-app")
+        assert client.call("padd_release")["released"]
+        pad = service.status()["pad"]
+        assert pad["released"] and not pad["connected"]
+        other = padd.connect()  # the other hub gets padd's only slot
+        other.close()
+        client.close()
+        stopped(service, thread)
+
+        service, thread = started()  # a restarted hub stays off padd
+        time.sleep(0.5)
+        assert service.status()["pad"]["released"] and not service.status()["pad"]["connected"]
+        client = connect(service, "mac-app")
+        assert not client.call("padd_take")["released"]
+        assert wait_for(lambda: service.status()["pad"]["connected"], 5)
+        assert not (root / "padd-released").exists()
+        client.close()
+    finally:
+        stopped(service, thread)
+        padd.stop()

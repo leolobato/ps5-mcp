@@ -167,7 +167,7 @@ not read.
 ## Launch options
 
 `"PS5 MCP" [--state-dir DIR] [--video NAME|file:PATH|synthetic|remoteplay] [--audio NAME|none] [--headless] [--host H] [--port N]
-[--no-auto-assign] [--padd-cli EXE] [--snapshot-fps N] [--frame-diff-log PATH]`
+[--no-auto-assign] [--padd-cli EXE] [--snapshot-fps N] [--frame-diff-log PATH] [--linux-hub SSH-DESTINATION]`
 
 - The console address is `--host`, else `PS5_HOST`, else the address saved in Settings (UserDefaults key
   `consoleHost`). Saving in Settings also switches the running app to it.
@@ -176,10 +176,44 @@ not read.
   No video is selected by default. Missing devices leave the app/API running with `source: "unavailable"`.
 - `--video file:PATH` (it re-reads the image when it changes) and `--video synthetic` run without the capture card.
   They are for development and tests.
+- `--linux-hub DESTINATION` uses a Linux hub on another machine instead of this Mac (see
+  [Linux hub from the macOS app](#linux-hub-from-the-macos-app)). Without it, the app uses the hub saved in Settings
+  (UserDefaults key `linuxHub`), unless `--video` is given.
 - `PS5 --dialog-score IMAGE` prints the auto-assign match score and exits.
 - `PS5 --dialog-users IMAGE` prints the dialog's profile names, left to right, and exits.
 - `capture.NativeApp.start` launches the app. With the card it uses `open`, so macOS asks for camera and
   microphone permission for the app itself.
+
+## Linux hub from the macOS app
+
+Settings > Hub chooses between this Mac and a Linux machine that runs the Linux hub ([docs/linux.md](linux.md)).
+With a Linux machine, the Linux hub owns the capture card, the padd link and the claims. The app:
+
+- connects with `/usr/bin/ssh` in batch mode, so it uses your SSH keys or agent and never prompts. Connect once with
+  `ssh DESTINATION` in Terminal first, so that the host key is trusted.
+- forwards the hub's `capture.sock` (in `$PS5MCP_STATE`, else `~/.local/state/ps5-mcp`, on the Linux machine) and its
+  loopback live view to `linux-hub.sock` and `linux-view.sock` in this app's state directory.
+- shows the live view in its window and in `latest.jpg`, so `snapshot`, `wait_for` and `wait_for_change` work for
+  clients of this app.
+- keeps its own padd link paused: the console accepts one padd client, and the Linux hub is it. On each connection
+  the app sends the hub `padd_take`, so a hub that released padd earlier connects to it again.
+- sends the hub `padd_release` before switching back to this Mac. The hub drops its padd link and stays off it, also
+  across restarts, until the next `padd_take`. If the hub cannot be reached, the app's notice says so: stop the hub
+  there, or this Mac cannot connect to padd.
+- passes each client's claims, input and controller commands to the Linux hub over that client's own connection
+  there: `set`, `press`, `controller_verify`, `release`, `release_all`, `state`, `command`, `ping`, `claim`, `unclaim`,
+  `lease`, `force_release`, `key` and `begin_sequence`; `subscribe` to `state` also subscribes there. Replies and events come back
+  unchanged, so the Linux hub's claims cover agents on this Mac and agents on the Linux machine alike.
+- answers `status`, `snapshot`, `watch_change`, the frame meter, `show`, `hide` and `capture_restart` itself. In
+  `status`, `pad`, `controllers`, `login_users` and `pong` are the Linux hub's, as of its last status.
+- refuses padd start, stop and update: padd belongs to the Linux machine. The window's keys and Remote Play input
+  cannot drive the console in this mode yet.
+- reconnects when the SSH connection or the hub goes away. A client whose Linux hub connection ends (the hub or SSH
+  went away, or Settings switched back to this Mac) is disconnected, because its claim there has ended too.
+
+`status.linux_hub` is null for this Mac. Otherwise it contains `target`, `state` (`connecting`, `streaming`,
+`reconnecting`, `stopped`), `error`, and `status` (the Linux hub's own last `status` reply). A target that is an
+absolute path is a Linux hub's `capture.sock` on this Mac, reached without SSH; the tests use it.
 
 ## Remote Play diagnostics
 

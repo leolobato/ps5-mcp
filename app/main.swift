@@ -6,7 +6,7 @@
 //
 // Usage: PS5 [--state-dir DIR] [--video NAME|remoteplay|pbs|file:PATH|synthetic] [--audio NAME|none] [--headless]
 //            [--host H] [--port N] [--pbs-port N (PBS builds)] [--features] [--no-auto-assign] [--padd-cli EXE] [--snapshot-fps N]
-//            [--frame-diff-log PATH]
+//            [--frame-diff-log PATH] [--linux-hub SSH-DESTINATION]
 //        PS5 --dialog-score IMAGE   (prints the assignment-dialog match score and exits)
 //        PS5 --dialog-users IMAGE   (prints the dialog's profile names, left to right, and exits)
 
@@ -18,6 +18,10 @@ struct Config {
     var video = UserDefaults.standard.string(forKey: captureVideoKey) ?? ""
     var audio: String? = UserDefaults.standard.string(forKey: captureAudioKey)
     var headless = false
+    /// An SSH destination running the Linux hub (docs/linux.md), which then owns capture and padd. Empty: this Mac is
+    /// the hub. An absolute path is a Linux hub's capture.sock on this Mac (tests).
+    /// --linux-hub, else the one saved in Settings unless --video names a source.
+    var linuxHub = ""
     var snapshotFPS = 5.0
     /// A CSV of every frame's difference from the one before, for calibrating the frame meter.
     var frameDiffLog: String?
@@ -45,15 +49,17 @@ struct Config {
     init(_ args: [String]) {
         if !host.isEmpty { hostSource = "PS5_HOST" }
         var i = 1
+        var videoGiven = false, linuxHubGiven = false
         while i < args.count {
             let value = i + 1 < args.count ? args[i + 1] : ""
             switch args[i] {
             case "--state-dir": stateDir = value; i += 1
-            case "--video": video = value; i += 1
+            case "--video": video = value; videoGiven = true; i += 1
             case "--audio": audio = value == "none" ? nil : value; i += 1
             case "--snapshot-fps": snapshotFPS = Double(value) ?? 5; i += 1
             case "--frame-diff-log": frameDiffLog = value; i += 1
             case "--host": host = value; hostSource = "--host"; i += 1
+            case "--linux-hub": linuxHub = value; linuxHubGiven = true; i += 1
             case "--port": port = UInt16(value) ?? PMCP.port; i += 1
             #if PS5MCP_PBS
             case "--pbs-port": pbsPort = Int(value) ?? PBSSource.defaultPort; i += 1
@@ -70,6 +76,8 @@ struct Config {
             }
             i += 1
         }
+        if !linuxHubGiven && !videoGiven { linuxHub = UserDefaults.standard.string(forKey: linuxHubKey) ?? "" }
+        if !linuxHub.isEmpty { video = LinuxHubSource.prefix + linuxHub }
         if host.isEmpty, let saved = UserDefaults.standard.string(forKey: savedHostKey), !saved.isEmpty {
             host = saved
             hostSource = "settings"

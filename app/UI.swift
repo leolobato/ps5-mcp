@@ -683,6 +683,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
 
     func restartCapture(video: String, audio: String?) throws {
         try validateCaptureChange()
+        hub.prepareCaptureChange(to: video)
         hub.source.stop()
         (previewLayer as? AVCaptureVideoPreviewLayer)?.session = nil
         previewLayer.removeFromSuperlayer()
