@@ -14,6 +14,7 @@ the app's window is missing. "Offline tests only" means mock or fixture coverage
 | Feature | macOS app | Linux hub |
 |---|---|---|
 | Video capture and `snapshot` | Yes | Yes. V4L2 through FFmpeg; the device, format, size and rate are set explicitly |
+| PBS video source (no capture card) | Yes, with audio | Video only, with `PS5MCP_ALLOW_CONSOLE=1`; see [PBS video](#pbs-video-no-capture-card) |
 | Audio | Yes | No |
 | Live view | App window | Browser page on a loopback URL (`view`, `show_viewer`); view only |
 | Keyboard control (window keys, `ps5mcp control`) | Yes | No |
@@ -206,6 +207,29 @@ Discovery that opens a card is intentionally not automatic. No audio or GPU
 acceleration is requested. Physical MJPEG is passed through without recompression; raw/lavfi video is
 JPEG-encoded once for fanout. Output frame synchronisation is passthrough. Linux screenshot
 resizing uses Pillow rather than launching another FFmpeg process.
+
+## PBS video (no capture card)
+
+`PS5MCP_VIDEO=pbs` takes video from the [PBS payload](../third-party/pbs-payload/NOTICE.md) over the network instead
+of a capture card. Load PBS on the console first (`ps5mcp get-pbs --run`, or from Payload Manager's library). PBS is
+console networking, so it needs the same opt-in as padd:
+
+```sh
+export PS5MCP_VIDEO=pbs
+export PS5_HOST=YOUR_PS5_IP
+export PS5MCP_ALLOW_CONSOLE=1
+uv run ps5mcp capture start
+```
+
+The hub reads `/config.json` and `/frames` from PBS on port 9999 (`PS5MCP_PBS_PORT` to change it), decodes the
+H.264 stream with one FFmpeg process and serves the JPEG frames like any other source: `snapshot`, the browser
+viewer, `wait_for` and `wait_for_change` all work. PBS audio is not read. Each picture PBS sends is decoded as soon
+as it arrives, so a still screen still yields its newest frame.
+
+A new PBS stream starts at the encoder's next keyframe, which can take a few seconds; the first frame of each
+connection is allowed 10 s before it counts as stale. When PBS stops or the stream drops, `capture_error` says
+"Waiting for PBS at HOST:9999" and the hub reconnects by itself once PBS answers. Decoding 1080p60 to JPEG uses
+about one CPU core. On the console, 1080p at about 55 fps was seen.
 
 ## Freshness, timestamps and recovery
 

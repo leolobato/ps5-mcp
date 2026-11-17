@@ -28,7 +28,7 @@ from ..client import PadError
 from ..hub import state_from_json, state_to_json
 from ..protocol import PadState
 from .controller import LinuxController, config_from_environment
-from .video import FFmpegCapture, Frame, VideoConfig
+from .video import PBS_SOURCE, FFmpegCapture, Frame, PBSCapture, VideoConfig, pbs_port_from_environment
 from .viewer import metadata, start_viewer
 
 
@@ -97,6 +97,15 @@ class Hub:
             config = self.video_config or VideoConfig.environment(self.video)
             self.video_capture = FFmpegCapture(config, self.latest)
             self.video_capture.start()
+        elif self.video == PBS_SOURCE:
+            # PBS is console networking: it follows the same explicit opt-in as padd.
+            if not self.config.enabled:
+                self.capture_error = ("PBS video needs PS5MCP_ALLOW_CONSOLE=1 and PS5_HOST; "
+                                      "restart the hub with both set")
+                return
+            config = self.video_config or VideoConfig.environment(PBS_SOURCE)
+            self.video_capture = PBSCapture(config, self.latest, self.host, pbs_port_from_environment())
+            self.video_capture.start()
         else:
             self.capture()
 
@@ -125,7 +134,8 @@ class Hub:
                 with Image.open(self.video[5:]) as source:
                     image = source.convert("RGB")
             else:
-                raise ValueError("Unsupported source: choose synthetic, file:PATH, lavfi:FILTER or an explicit /dev/... device")
+                raise ValueError("Unsupported source: choose synthetic, file:PATH, lavfi:FILTER, pbs "
+                                 "or an explicit /dev/... device")
             temporary = self.root / "latest.tmp"
             image.save(temporary, format="JPEG")
             temporary.replace(self.latest)
@@ -257,6 +267,8 @@ class Hub:
             config = self.video_capture.config
             result["video_config"] = {"source": config.source, "input_format": config.input_format,
                                       "size": config.size, "fps": config.fps}
+            if "pbs" in result:
+                result["video_config"]["pbs_port"] = result["pbs"]["port"]
         return result
 
     def dispatch(self, key, request, expected_epoch=None):

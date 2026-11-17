@@ -79,6 +79,8 @@ class LinuxHub(NativeApp):
         except ValueError as exc:
             raise CaptureError(str(exc)) from exc
         requested = video or env.get("PS5MCP_VIDEO")
+        if requested == "pbs" and not connection.enabled:
+            raise CaptureError("PBS video reaches the console: set PS5MCP_ALLOW_CONSOLE=1 and PS5_HOST")
         if status := self.status():
             actual = status.get("video_config", {}).get("source", status.get("configured_source", status["source"]))
             config = status.get("video_config", {})

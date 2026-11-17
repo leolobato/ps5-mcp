@@ -366,8 +366,8 @@ Chiaki-ng is pinned as a submodule and built statically for the app. PS5 MCP now
 
 ## Linux
 
-A headless Python hub runs the same MCP server on Linux: shared V4L2/FFmpeg HDMI capture, screenshots, a local
-MJPEG browser viewer and padd controller input. Audio, the window and keyboard control, Remote Play and the frame meter
+A headless Python hub runs the same MCP server on Linux: shared V4L2/FFmpeg HDMI capture or PBS video over the
+network, screenshots, a local MJPEG browser viewer and padd controller input. Audio, the window and keyboard control, Remote Play and the frame meter
 are not available there, and a person must answer controller-assignment prompts;
 see [What works on Linux](docs/linux.md#what-works-on-linux). Physical 1080p60 capture and short controller actions have been tested on
 the console. See [Linux setup](docs/linux.md), [capture results](docs/linux-hardware-validation.md),
