@@ -24,7 +24,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 from ..capture import CaptureError
-from ..client import PadError
+from ..client import HumanHasControl, PadError
 from ..hub import state_from_json, state_to_json
 from ..protocol import PadState
 from .controller import LinuxController, config_from_environment
@@ -220,13 +220,33 @@ class Hub:
             self.sessions[self.owner]["t"] = time.monotonic()
             self.sessions[self.owner]["claimed_at"] = time.monotonic()
 
+    def human(self, key, session, state):
+        """A person's keys (the macOS app's window): the merged state they hold, or None when they let go. Like the
+        app's own keyboard, it needs no claim, cancels agent holds, and keeps agents out until released."""
+        if not self.controller:
+            raise Refused("Console access disabled (offline mode)", "offline")
+        layer = f"human:{key}"
+        if state is None:
+            session["human"] = False
+            self.controller.key(layer, None)
+            return {"human": False}
+        state = checked_state(state)
+        if not self.controller.status().human_active:
+            for other in self.sessions:  # a person taking over cancels every agent hold
+                self.clear_session(other)
+            self.merge()
+        session["human"] = True
+        self.controller.key(layer, state)
+        return {"human": True}
+
     def merge(self):
         state = PadState()
         for session in self.sessions.values():
             if not session["state"].is_neutral():
                 state = session["state"]
         if self.controller:
-            self.controller.set_agent(state)
+            with contextlib.suppress(HumanHasControl):  # a person's keys win; agents were reset when they started
+                self.controller.set_agent(state)
             if state.is_neutral():
                 self.neutral_revision = self.controller.revision
         event = {"event": "state", "t": time.monotonic(), "state": state_to_json(state)}
@@ -237,6 +257,8 @@ class Hub:
 
     def disconnect(self, key):
         with self.lock:
+            if self.sessions.get(key, {}).get("human") and self.controller:
+                self.controller.key(f"human:{key}", None)  # the window went away: its keys let go
             self.clear_session(key)
             self.sessions.pop(key, None)
             if key in self.queue:
@@ -345,6 +367,13 @@ class Hub:
                 self.clear_session(key)
                 self.merge()
                 return {}
+            if cmd == "human":
+                return self.human(key, session, request.get("state"))
+            agent_input = cmd in ("press", "command", "begin_sequence") or (
+                cmd == "set" and not checked_state(request.get("state", {})).is_neutral())
+            if agent_input and self.controller and self.controller.status().human_active:
+                raise Refused("A person is using the keyboard in the PS5 MCP window; try again when they let go",
+                              "human_has_control")
             if cmd != "ping" and self.owner is not None and self.owner != key:
                 raise Refused("Console claimed by another agent", "leased")
             if cmd == "release_all":

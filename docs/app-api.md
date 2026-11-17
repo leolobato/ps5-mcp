@@ -202,12 +202,15 @@ With a Linux machine, the Linux hub owns the capture card, the padd link and the
   there, or this Mac cannot connect to padd.
 - passes each client's claims, input and controller commands to the Linux hub over that client's own connection
   there: `set`, `press`, `controller_verify`, `release`, `release_all`, `state`, `command`, `ping`, `claim`, `unclaim`,
-  `lease`, `force_release`, `key` and `begin_sequence`; `subscribe` to `state` also subscribes there. Replies and events come back
+  `lease`, `force_release` and `begin_sequence`; `subscribe` to `state` also subscribes there. Replies and events come back
   unchanged, so the Linux hub's claims cover agents on this Mac and agents on the Linux machine alike.
 - answers `status`, `snapshot`, `watch_change`, the frame meter, `show`, `hide` and `capture_restart` itself. In
   `status`, `pad`, `controllers`, `login_users` and `pong` are the Linux hub's, as of its last status.
-- refuses padd start, stop and update: padd belongs to the Linux machine. The window's keys and Remote Play input
-  cannot drive the console in this mode yet.
+- sends the keys a person holds in the window (and `key` requests, as `ps5mcp control` sends them) to the hub's
+  `human` command, on a connection of their own. As here, they need no claim, cancel agent holds, and make agent input
+  fail with `human_has_control` until released; the hub lets them go if that connection ends. Home, Close and Launch
+  from the window go to the hub as `command` requests.
+- refuses padd start, stop and update: padd belongs to the Linux machine.
 - reconnects when the SSH connection or the hub goes away. A client whose Linux hub connection ends (the hub or SSH
   went away, or Settings switched back to this Mac) is disconnected, because its claim there has ended too.
 

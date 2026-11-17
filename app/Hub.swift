@@ -156,6 +156,7 @@ final class Hub {
         // The console accepts one padd client, and the Linux hub is it.
         if captureVideo.hasPrefix(LinuxHubSource.prefix) { dropUpstreams() }  // claims there end with the switch
         if linux { controller.pause("linux", reason: Self.linuxInput, title: "Linux hub") } else { controller.resume("linux") }
+        controller.setKeyForward(nil)
         captureVideo = video
         captureAudio = audio
         captureIssue = nil
@@ -234,6 +235,7 @@ final class Hub {
                 self.captureIssue = status.issue.map { "Linux hub: \($0)" }
                 self.statusChanged()
             }
+            controller.setKeyForward { [weak remote] in remote?.human($0) }
             source = remote
         case "synthetic":
             source = SyntheticSource(sink: sink)
@@ -419,7 +421,7 @@ final class Hub {
         video != "remoteplay" && video != "pbs" && !video.hasPrefix(LinuxHubSource.prefix)
     }
 
-    static let linuxInput = "The Linux hub owns the controller: agents reach it through this app, but this window's keys and Remote Play input cannot yet."
+    static let linuxInput = "The Linux hub owns the controller: agents and this window's keys reach it through this app."
 
     /// Leaving a Linux hub for this Mac's own padd link: the hub must let go of padd first (padd takes one client),
     /// and stay off it. Runs while the hub is still reachable.
@@ -871,7 +873,7 @@ final class Hub {
     func keyCommand(_ name: String) {
         guard name == "home" else { return }
         DispatchQueue.global().async {
-            if let link = try? self.controller.currentLink() { _ = try? self.command("home", "", link: link) }
+            _ = try? self.consoleCommand("home", "")
         }
     }
 

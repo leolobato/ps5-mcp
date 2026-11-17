@@ -36,6 +36,8 @@ final class LinuxHubSource: FrameSource {
     private var master: Process?
     private var stream: Int32 = -1
     private var current = LinuxHubStatus()
+    /// The window's keys: one connection of their own, so the hub lets them go if it ends.
+    private var humanLink: LinuxHubUpstream?
     /// Counts connections, so a status poller from an earlier one stops.
     private var generation = 0
     var onStatus: ((LinuxHubStatus) -> Void)?
@@ -196,6 +198,23 @@ final class LinuxHubSource: FrameSource {
         catch { return (error as? BadInput)?.description ?? "\(error)" }
     }
 
+    /// The keys a person holds in this app's window (nil: none). Like this app's own keyboard, they need no claim and
+    /// keep agents out while held. Sends without waiting: a key that cannot reach the hub is not held there either.
+    func human(_ state: PadState?) {
+        lock.lock(); defer { lock.unlock() }
+        guard !stopped, current.phase == .streaming else { return }
+        if humanLink == nil {
+            guard state != nil else { return }
+            humanLink = try? LinuxHubUpstream(path: hubSocket, onLine: { _ in }, onLost: { [weak self] in
+                guard let self else { return }
+                self.lock.lock(); self.humanLink = nil; self.lock.unlock()
+            })
+        }
+        let body: [String: Any] = ["cmd": "human", "client": "PS5 MCP window", "state": state?.json ?? NSNull()]
+        guard let line = try? JSONSerialization.data(withJSONObject: body) else { return }
+        if (try? humanLink?.send(line)) == nil { humanLink?.close(); humanLink = nil }
+    }
+
     /// A console command from this app's window (home, close, launch, uninstall), as one client of the hub: refused
     /// while an agent holds the console there.
     func command(_ op: String, _ arg: String) throws -> Int32 {
@@ -306,10 +325,12 @@ final class LinuxHubSource: FrameSource {
 
     private func disconnect() {
         lock.lock()
-        let process = master, fd = stream
+        let process = master, fd = stream, keys = humanLink
         master = nil
         stream = -1
+        humanLink = nil
         lock.unlock()
+        keys?.close()
         if fd >= 0 { close(fd) }
         if let process, process.isRunning {
             process.terminate()

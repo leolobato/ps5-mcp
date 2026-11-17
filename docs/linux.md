@@ -17,7 +17,7 @@ the app's window is missing. "Offline tests only" means mock or fixture coverage
 | PBS video source (no capture card) | Yes, with audio | Video only, with `PS5MCP_ALLOW_CONSOLE=1`; see [PBS video](#pbs-video-no-capture-card) |
 | Audio | Yes | No |
 | Live view | App window | Browser page on a loopback URL (`view`, `show_viewer`) (view only), or the macOS app over SSH |
-| Keyboard control (window keys, `ps5mcp control`) | Yes | No |
+| Keyboard control (window keys, `ps5mcp control`) | Yes | Through the macOS app's window when it uses this hub |
 | Video recording to MP4 | Yes (window) | No |
 | Button recordings | Record from the window or `control --record`; `play_recording` | `record_start`/`record_stop` and `play_recording` only; not tested yet |
 | `press`, `hold`, `stick`, `trigger`, `touchpad`, `sequence`, `ps_button`, `release_all` | Yes | Yes. Every state is acknowledged by padd |

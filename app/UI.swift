@@ -1168,7 +1168,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         } else {
             sidebar.set("In use by", "nobody")
         }
-        sidebar.set("Control", "agents, through the Linux hub")
+        let human = pad["human_has_control"] as? Bool == true
+        sidebar.set("Control", hub.controller.status().humanActive ? "you (keys held)" : human ? "a person (keys held)" : "shared")
         if connected {
             sidebar.setStatus("Linux hub · padd \(version ?? "?")", color: .systemGreen)
         } else {
@@ -1188,10 +1189,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
             sidebar.connectionBanner.hide()
         }
         for id in ["paddStart", "paddStop", "paddUpdate", "addController", "removeController", "selectController",
-                   "forceRelease", "claimDetails", "psButton", "releaseAll", "play", "uninstall"] {
+                   "forceRelease", "claimDetails", "releaseAll", "play", "uninstall"] {
             sidebar.setEnabled(id, false)
         }
-        for id in ["home", "closeApp"] { sidebar.setEnabled(id, connected) }
+        for id in ["home", "closeApp", "psButton"] { sidebar.setEnabled(id, connected) }
         sidebar.setEnabled("launch", connected && selectedTitle != nil)
         sidebar.buttons["launch"]?.bezelColor = sidebar.isEnabled("launch") ? .controlAccentColor : nil
     }

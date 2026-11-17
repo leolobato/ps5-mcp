@@ -246,7 +246,7 @@ extension Hub {
     /// With a Linux hub, what goes to it: claims, input and controller commands. Status, frames, the window and padd
     /// management stay here (padd belongs to the Linux machine).
     static let relayed: Set<String> = ["set", "press", "controller_verify", "release", "release_all", "state", "command",
-                                       "ping", "claim", "unclaim", "lease", "force_release", "key", "begin_sequence"]
+                                       "ping", "claim", "unclaim", "lease", "force_release", "begin_sequence"]
 
     /// Replies to requests the app makes on a client's behalf carry this id; the client never sees them.
     static let relayID = "ps5mcp-relay"

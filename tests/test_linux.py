@@ -433,3 +433,43 @@ def test_padd_release_frees_the_slot_until_taken_back_even_across_restarts(tmp_p
     finally:
         stopped(service, thread)
         padd.stop()
+
+
+def test_a_persons_keys_override_agents_and_let_go_on_disconnect(tmp_path, monkeypatch):
+    from ps5mcp.client import HumanHasControl
+    from ps5mcp.protocol import BUTTONS, PadState
+
+    from .test_padd_host import BINARY, Padd, wait_for
+    if not BINARY.exists():
+        pytest.skip("run make (padd-host)")
+    monkeypatch.setenv("PS5MCP_ALLOW_CONSOLE", "1")
+    (tmp_path / "padd").mkdir()
+    padd = Padd(tmp_path / "padd")
+    (tmp_path / "hub").mkdir()
+    service = Hub(tmp_path / "hub", host="127.0.0.1", port=padd.port)
+    ready = threading.Event()
+    thread = threading.Thread(target=serve, args=(service, ready), daemon=True)
+    thread.start()
+    assert ready.wait(5)
+    try:
+        assert wait_for(lambda: service.status()["pad"]["connected"], 5)
+        agent, window = connect(service, "agent"), connect(service, "window")
+        agent.set(PadState(buttons=BUTTONS["l1"]))  # an agent hold, cancelled when the person starts
+        window.call("human", state={"buttons": BUTTONS["cross"]})
+        assert wait_for(lambda: padd.last_buttons() == BUTTONS["cross"])
+        assert service.status()["pad"]["human_has_control"]
+        with pytest.raises(HumanHasControl):
+            agent.press(PadState(buttons=BUTTONS["square"]), hold_ms=50)
+        window.call("human", state=None)
+        assert wait_for(lambda: padd.last_buttons() == 0)  # the agent's old hold does not come back
+        agent.press(PadState(buttons=BUTTONS["square"]), hold_ms=50)
+
+        window.call("human", state={"buttons": BUTTONS["circle"]})
+        assert wait_for(lambda: padd.last_buttons() == BUTTONS["circle"])
+        window.close()
+        assert wait_for(lambda: padd.last_buttons() == 0 and not service.status()["pad"]["human_has_control"])
+        agent.close()
+    finally:
+        service.server.shutdown()
+        thread.join(5)
+        padd.stop()

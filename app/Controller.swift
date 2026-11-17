@@ -147,8 +147,29 @@ final class PadController {
     }
 
     /// Keyboard layer: `state` while the key is down, nil on release.
+    /// Set while a Linux hub holds padd: the person's keys go there (what they hold together, nil when let go)
+    /// instead of to this link. Called with the lock held, so the hub gets every change in order.
+    private var keyForward: ((PadState?) -> Void)?
+
+    func setKeyForward(_ forward: ((PadState?) -> Void)?) {
+        cond.lock()
+        keyForward = forward
+        keys.removeAll()
+        cond.unlock()
+        onStatus?()
+    }
+
     func key(_ id: String, _ state: PadState?) {
         cond.lock()
+        if let keyForward {
+            let wasHuman = !keys.isEmpty
+            if let state { keys[id] = state } else { keys.removeValue(forKey: id) }
+            keyForward(keys.isEmpty ? nil : keys.values.reduce(PadState.neutral) { $0.merged($1) })
+            let isHuman = !keys.isEmpty
+            cond.unlock()
+            if wasHuman != isHuman { onStatus?() }
+            return
+        }
         let wasHuman = !keys.isEmpty
         if let state, inputBlock == nil {
             keys[id] = state
@@ -175,6 +196,7 @@ final class PadController {
     func releaseAll() {
         cond.lock()
         let wasHuman = !keys.isEmpty
+        if wasHuman { keyForward?(nil) }
         keys.removeAll()
         agents.removeAll()
         changed()

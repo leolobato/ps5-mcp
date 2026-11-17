@@ -136,7 +136,8 @@ def test_missing_capture_card_keeps_app_and_api_running(padd, video_flag):
         with (root / "app.log").open("w+") as log:
             process = subprocess.Popen(
                 [str(APP), "--state-dir", directory, video_flag, "missing-test-capture-card",
-                 "--audio", "none", "--headless", "--host", "127.0.0.1", "--port", str(padd.port)],
+                 "--audio", "none", "--headless", "--host", "127.0.0.1", "--port", str(padd.port),
+                 "-linuxHub", ""],  # a Linux hub saved in Settings would win over -captureVideoID
                 stdout=log, stderr=subprocess.STDOUT)
             try:
                 native = capture.NativeApp(root)
@@ -1646,6 +1647,19 @@ def test_linux_hub_mode_relays_mac_agents_to_the_linux_hub(padd, monkeypatch):
         assert wait_for(lambda: L1 in buttons(padd))
         with pytest.raises(AppError, match="Linux hub"):
             mac.call("padd_update", firmware="13.60")
+        mac.unclaim()
+
+        keys = AppClient(state / "capture.sock", client="keyboard")  # the window's keys, as `ps5mcp control` sends them
+        keys.key("space", True)
+        assert wait_for(lambda: padd.last_buttons() == CROSS)  # through the Linux hub, with no claim
+        with pytest.raises(HumanHasControl):
+            there.press(PadState(buttons=L1), hold_ms=50)
+        keys.key("space", False)
+        assert wait_for(lambda: padd.last_buttons() == 0)
+        keys.close()
+        there.press(PadState(buttons=L1), hold_ms=50)
+
+        assert mac.claim("mac task")["granted"]
         mac.close()
         assert wait_for(lambda: there.lease()["owner"] is None)  # a Mac agent that leaves gives its claim back
 
