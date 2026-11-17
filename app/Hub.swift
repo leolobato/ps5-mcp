@@ -433,6 +433,12 @@ final class Hub {
         }
     }
 
+    /// The window's console commands go to whichever hub holds padd.
+    func consoleCommand(_ op: String, _ arg: String) throws -> Int32 {
+        if let linux = linuxHub { return try linux.command(op, arg) }
+        return try command(op, arg, link: controller.currentLink())
+    }
+
     /// The Linux hub in use instead of this Mac, if any.
     var linuxHub: LinuxHubSource? { source as? LinuxHubSource }
 

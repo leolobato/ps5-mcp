@@ -15,6 +15,8 @@ struct LinuxHubStatus {
     var issue: String?
     /// The Linux hub's own `status` reply, as last read.
     var remote: [String: Any]?
+    /// Its `lease` reply (who holds the console there), as last read.
+    var lease: [String: Any]?
 
     var json: [String: Any] {
         ["state": phase.rawValue, "error": issue as Any? ?? NSNull(), "status": remote as Any? ?? NSNull()]
@@ -156,13 +158,18 @@ final class LinuxHubSource: FrameSource {
     }
 
     /// One request to the hub on its own connection, for longer than `status` takes.
-    private func ask(_ cmd: String, timeout: Double) throws -> [String: Any] {
+    private func ask(_ cmd: String, timeout: Double, _ fields: [String: Any] = [:]) throws -> [String: Any] {
         let fd = try connectUnix(hubSocket)
         defer { close(fd) }
         var wait = timeval(tv_sec: Int(timeout), tv_usec: 0)
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &wait, socklen_t(MemoryLayout<timeval>.size))
-        let request = Array("{\"cmd\":\"\(cmd)\",\"client\":\"PS5 MCP app\"}\n".utf8)
-        guard write(fd, request, request.count) == request.count else { throw BadInput("the Linux hub closed") }
+        var body = fields
+        body["cmd"] = cmd
+        body["client"] = "PS5 MCP window"
+        var request = try JSONSerialization.data(withJSONObject: body)
+        request.append(0x0A)
+        let sent = request.withUnsafeBytes { write(fd, $0.baseAddress!, $0.count) }
+        guard sent == request.count else { throw BadInput("the Linux hub closed") }
         var reader = LineReader(fd: fd)
         let line = try reader.line()
         guard let reply = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else {
@@ -189,10 +196,20 @@ final class LinuxHubSource: FrameSource {
         catch { return (error as? BadInput)?.description ?? "\(error)" }
     }
 
+    /// A console command from this app's window (home, close, launch, uninstall), as one client of the hub: refused
+    /// while an agent holds the console there.
+    func command(_ op: String, _ arg: String) throws -> Int32 {
+        guard apiSocket != nil else { throw BadInput("the Linux hub is not connected") }
+        let reply = try ask("command", timeout: 20, ["op": op, "arg": arg, "wait": 2])
+        guard let status = reply["status"] as? Int else { throw BadInput("the Linux hub sent no status") }
+        return Int32(truncatingIfNeeded: status)
+    }
+
     private func pollStatus(_ mine: Int) {
         func current() -> Bool { lock.lock(); defer { lock.unlock() }; return !stopped && generation == mine }
         while current(), status.phase == .streaming {
             _ = try? hubStatus()
+            if let lease = try? ask("lease", timeout: 2) { publish { $0.lease = lease } }
             for _ in 0..<20 where current() { usleep(100_000) }
         }
     }

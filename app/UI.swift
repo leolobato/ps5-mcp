@@ -1133,6 +1133,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         refreshStatus(link: link, canRun: canRun && !fileManagerBusy, remote: remote, owner: lease["owner"] as? [String: Any],
                       queued: queued, age: age, camera: camera)
         keyboardPanel.setKeysActive(NSApp.isActive && window.isKeyWindow && window.firstResponder === video)
+        if let linux = hub.linuxHub { showLinuxHub(linux, sidebar: sidebar) }
+    }
+
+    /// With a Linux hub, the console side is the hub's: its padd link, its claim. This Mac's own link is paused, and
+    /// padd start/stop and controllers belong to the Linux machine.
+    private func showLinuxHub(_ linux: LinuxHubSource, sidebar: Sidebar) {
+        let status = linux.status
+        let pad = status.remote?["pad"] as? [String: Any] ?? [:]
+        let connected = status.phase == .streaming && pad["connected"] as? Bool == true
+        let version = pad["version"] as? String
+        let hello = pad["hello"] as? [String: Any]
+        sidebar.set("Link", status.phase == .streaming ? "Linux hub \(linux.target)" : status.issue ?? "connecting to \(linux.target)",
+                    color: status.phase == .streaming ? .systemGreen : .systemRed)
+        sidebar.set("padd", connected ? "v\(version ?? "?") · on the Linux hub" : pad["released"] as? Bool == true
+                    ? "released by the Linux hub" : (pad["error"] as? String ?? "–"))
+        sidebar.set("Pad", (hello?["pad_handle"] as? Int).map { "handle \($0)" } ?? "–")
+        let userID = hello?["user_id"] as? Int
+        let users = (status.remote?["login_users"] as? [String: Any])?["users"] as? [[String: Any]] ?? []
+        let name = users.first { $0["user_id"] as? Int == userID }?["name"] as? String
+        sidebar.set("User", userID.map { id in (name.map { "\($0) · " } ?? "") + String(format: "0x%08X", UInt32(truncatingIfNeeded: id)) } ?? "–")
+        if let pong = status.remote?["pong"] as? [String: Any], let sent = pong["reports_sent"] as? Int {
+            let failed = pong["report_failures"] as? Int ?? 0
+            sidebar.set("Reports", "\(sent) sent, \(failed) failed", color: failed > 0 ? .systemRed : .labelColor)
+        } else {
+            sidebar.set("Reports", "–")
+        }
+        let owner = status.lease?["owner"] as? [String: Any]
+        let queued = (status.lease?["queue"] as? [Any])?.count ?? 0
+        if let owner {
+            let reason = owner["reason"] as? String ?? ""
+            sidebar.set("In use by", "\(owner["client"] as? String ?? "?")" + (reason.isEmpty ? "" : " · \(reason)")
+                        + (queued > 0 ? " · \(queued) waiting" : ""), color: .systemOrange)
+        } else {
+            sidebar.set("In use by", "nobody")
+        }
+        sidebar.set("Control", "agents, through the Linux hub")
+        if connected {
+            sidebar.setStatus("Linux hub · padd \(version ?? "?")", color: .systemGreen)
+        } else {
+            sidebar.setStatus(status.phase == .streaming ? "Linux hub · padd not connected" : "Linux hub not connected",
+                              color: .systemRed)
+        }
+        sidebar.setSource("Video from the Linux hub at \(linux.target)")
+        if status.phase != .streaming {
+            sidebar.connectionBanner.show(.error, title: "Linux hub not connected",
+                                          body: (status.issue ?? "Connecting to \(linux.target)…") + "\nThis app reconnects by itself.",
+                                          actionTitle: "Settings…", selector: #selector(showSettings))
+        } else if !connected {
+            sidebar.connectionBanner.show(.error, title: "padd is not connected on the Linux hub",
+                                          body: "Video still works. Start padd on the console, and the Linux hub connects to it."
+                                            + ((pad["error"] as? String).map { "\n\($0)" } ?? ""))
+        } else {
+            sidebar.connectionBanner.hide()
+        }
+        for id in ["paddStart", "paddStop", "paddUpdate", "addController", "removeController", "selectController",
+                   "forceRelease", "claimDetails", "psButton", "releaseAll", "play", "uninstall"] {
+            sidebar.setEnabled(id, false)
+        }
+        for id in ["home", "closeApp"] { sidebar.setEnabled(id, connected) }
+        sidebar.setEnabled("launch", connected && selectedTitle != nil)
+        sidebar.buttons["launch"]?.bezelColor = sidebar.isEnabled("launch") ? .controlAccentColor : nil
     }
 
     /// The top of the sidebar: one line, then a message only for what needs attention.
@@ -1416,7 +1477,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
     }
 
     @objc func home() {
-        background { _ = try self.hub.command("home", "", link: self.hub.controller.currentLink()) }
+        background { _ = try self.hub.consoleCommand("home", "") }
     }
 
     private var typeSheet: NSAlert?
@@ -1537,7 +1598,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
     @objc func closeApp() {
         guard confirm("Close the running game or app?", "Unsaved progress is lost. The console returns to the home screen.",
                       "Close", destructive: true) else { return }
-        background { _ = try self.hub.command("close", "", link: self.hub.controller.currentLink()) }
+        background { _ = try self.hub.consoleCommand("close", "") }
     }
 
     // MARK: games
@@ -1614,7 +1675,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         UserDefaults.standard.set(title.id, forKey: "launchTitle")
         hub.notice = "Launching \(title.name)…"
         background {
-            let status = try self.hub.command("launch", title.id, link: self.hub.controller.currentLink())
+            let status = try self.hub.consoleCommand("launch", title.id)
             // With an app in front the title replaces it, yet the console answers 0x80940010 (docs/ps-button.md).
             switch UInt32(bitPattern: status) {
             case 0, 0x8094_0010: self.hub.notice = "Launched \(title.name)."
@@ -1734,7 +1795,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
                     var status: Int32
                     repeat {
                         self.hub.notice = "Uninstalling \(title.name) (\(index + 1) of \(chosen.count))…"
-                        status = try self.hub.command("uninstall", title.id, link: self.hub.controller.currentLink())
+                        status = try self.hub.consoleCommand("uninstall", title.id)
                         if PMCP.uninstallRetry.contains(status) { Thread.sleep(forTimeInterval: 2) }
                     } while PMCP.uninstallRetry.contains(status) && Date() < deadline
                     if status != 0 { failed.append("\(title.name): \(PMCP.uninstallText(status))") }
