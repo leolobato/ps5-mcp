@@ -141,10 +141,15 @@ final class Hub {
         // Saved by a build with PBS, or asked for by name or through the API: this build has no such source.
         var video = video, audio = audio
         if video == "pbs" {
-            let card = CaptureDevices.video.first { $0.deviceType == .external }
+            let remembered = CaptureDevices.resolve(nil, in: CaptureDevices.video, remembered: CaptureDevices.rememberedVideo)
+            let card = remembered ?? CaptureDevices.video.first { $0.deviceType == .external }
             video = card?.uniqueID ?? ""
-            audio = card.flatMap { card in
-                CaptureDevices.audio.first { $0.localizedName == card.localizedName }?.uniqueID
+            if remembered != nil {  // keeps its audio choice, No audio included
+                audio = CaptureDevices.resolve(nil, in: CaptureDevices.audio, remembered: CaptureDevices.rememberedAudio)?.uniqueID
+            } else {
+                audio = card.flatMap { card in
+                    CaptureDevices.audio.first { $0.localizedName == card.localizedName }?.uniqueID
+                }
             }
             say("this build has no PBS source (make app PBS=1); using \(card?.localizedName ?? "no capture device")")
         }
@@ -243,7 +248,16 @@ final class Hub {
             source = FileSource(path: String(video.dropFirst(5)), sink: sink)
         default:
             do {
-                source = try CameraSource(video: video, audio: audio, sink: sink)
+                // A card that came back with a new unique ID is found by the name it last captured under.
+                let resolvedVideo = CaptureDevices.resolve(video, in: CaptureDevices.video,
+                                                           remembered: CaptureDevices.rememberedVideo)?.uniqueID ?? video
+                let resolvedAudio = audio.flatMap { audio in
+                    CaptureDevices.resolve(audio, in: CaptureDevices.audio,
+                                           remembered: CaptureDevices.rememberedAudio)?.uniqueID ?? audio
+                }
+                let camera = try CameraSource(video: resolvedVideo, audio: resolvedAudio, sink: sink)
+                CaptureDevices.remember(video: camera.device, audio: camera.mic)
+                source = camera
             } catch {
                 source = UnavailableSource()
                 // The UI is still being built; publish the notice on its first refresh.

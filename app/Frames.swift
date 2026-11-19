@@ -324,6 +324,12 @@ final class UnavailableSource: FrameSource {
     func setMuted(_ muted: Bool) {}
 }
 
+/// The last capture card and audio input that captured, by ID and name (see `CaptureDevices.rememberedVideo`).
+let captureCardKey = "captureCardName"
+let captureCardIDKey = "captureCardID"
+let captureCardAudioKey = "captureCardAudioName"
+let captureCardAudioIDKey = "captureCardAudioID"
+
 /// The capture card. Camera and microphone permission belong to this app bundle.
 enum CaptureDevices {
     static var video: [AVCaptureDevice] {
@@ -336,6 +342,45 @@ enum CaptureDevices {
     }
     static func find(_ selection: String, in devices: [AVCaptureDevice]) -> AVCaptureDevice? {
         devices.first { $0.uniqueID == selection } ?? devices.first { $0.localizedName == selection }
+    }
+
+    /// The last capture card (and its audio input) that captured. Other sources replace the saved selection, and a
+    /// card can come back with a new unique ID, so its name is what finds it again.
+    struct Remembered { let id: String; let name: String }
+
+    static var rememberedVideo: Remembered? { remembered(captureCardIDKey, captureCardKey) }
+    /// nil with a remembered video means the card captured with No audio.
+    static var rememberedAudio: Remembered? { remembered(captureCardAudioIDKey, captureCardAudioKey) }
+
+    private static func remembered(_ idKey: String, _ nameKey: String) -> Remembered? {
+        guard let id = UserDefaults.standard.string(forKey: idKey), let name = UserDefaults.standard.string(forKey: nameKey)
+        else { return nil }
+        return Remembered(id: id, name: name)
+    }
+
+    static func remember(video: AVCaptureDevice, audio: AVCaptureDevice?) {
+        let defaults = UserDefaults.standard
+        defaults.set(video.uniqueID, forKey: captureCardIDKey)
+        defaults.set(video.localizedName, forKey: captureCardKey)
+        if let audio {
+            defaults.set(audio.uniqueID, forKey: captureCardAudioIDKey)
+            defaults.set(audio.localizedName, forKey: captureCardAudioKey)
+        } else {
+            defaults.removeObject(forKey: captureCardAudioIDKey)
+            defaults.removeObject(forKey: captureCardAudioKey)
+        }
+    }
+
+    /// `selection` when it is connected. Otherwise the remembered device, but only when `selection` is empty or is the
+    /// remembered device's own ID (a different device that went away is not replaced by this one): by its ID, else by
+    /// its name when exactly one connected device has that name.
+    static func resolve(_ selection: String?, in devices: [AVCaptureDevice], remembered: Remembered?) -> AVCaptureDevice? {
+        let selection = selection ?? ""
+        if !selection.isEmpty, let device = find(selection, in: devices) { return device }
+        guard let remembered, selection.isEmpty || selection == remembered.id else { return nil }
+        if let device = devices.first(where: { $0.uniqueID == remembered.id }) { return device }
+        let named = devices.filter { $0.localizedName == remembered.name }
+        return named.count == 1 ? named[0] : nil
     }
 }
 
@@ -350,6 +395,8 @@ final class CameraSource: FrameSource {
     private var hasAudio = false
     private var observers: [NSObjectProtocol] = []
     var onError: ((String) -> Void)?
+    let device: AVCaptureDevice
+    private(set) var mic: AVCaptureDevice?
 
     init(video: String, audio: String?, sink: FrameSink) throws {
         guard let device = CaptureDevices.find(video, in: CaptureDevices.video)
@@ -358,6 +405,7 @@ final class CameraSource: FrameSource {
                           userInfo: [NSLocalizedDescriptionKey: "video device '\(video)' not found"])
         }
         name = "camera:\(device.localizedName)"
+        self.device = device
         session.beginConfiguration()
         defer { session.commitConfiguration() }
         session.addInput(try AVCaptureDeviceInput(device: device))
@@ -380,6 +428,7 @@ final class CameraSource: FrameSource {
         if let audio {
             if let mic = CaptureDevices.find(audio, in: CaptureDevices.audio) {
                 session.addInput(try AVCaptureDeviceInput(device: mic))
+                self.mic = mic
                 hasAudio = true
                 audioPreview.volume = 1.0
                 session.addOutput(audioPreview)

@@ -280,7 +280,8 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
 
     private var entered: String { address.stringValue.trimmingCharacters(in: .whitespaces) }
 
-    private func fill(_ popup: NSPopUpButton, devices: [AVCaptureDevice], selection: String?, empty: String) {
+    private func fill(_ popup: NSPopUpButton, devices: [AVCaptureDevice], selection: String?, remembered: CaptureDevices.Remembered?,
+                      empty: String) {
         popup.removeAllItems()
         popup.addItem(withTitle: empty)
         popup.lastItem?.representedObject = ""
@@ -289,21 +290,25 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
             popup.addItem(withTitle: device.localizedName + (duplicate ? " (\(device.uniqueID))" : ""))
             popup.lastItem?.representedObject = device.uniqueID
         }
-        guard let selection, !selection.isEmpty else { return }
-        let id = CaptureDevices.find(selection, in: devices)?.uniqueID ?? selection
-        if let item = popup.itemArray.first(where: { $0.representedObject as? String == id }) {
-            popup.select(item)
-        } else {
-            popup.addItem(withTitle: "Unavailable: \(selection)")
-            popup.lastItem?.representedObject = selection
-            popup.select(popup.lastItem)
+        if let device = CaptureDevices.resolve(selection, in: devices, remembered: remembered) {
+            popup.selectItem(at: popup.indexOfItem(withRepresentedObject: device.uniqueID))
+            return
         }
+        guard let selection, !selection.isEmpty else { return }
+        popup.addItem(withTitle: "Unavailable: \(selection)")
+        popup.lastItem?.representedObject = selection
+        popup.select(popup.lastItem)
     }
 
     private func fillDevices(video: String?, audio: String?) {
         let network = sources.contains(video ?? "") && !(video ?? "").isEmpty
-        fill(videoDevice, devices: CaptureDevices.video, selection: network ? nil : video, empty: "Choose a video device…")
-        fill(audioDevice, devices: CaptureDevices.audio, selection: network ? nil : audio, empty: "No audio")
+        // A network source leaves the card's popups on the card that last captured, ready to switch back to.
+        fill(videoDevice, devices: CaptureDevices.video, selection: network ? nil : video,
+             remembered: CaptureDevices.rememberedVideo, empty: "Choose a video device…")
+        let audioSelection = network ? nil : audio
+        // "No audio" chosen on purpose stays chosen; only a lost or missing selection falls back to the remembered input.
+        fill(audioDevice, devices: CaptureDevices.audio, selection: audioSelection,
+             remembered: network || audioSelection?.isEmpty == false ? CaptureDevices.rememberedAudio : nil, empty: "No audio")
         sourcePicker.selectedSegment = sources.firstIndex(of: network ? video ?? "" : "") ?? 0
         sourceChanged()
     }
@@ -349,7 +354,8 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
         refreshPBSStatus()
     }
 
-    /// Load and Stop change what runs on the shared console, so they respect an agent's claim as Remote Play's Reconnect does.
+    /// Stop takes the picture away from whoever is watching, so it respects an agent's claim as Remote Play's Reconnect does.
+    /// Load only starts PBS beside the running game, so it works during a claim.
     private func consoleIsFreeForPBS() -> Bool {
         guard let owner = hub.lease.json["owner"] as? [String: Any] else { return true }
         pbsMessage = "The console is claimed by \(owner["client"] as? String ?? "another client"). Wait for its claim to be released."
@@ -358,7 +364,7 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
     }
 
     @objc private func loadPBSPayload() {
-        guard let pbs = hub.source as? PBSSource, consoleIsFreeForPBS() else { return }
+        guard let pbs = hub.source as? PBSSource else { return }
         pbsBusy = true
         pbsMessage = "Loading PBS…"
         refreshPBSStatus()
@@ -392,7 +398,7 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
         pbsMessage = "PBS is not in Payload Manager's library."
         alert.beginSheetModal(for: window) { [weak self] response in
             guard let self, response == .alertFirstButtonReturn else { return }
-            guard self.hub.host == host, self.consoleIsFreeForPBS() else { return }
+            guard self.hub.host == host else { return }
             self.runGetPBS(cli, host: host)
         }
     }
