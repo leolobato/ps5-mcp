@@ -147,6 +147,8 @@ int system_uninstall(const char *title_id) {
     return strcmp(title_id, "BUSY00001") == 0 ? (int)0x80A30005u : 0;
 }
 
+void system_set_name(const char *name) { (void)name; }
+
 void system_shutdown(void) {
     emit("{\"call\":\"shutdown\"}\n");
     if (trace) fclose(trace);

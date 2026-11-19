@@ -531,6 +531,7 @@ static void parse_args(struct config *cfg, int argc, char **argv) {
 
 int main(int argc, char **argv) {
     static struct daemon d;
+    system_set_name("ps5mcp-padd.elf");
     d.cfg = (struct config){PMCP_PORT, "/data/ps5-mcp/logs", 8, 1000, 5000, SMP_PORT, "/user/app"};
     parse_args(&d.cfg, argc, argv);
     d.listen_fd = d.client_fd = -1;

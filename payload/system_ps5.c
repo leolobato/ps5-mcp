@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 #include "system.h"
@@ -212,6 +213,10 @@ int system_uninstall(const char *title_id) {
         installer_ready = 1;  /* stays initialised: AppInstUtil calls fail once it is terminated */
     }
     return sceAppInstUtilAppUnInstall(title_id);
+}
+
+void system_set_name(const char *name) {
+    (void)syscall(SYS_thr_set_name, -1, name);  /* names this thread only; a failure costs only the label */
 }
 
 void system_shutdown(void) {

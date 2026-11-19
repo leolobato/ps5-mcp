@@ -35,6 +35,10 @@ int system_focus_app(int32_t app_id);
 /* Ask the system to uninstall a title. Returns once the request is accepted; files go away afterwards. */
 int system_uninstall(const char *title_id);
 
+/* Name the calling thread, best effort. elfldr calls everything it starts "payload.elf", and process lists show the
+ * name of one of the process's threads. padd has only the main thread, so its name is the one they show. */
+void system_set_name(const char *name);
+
 void system_shutdown(void);
 
 #endif
