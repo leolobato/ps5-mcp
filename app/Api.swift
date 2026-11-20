@@ -181,10 +181,12 @@ final class Connection {
     func wants(_ name: String) -> Bool { lock.lock(); defer { lock.unlock() }; return events.contains(name) }
 }
 
-struct ApiError: Error, CustomStringConvertible {
+/// LocalizedError so that callers that only see `Error` (e.g. Remote Play status) show the message, not "ApiError error 1".
+struct ApiError: LocalizedError, CustomStringConvertible {
     let code: String
     let message: String
     var description: String { message }
+    var errorDescription: String? { message }
 }
 
 extension Hub {
