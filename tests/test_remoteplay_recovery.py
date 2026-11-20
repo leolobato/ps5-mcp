@@ -196,7 +196,7 @@ def test_remoteplay_recovery(recovery_binary, tmp_path, case):
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.parametrize("scenario", ["timeline", "admission", "admission-failure", "admission-stop", "input", "crashed"])
+@pytest.mark.parametrize("scenario", ["timeline", "admission", "admission-failure", "admission-stop", "input", "crashed", "blocked"])
 def test_source_reconnect_waits_for_timeline_finalization(tmp_path, scenario):
     """Compile the complete production source with a controlled session/media backend."""
     harness = tmp_path / "SourceHarness.swift"
@@ -239,7 +239,7 @@ struct RemotePlayError: Error { let code: Int; var localizedDescription: String 
 final class RemotePlaySession {
     struct Configuration { let host: String; let consoleMAC: Data; let registrationKey: Data; let rpKey: Data; var enableKeyboard = true }
     enum KeyboardEvent { case opened, confirmed, differs, closed }
-    enum Event { case connected, disconnected(reason: Int), loginPINNeeded, failed(RemotePlayError), keyboard(KeyboardEvent) }
+    enum Event { case connected, disconnected(reason: Int), loginPINNeeded, displayBlocked(Bool), failed(RemotePlayError), keyboard(KeyboardEvent) }
     static let lock=NSLock()
     static var instances: [RemotePlaySession]=[]
     static var holdStops=false
@@ -285,6 +285,35 @@ func waitFor(_ condition: ()->Bool) {
             runFor(2.5)
             precondition(RemotePlaySession.started == 1 && admission.calls == 0, "retried a crashed Remote Play service")
             source.stop(); print("crashed service stops retrying"); return
+        }
+        if scenario == "blocked" {
+            func refuses(_ body: () throws -> Void) {
+                do { try body(); preconditionFailure("accepted input on a blocked screen") }
+                catch { precondition("\(error)".contains("not delivering video"), "unexpected error: \(error)") }
+            }
+            let blockedIssue = { source.status.issue == RemotePlaySource.displayBlockedIssue }
+            source.start(); waitFor { RemotePlaySession.started == 1 }
+            let first = RemotePlaySession.instance(0)
+            // RP-Prohibit arrives inside the ctrl handshake, before .connected; the warning must survive it.
+            first.onEvent(.displayBlocked(true)); first.onEvent(.connected)
+            waitFor { source.status.phase == .waitingForVideo && blockedIssue() }
+            RemotePlayDecoder.frame()  // what the console sends while blocked is not live video
+            runFor(3.6)                 // past the 3 s video watchdog: no reconnect loop
+            precondition(RemotePlaySession.started == 1 && source.status.phase == .waitingForVideo
+                         && !source.status.videoReady && blockedIssue(), "blocked screen reconnected or went live")
+            refuses { try source.setButtons(1 << 15) }
+            // Shown again: live only after a fresh frame.
+            first.onEvent(.displayBlocked(false)); waitFor { source.status.issue == "Waiting for video…" }
+            refuses { try source.setButtons(1 << 15) }
+            RemotePlayDecoder.frame()
+            waitFor { source.status.phase == .streaming && source.status.videoReady && source.status.issue == nil }
+            try! source.setButtons(1 << 15); source.releaseButtons()
+            // Blocked mid-stream: input stops, the session stays.
+            first.onEvent(.displayBlocked(true))
+            waitFor { source.status.phase == .waitingForVideo && !source.status.videoReady && blockedIssue() }
+            refuses { try source.setButtons(1 << 15) }
+            runFor(3.6); precondition(RemotePlaySession.started == 1, "blocked stream reconnected")
+            source.stop(); print("blocked screen keeps the session and refuses input"); return
         }
         if scenario == "input" {
             func refuses(_ text: String, _ body: () throws -> Void) {

@@ -19,7 +19,8 @@ typedef struct {
     uint8_t rp_key[16];
 } RPRegistrationResult;
 typedef void (*RPRegistrationCallback)(int error, const RPRegistrationResult *result, void *user);
-typedef enum { RP_EVENT_CONNECTED, RP_EVENT_DISCONNECTED, RP_EVENT_LOGIN_PIN_NEEDED } RPEvent;
+/* DISPLAY_BLOCKED: reason 1 while the PS5 refuses to show its screen over Remote Play, 0 when it shows it again. */
+typedef enum { RP_EVENT_CONNECTED, RP_EVENT_DISCONNECTED, RP_EVENT_LOGIN_PIN_NEEDED, RP_EVENT_DISPLAY_BLOCKED } RPEvent;
 /* On-screen keyboard. Field text never crosses the bridge (it may be a password):
  * TEXT_CONFIRMED/TEXT_DIFFERS compare the console's echo with the last set_text. */
 typedef enum { RP_KEYBOARD_OPENED, RP_KEYBOARD_TEXT_CONFIRMED, RP_KEYBOARD_TEXT_DIFFERS, RP_KEYBOARD_CLOSED } RPKeyboardEvent;

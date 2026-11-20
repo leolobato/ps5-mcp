@@ -33,6 +33,11 @@ final class RemotePlaySource: FrameSource {
     private var running = false
     private var timer: DispatchSourceTimer?
     private var lastVideo = 0.0
+    /// The PS5 withholds its picture (RP-Prohibit or protected content). The session stays up, but frames are not
+    /// live video: input is refused and the video watchdog waits. Owned by `queue`; each timeline starts unblocked.
+    private var displayBlocked = false
+    static let displayBlockedIssue = "The PS5 won't show this screen over Remote Play (protected content, or "
+        + "Remote Play blocked here). Go to another screen on the TV."
     private var statusValue = RemotePlayStatus()
     private let admission: RemotePlayAdmissionServicing
     private var admissionAttempted = false
@@ -57,6 +62,7 @@ final class RemotePlaySource: FrameSource {
         guard let self else { return }
         self.sink.push(buffer, at: time)
         self.lastVideo = uptimeSeconds()
+        if self.displayBlocked { return }
         self.lock.lock()
         self.statusValue.videoReady = true
         self.statusValue.width = CVPixelBufferGetWidth(buffer)
@@ -129,7 +135,7 @@ final class RemotePlaySource: FrameSource {
             let timer = DispatchSource.makeTimerSource(queue: self.queue)
             timer.schedule(deadline: .now() + 1, repeating: 1)
             timer.setEventHandler { [weak self] in
-                guard let self, self.running, self.lastVideo > 0,
+                guard let self, self.running, self.lastVideo > 0, !self.displayBlocked,
                       uptimeSeconds() - self.lastVideo > 3 else { return }
                 self.disconnect("Remote Play stopped delivering video. Reconnecting…", retry: true)
             }
@@ -142,6 +148,7 @@ final class RemotePlaySource: FrameSource {
         generation += 1
         let token = generation
         lastVideo = 0
+        displayBlocked = false
         clearReadiness()
         publish("connecting", issue: "Connecting to Remote Play…")
         let session = RemotePlaySession(configuration: configuration, onVideo: { [weak self] data, _ in
@@ -165,7 +172,8 @@ final class RemotePlaySource: FrameSource {
                 case .connected:
                     // Transport connection alone is not proof of live video.
                     self.lastVideo = uptimeSeconds()
-                    self.publish("waiting_for_video", issue: "Connected; waiting for video…")
+                    self.publish("waiting_for_video", issue: self.displayBlocked ? Self.displayBlockedIssue
+                                 : "Connected; waiting for video…")
                 case .disconnected(let reason):
                     if reason == RemotePlayAdmission.sessionRequestUnknownReason {
                         if self.admissionAttempted {
@@ -191,6 +199,13 @@ final class RemotePlaySource: FrameSource {
                     // Wrong console/invalid credentials need an explicit repair, never account activation.
                     self.disconnect(error.localizedDescription, retry: error.code != Int(RP_ERROR_IDENTITY)
                                     && error.code != Int(RP_ERROR_INVALID))
+                case .displayBlocked(let blocked):
+                    // The session stays up; once shown again, the next decoded frame makes it live (with a fresh
+                    // watchdog deadline, so a console that stays silent still reconnects).
+                    self.displayBlocked = blocked
+                    if blocked { self.lock.lock(); self.statusValue.videoReady = false; self.lock.unlock() }
+                    else { self.lastVideo = uptimeSeconds() }
+                    self.publish("waiting_for_video", issue: blocked ? Self.displayBlockedIssue : "Waiting for video…")
                 case .keyboard(let event):
                     self.keyboardChanged(event)
                 }

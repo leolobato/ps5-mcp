@@ -36,6 +36,8 @@ final class RemotePlaySession {
         case connected
         case disconnected(reason: Int)
         case loginPINNeeded(incorrect: Bool)
+        /// The PS5 refuses (true) or again allows (false) showing its screen over Remote Play.
+        case displayBlocked(Bool)
         case failed(RemotePlayError)
         case keyboard(KeyboardEvent)
     }
@@ -122,6 +124,7 @@ final class RemotePlaySession {
                 case RP_EVENT_CONNECTED: context.emit(.connected)
                 case RP_EVENT_DISCONNECTED: context.emit(.disconnected(reason: Int(reason)))
                 case RP_EVENT_LOGIN_PIN_NEEDED: context.emit(.loginPINNeeded(incorrect: reason != 0))
+                case RP_EVENT_DISPLAY_BLOCKED: context.emit(.displayBlocked(reason != 0))
                 default: break
                 }
             }

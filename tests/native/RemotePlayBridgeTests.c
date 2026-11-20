@@ -52,7 +52,12 @@ static bool session_is_cancelled(void *user) { assert(user); return session_canc
 static bool canceled(void *user) { assert(user); return true; }
 static bool video(const uint8_t *b, size_t n, int32_t lost, void *u) { assert(u && n == 4 && b[3] == 1 && lost == 2); video_count++; return video_accepts; }
 static void audio(const int16_t *b, size_t n, uint32_t ch, uint32_t hz, void *u) { assert(u && b[0] == 5 && n == 2 && ch == 2 && hz == 48000); audio_count++; }
-static void event(RPEvent e, int reason, void *u) { assert(u && e == RP_EVENT_DISCONNECTED && reason == CHIAKI_QUIT_REASON_CTRL_UNKNOWN); event_count++; }
+static int display_events[4], display_count;
+static void event(RPEvent e, int reason, void *u) {
+    assert(u);
+    if(e == RP_EVENT_DISPLAY_BLOCKED) { assert(display_count < 4); display_events[display_count++] = reason; return; }
+    assert(e == RP_EVENT_DISCONNECTED && reason == CHIAKI_QUIT_REASON_CTRL_UNKNOWN); event_count++;
+}
 static RPKeyboardEvent keyboard_events[8]; static int keyboard_count;
 static void keyboard(RPKeyboardEvent e, void *u) { assert(u && keyboard_count < 8); keyboard_events[keyboard_count++] = e; }
 static void registration(int err, const RPRegistrationResult *r, void *u) { assert(u && err == 0 && r && r->console_mac[0] == 9 && r->registration_key[15] == 8 && r->rp_key[15] == 7 && r->nickname[32] == 0); registration_count++; }
@@ -89,6 +94,11 @@ int main(void) {
     assert(keyboard_count==5 && keyboard_events[0]==RP_KEYBOARD_OPENED && keyboard_events[1]==RP_KEYBOARD_TEXT_CONFIRMED
            && keyboard_events[2]==RP_KEYBOARD_TEXT_DIFFERS && keyboard_events[3]==RP_KEYBOARD_TEXT_DIFFERS && keyboard_events[4]==RP_KEYBOARD_CLOSED);
     assert(event_count==0); // Keyboard traffic never reaches the numeric event callback.
+    /* Chiaki calls the display sink unchecked when the PS5 sends RP-Prohibit; a missing one crashed the app. */
+    assert(native_session->display_sink.cantdisplay_cb);
+    native_session->display_sink.cantdisplay_cb(native_session->display_sink.user,true);
+    native_session->display_sink.cantdisplay_cb(native_session->display_sink.user,false);
+    assert(display_count==2 && display_events[0]==1 && display_events[1]==0 && event_count==0);
     assert(rp_session_keyboard_set_text(s,"")==0); k.type=CHIAKI_EVENT_KEYBOARD_TEXT_CHANGE; k.keyboard.text_str=NULL; native_session->event_cb(&k,native_session->event_cb_user);
     assert(keyboard_events[5]==RP_KEYBOARD_TEXT_CONFIRMED); // Clearing a field confirms against an empty echo.
     char longer[RP_KEYBOARD_TEXT_MAX+2]; memset(longer,'a',sizeof(longer)-1); longer[sizeof(longer)-1]=0;

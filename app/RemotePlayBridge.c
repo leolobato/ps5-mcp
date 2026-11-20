@@ -138,6 +138,11 @@ static void session_event(ChiakiEvent *event, void *user) {
         default: break;
     }
 }
+/* Chiaki calls this without a null check when the PS5 refuses to show the current screen
+ * (RP-Prohibit at connect, or protected content later), so every session must set it. */
+static void display_changed(void *user, bool cant_display) {
+    RPSession *s=user; if(s->callbacks.event) s->callbacks.event(RP_EVENT_DISPLAY_BLOCKED,cant_display?1:0,s->user);
+}
 RPSession *rp_session_create(const char *host, const uint8_t mac[6], const uint8_t registration_key[16], const uint8_t rp_key[16], bool enable_keyboard, RPCallbacks callbacks, void *user, int *error) {
     if(error) *error=RP_ERROR_INVALID;
     if(!numeric_host(host) || !mac || !registration_key || !rp_key) return NULL;
@@ -160,6 +165,8 @@ RPSession *rp_session_create(const char *host, const uint8_t mac[6], const uint8
     chiaki_session_set_audio_sink(&s->native,&sink);
     chiaki_session_set_video_sample_cb(&s->native,video_sample,s);
     chiaki_session_set_event_cb(&s->native,session_event,s);
+    ChiakiCtrlDisplaySink display={.user=s,.cantdisplay_cb=display_changed};
+    chiaki_session_ctrl_set_display_sink(&s->native,&display);
     return s;
 }
 int rp_session_start(RPSession *s) { if(!s || s->started) return RP_ERROR_INVALID; int err=chiaki_session_start(&s->native); if(!err) s->started=true; return err; }
