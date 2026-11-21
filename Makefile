@@ -40,7 +40,7 @@ build/pbs-flag: FORCE
 	@[ "$$(cat $@ 2>/dev/null)" = "$(PBS)" ] || echo "$(PBS)" > $@
 FORCE:
 
-$(APP_EXECUTABLE): build/pbs-flag $(APP_SOURCES) $(APP_ICON_ASSETS) app/Info.plist app/project.yml $(wildcard app/Configuration/*.xcconfig) src/ps5mcp/assets/assign-dialog.png pyproject.toml $(wildcard build/padd.elf build/toolchain-report.json) Makefile remoteplay-deps build/remoteplay-setup.elf build/remoteplay-admit.elf | build
+$(APP_EXECUTABLE): build/pbs-flag $(APP_SOURCES) $(APP_ICON_ASSETS) app/Info.plist app/project.yml $(wildcard app/Configuration/*.xcconfig) src/ps5mcp/assets/assign-dialog.png pyproject.toml $(if $(wildcard build/padd.elf),build/toolchain-report.json) Makefile remoteplay-deps build/remoteplay-setup.elf build/remoteplay-admit.elf | build
 	rm -rf build/bundle && mkdir -p build/bundle/padd build/bundle/remoteplay
 	if [ -f build/padd.elf ] && [ -f build/toolchain-report.json ]; then cp build/padd.elf build/toolchain-report.json build/bundle/padd/; fi
 	cp build/remoteplay-setup.elf build/remoteplay-setup-report.json build/bundle/remoteplay/
@@ -75,8 +75,10 @@ build/padd-host: $(PADD_SOURCES) payload/system_host.c Makefile | build
 build:
 	mkdir -p $@
 
-# Records SHA-256 and format of every payload; the deploy runner refuses stale ELFs.
-verify: payloads
+# Records SHA-256 and format of every payload; the deploy runner refuses stale ELFs, so any rebuilt payload rewrites it
+# (the app depends on it, not on padd.elf alone, so it never bundles a new ELF next to an old report).
+verify: build/toolchain-report.json
+build/toolchain-report.json: build/padd.elf build/remoteplay-setup.elf build/remoteplay-admit.elf payload/padd.c scripts/verify.py
 	$(ENV) $(PYTHON) scripts/verify.py
 
 test: build/padd-host app
