@@ -17,7 +17,6 @@ import socket
 import subprocess
 import sys
 import time
-import urllib.parse
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -187,7 +186,7 @@ def start(host: str, firmware: str | None, elf: Path | None = None, timeout: flo
         evidence["upload_verified"] = True
         evidence["launch_requested"] = True
         evidence["launched_at"] = datetime.now(UTC).isoformat()
-        console.request(8084, "/loadpayload:" + urllib.parse.quote(matches[0], safe="/"), method="GET")
+        console.load_payload(matches[0])
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             logs = [e for e in console.listdir(LOG_DIR) if e["name"] not in before and e["name"].startswith("padd-")]

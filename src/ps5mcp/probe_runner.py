@@ -18,6 +18,8 @@ from . import capture
 
 ROOT = Path(__file__).resolve().parents[2]
 SERVICES = {8084: "Payload Manager", 8888: "PS5 Web File Manager"}
+# Payload Manager 0.6.3 refuses changes (upload, load) that lack this header, as a guard against cross-site requests.
+PAYLOAD_MANAGER_MARKER = {"X-PLDMGR-Request": "1"}
 STARTERS = {8888: "Payload Manager can load it"}
 
 
@@ -61,8 +63,8 @@ class Console:
     def request(self, port, path, params=None, data=None, headers=None, method="POST") -> bytes:
         if params:
             path += "?" + urllib.parse.urlencode(params)
-        req = urllib.request.Request(f"http://{self.host}:{port}{path}", data=data,
-                                     headers=headers or {}, method=method)
+        headers = {**(PAYLOAD_MANAGER_MARKER if port == 8084 else {}), **(headers or {})}
+        req = urllib.request.Request(f"http://{self.host}:{port}{path}", data=data, headers=headers, method=method)
         try:
             with self.opener.open(req, timeout=10) as response:
                 return response.read()
@@ -70,6 +72,16 @@ class Console:
             raise  # the service answered
         except (urllib.error.URLError, OSError) as exc:
             raise unreachable(self.host, port, exc) from exc
+
+    def load_payload(self, path: str) -> None:
+        """Runs a payload from Payload Manager's library once. Payload Manager 0.6.3 takes POST; older ones take GET."""
+        route = "/loadpayload:" + urllib.parse.quote(path, safe="/")
+        try:
+            self.request(8084, route, data=b"")
+        except urllib.error.HTTPError as exc:
+            if exc.code != 405:
+                raise
+            self.request(8084, route, method="GET")
 
     def api(self, path, params=None, form=False) -> dict:
         if form:

@@ -53,7 +53,7 @@ def install_elf(host: str, path: Path, run: bool, progress: Progress) -> str:
     if not run:
         return f"installed {path.name} in Payload Manager as {matches[0]}"
     progress(f"running {matches[0]}")
-    console.request(8084, "/loadpayload:" + urllib.parse.quote(matches[0], safe="/"), method="GET")
+    console.load_payload(matches[0])
     return f"installed and started {path.name} ({matches[0]})"
 
 

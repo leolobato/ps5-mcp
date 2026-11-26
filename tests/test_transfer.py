@@ -168,11 +168,9 @@ def test_autostart_loads_zftpd_from_payload_manager(tmp_path, monkeypatch):
         def __init__(self, host):
             pass
 
-        def request(self, port_, path, *args, **kwargs):
-            assert port_ == 8084
+        def load_payload(self, path):
             loaded.append(path)
             servers.append(Server(root, port))
-            return b"OK"
 
     monkeypatch.setattr(transfer, "Console", FakeConsole)
     monkeypatch.setattr(transfer, "_payload", lambda host: "/data/pldmgr/payloads/zftpd/zftpd.elf")
@@ -183,7 +181,7 @@ def test_autostart_loads_zftpd_from_payload_manager(tmp_path, monkeypatch):
     finally:
         for s in servers:
             s.stop()
-    assert loaded == ["/loadpayload:/data/pldmgr/payloads/zftpd/zftpd.elf"] and checked == [True]
+    assert loaded == ["/data/pldmgr/payloads/zftpd/zftpd.elf"] and checked == [True]
     assert "sent 2 files" in summary and tree(root / "t") == tree(src)
 
 

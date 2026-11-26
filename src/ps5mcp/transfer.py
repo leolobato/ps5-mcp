@@ -24,7 +24,6 @@ import posixpath
 import re
 import socket
 import time
-import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -251,7 +250,7 @@ def connect(host: str, port: int = FTP_PORT, autostart: bool = AUTOSTART, progre
         if before_start:
             before_start()
         progress(f"starting {path} (port {port})")
-        Console(host).request(8084, "/loadpayload:" + urllib.parse.quote(path, safe="/"), method="GET")
+        Console(host).load_payload(path)
         deadline = time.monotonic() + START_TIMEOUT
         while not _listening(host, port):
             if time.monotonic() > deadline:

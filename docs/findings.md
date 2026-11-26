@@ -89,7 +89,8 @@ the virtual pad. To drive a game through the MCP, launch it through the MCP.
 
 Two services on the console do the file work. **Payload Manager** (port 8084) keeps a library of ELF payloads:
 `/manage:upload` adds one, `/list_payloads` lists them and `/loadpayload:<path>` runs one. `padd start` and
-`ps5mcp install` (for `.elf`) use it. **PS5 Web File Manager** (port 8888, itself a payload) lists and transfers
+`ps5mcp install` (for `.elf`) use it. Since 0.6.3 it refuses uploads and loads without an `X-PLDMGR-Request: 1` header
+and takes `/loadpayload:` only as POST; older versions load by GET, so the tools try POST first. **PS5 Web File Manager** (port 8888, itself a payload) lists and transfers
 files and installs packages. The app's game/app list and `ps5mcp install` (for `.pkg`) use it.
 
 - Web File Manager runs one task at a time. `/api/download/prepare` and `/api/upload/prepare` create a task, and the

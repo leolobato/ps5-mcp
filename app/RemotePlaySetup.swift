@@ -146,6 +146,10 @@ final class RemotePlaySetupClient {
             if let shared = Self.helperSessions[host], shared !== helperSession { helperSession = shared }
             request.setValue("Bearer " + helperSession.token, forHTTPHeaderField: "Authorization")
         }
+        if request.url?.port == 8084 {
+            // Payload Manager 0.6.3 refuses uploads and loads without its request marker.
+            request.setValue("1", forHTTPHeaderField: "X-PLDMGR-Request")
+        }
         preparationTask = preparation
         request.timeoutInterval = 12
         request.cachePolicy = .reloadIgnoringLocalCacheData
@@ -351,12 +355,23 @@ final class RemotePlaySetupClient {
                             let matches = paths.filter { $0.hasSuffix("/ps5mcp-remoteplay-setup.elf") && $0.hasPrefix("/") }
                             guard matches.count == 1 else { throw RemotePlaySetupError("The uploaded setup helper could not be identified uniquely.") }
                             try authorizeMutation()
-                            request(URLRequest(url: url(port: 8084, path: "/loadpayload:" + matches[0])), generation: token) { [self] result in
-                                do {
-                                    let (status, _) = try result.get(); try requireSuccess(status)
-                                    helper.expires = ProcessInfo.processInfo.systemUptime + 900
-                                    verifyLaunch(generation: token, remaining: 5, completion: completion)
-                                } catch { completion(.failure(error)) }
+                            // Payload Manager 0.6.3 takes the load as POST; older versions answer that with 405 and take GET.
+                            let load = url(port: 8084, path: "/loadpayload:" + matches[0])
+                            var post = URLRequest(url: load); post.httpMethod = "POST"
+                            request(post, generation: token) { [self] result in
+                                let launched: (Result<(Int, Data), Error>) -> Void = { [self] result in
+                                    do {
+                                        let (status, _) = try result.get(); try requireSuccess(status)
+                                        helper.expires = ProcessInfo.processInfo.systemUptime + 900
+                                        verifyLaunch(generation: token, remaining: 5, completion: completion)
+                                    } catch { completion(.failure(error)) }
+                                }
+                                if case .success((405, _)) = result {
+                                    do { try authorizeMutation() } catch { completion(.failure(error)); return }
+                                    request(URLRequest(url: load), generation: token, completion: launched)
+                                } else {
+                                    launched(result)
+                                }
                             }
                         } catch { completion(.failure(error)) }
                     }

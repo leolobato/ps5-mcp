@@ -182,8 +182,10 @@ def test_start_leaves_the_dialog_to_the_app_that_runs_it(tmp_path, monkeypatch):
             self.loaded = False
 
         def request(self, port, path, *args, **kwargs):
-            self.loaded = self.loaded or path.startswith("/loadpayload:")
             return {"/version": b"0.5.2", "/list_payloads": b'{"payloads": ["/data/ps5mcp-padd.elf"]}'}.get(path, b"")
+
+        def load_payload(self, path):
+            self.loaded = True
 
         def ensure_dir(self, path):
             pass

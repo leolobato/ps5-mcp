@@ -51,6 +51,13 @@ struct PBSSourceTests {
         precondition(load(empty) == .notInLibrary, "an empty library must say so")
         let noManager = PBSSource(host: "127.0.0.1", port: Int(arguments[2])!, sink: sink, managerPort: Int(arguments[2])!)
         precondition(load(noManager) == .unreachable, "a missing Payload Manager must say so")
+        let legacy = PBSSource(host: "127.0.0.1", port: Int(arguments[5])!, sink: sink, managerPort: Int(arguments[5])!)
+        precondition(load(legacy) == .started("PBS-Payload-0.1.0-ps5.elf"), "an older Payload Manager must get a GET load")
+        var refused: PBSSource.LoadResult?
+        PBSSource.loadPayload(host: "127.0.0.1", managerPort: Int(arguments[6])!) { refused = $0 }
+        spin(until: { refused != nil }, "loadPayload never answered")
+        precondition(refused == .refused("Payload Manager refused to start PBS-Payload-0.1.0-ps5.elf (HTTP 400: Invalid payload name)."),
+                     "a refused load must carry Payload Manager's answer: \(refused!)")
 
         let missing = PBSSource(host: "127.0.0.1", port: Int(arguments[2])!, sink: sink)
         precondition(!stop(missing), "a missing PBS must report no answer")

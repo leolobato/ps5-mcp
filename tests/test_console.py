@@ -60,6 +60,30 @@ def test_http_errors_still_come_from_the_service(monkeypatch):
         console.request(8084, "/x")
 
 
+def test_payload_manager_requests_carry_its_marker_and_loads_fall_back_to_get(monkeypatch):
+    """Payload Manager 0.6.3 refuses changes without `X-PLDMGR-Request` and loads by POST; older ones load by GET."""
+    sent: list[tuple[str, str, str | None]] = []
+    legacy = [False]
+
+    def open_(request, timeout):
+        sent.append((request.get_method(), request.full_url, request.get_header("X-pldmgr-request")))
+        if legacy[0] and request.get_method() == "POST":
+            raise urllib.error.HTTPError(request.full_url, 405, "Method Not Allowed", {}, io.BytesIO(b""))
+        return io.BytesIO(b"OK")
+
+    console = Console("ps5")
+    monkeypatch.setattr(console.opener, "open", open_)
+    console.load_payload("/data/pldmgr/payloads/local/pbs payload/x.elf")
+    assert sent == [("POST", "http://ps5:8084/loadpayload:/data/pldmgr/payloads/local/pbs%20payload/x.elf", "1")]
+    sent.clear()
+    legacy[0] = True
+    console.load_payload("/data/x.elf")
+    assert [method for method, *_ in sent] == ["POST", "GET"]
+    sent.clear()
+    console.request(8888, "/api/list", method="GET")
+    assert sent == [("GET", "http://ps5:8888/api/list", None)]  # only Payload Manager gets the marker
+
+
 async def test_list_apps_names_the_missing_web_file_manager(monkeypatch):
     from ps5mcp import server
     monkeypatch.setattr(server, "HOST", "ps5")

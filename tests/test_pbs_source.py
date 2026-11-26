@@ -61,6 +61,8 @@ class FakePBS:
         self.requests: list[str] = []
         self.first: list[bytes] = []  # raw /frames packets sent before the good picture
         self.library: list[str] = []  # what /list_payloads reports, as Payload Manager does
+        self.legacy_manager = False  # Payload Manager before 0.6.3: loads by GET, no request marker
+        self.refuse_load = False  # Payload Manager answers a load with 400
         self.audio_packets = 0
         self.audio_down = False  # /audio ends and refuses, while /frames goes on
         self.stopping = threading.Event()
@@ -79,13 +81,27 @@ class FakePBS:
                 self.end_headers()
                 self.close_connection = True
 
-            def do_POST(self):
-                fake.requests.append(f"POST {self.path}")
-                self.send_response(200)
-                self.send_header("Content-Length", "0")
+            def reply(self, status: int, body: str = ""):
+                self.send_response(status)
+                self.send_header("Content-Length", str(len(body)))
                 self.send_header("Connection", "close")
                 self.end_headers()
+                self.wfile.write(body.encode())
                 self.close_connection = True
+
+            def do_POST(self):
+                fake.requests.append(f"POST {self.path}")
+                if self.path.startswith("/loadpayload:"):  # Payload Manager 0.6.3's rules
+                    if fake.legacy_manager:
+                        self.reply(405)
+                    elif self.headers.get("X-PLDMGR-Request") != "1":
+                        self.reply(403, '{"error":"Mutation origin or request marker rejected"}')
+                    elif fake.refuse_load:
+                        self.reply(400, "Invalid payload name\n")
+                    else:
+                        self.reply(200, "OK")
+                    return
+                self.reply(200)
 
             def do_GET(self):
                 fake.requests.append(f"GET {self.path}")
@@ -100,6 +116,8 @@ class FakePBS:
                         self.end_headers()
                         self.wfile.write(body.encode())
                         self.close_connection = True
+                    elif self.path.startswith("/loadpayload:") and not fake.legacy_manager:
+                        self.reply(405)
                     elif self.path == "/list_payloads" or self.path.startswith("/loadpayload:"):
                         body = json.dumps({"payloads": fake.library}) if self.path == "/list_payloads" else "ok"
                         self.send_response(200)
@@ -294,16 +312,24 @@ def test_load_reconnect_and_stop_payload(pbs, tmp_path):
     library = "/data/pldmgr/payloads/PBS-Payload/PBS-Payload-0.1.0-ps5.elf"
     pbs.library = ["/data/pldmgr/payloads/zftpd/zftpd.elf", library]
     empty = FakePBS(pbs.sps, pbs.pps, pbs.picture)
+    legacy = FakePBS(pbs.sps, pbs.pps, pbs.picture)
+    legacy.library, legacy.legacy_manager = [library], True
+    refusing = FakePBS(pbs.sps, pbs.pps, pbs.picture)
+    refusing.library, refusing.refuse_load = [library], True
     try:
-        result = subprocess.run([str(binary), str(pbs.port), str(closed_port), str(tmp_path / "latest.jpg"), str(empty.port)],
+        result = subprocess.run([str(binary), str(pbs.port), str(closed_port), str(tmp_path / "latest.jpg"), str(empty.port),
+                                 str(legacy.port), str(refusing.port)],
                                 check=False, capture_output=True, text=True, timeout=60)
     finally:
-        empty.stop()
+        for fake in (empty, legacy, refusing):
+            fake.stop()
     assert result.returncode == 0, result.stdout + result.stderr
     assert "pbs source checks passed" in result.stdout
     assert pbs.requests.count("GET /frames") >= 2  # reconnect opened a new stream
     assert pbs.requests.count("POST /stop") == 1
-    assert f"GET /loadpayload:{library}" in pbs.requests
+    assert pbs.requests.count(f"POST /loadpayload:{library}") == 1  # Payload Manager 0.6.3 accepted it at once
+    assert not [request for request in pbs.requests if request.startswith("GET /loadpayload")]
+    assert [r for r in legacy.requests if "/loadpayload" in r] == [f"POST /loadpayload:{library}", f"GET /loadpayload:{library}"]
     assert not [request for request in empty.requests if "/loadpayload" in request]
 
 

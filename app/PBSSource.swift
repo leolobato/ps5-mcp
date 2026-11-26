@@ -29,25 +29,38 @@ final class PBSConnection {
     private let port: Int
     private let method: String
     private let path: String
+    private let headers: [String: String]
     private let lock = NSLock()
     private var fd: Int32 = -1
     private var cancelled = false
     private var pending = Data()
+    /// The reply's status code once `open` has read the headers.
+    private(set) var status = 0
     /// A stalled stream counts as lost after this long, which also bounds how long a read can block.
     static let readTimeout = 3.0
 
     /// Does no I/O, so an owner can register the connection before `open` and cancel it at any point.
-    init(host: String, port: Int, method: String = "GET", path: String) {
+    init(host: String, port: Int, method: String = "GET", path: String, headers: [String: String] = [:]) {
         self.host = host
         self.port = port
         self.method = method
         self.path = path
+        self.headers = headers
     }
 
     /// A connection that is not shared: opens it and returns it on success.
     static func perform(host: String, port: Int, method: String = "GET", path: String) -> PBSConnection? {
         let connection = PBSConnection(host: host, port: port, method: method, path: path)
         return connection.open() ? connection : nil
+    }
+
+    /// A short request whatever its status: nil only when nothing answered.
+    static func exchange(host: String, port: Int, method: String = "GET", path: String,
+                         headers: [String: String] = [:]) -> (status: Int, body: Data)? {
+        let connection = PBSConnection(host: host, port: port, method: method, path: path, headers: headers)
+        _ = connection.open()
+        guard connection.status > 0 else { return nil }
+        return (connection.status, connection.readToEnd(limit: 1024 * 1024) ?? Data())
     }
 
     deinit { if fd >= 0 { close(fd) } }
@@ -82,7 +95,8 @@ final class PBSConnection {
         var timeout = timeval(tv_sec: Int(Self.readTimeout), tv_usec: 0)
         setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
         setsockopt(socket, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-        let request = "\(method) \(path) HTTP/1.1\r\nHost: \(host)\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+        let extra = headers.map { "\($0.key): \($0.value)\r\n" }.joined()
+        let request = "\(method) \(path) HTTP/1.1\r\nHost: \(host)\r\nConnection: close\r\nContent-Length: 0\r\n\(extra)\r\n"
         return request.withCString({ send(socket, $0, strlen($0), 0) }) > 0 && readHeaders()
     }
 
@@ -112,7 +126,8 @@ final class PBSConnection {
         let range = pending.range(of: end)!
         let head = String(decoding: pending[pending.startIndex..<range.lowerBound], as: UTF8.self)
         pending = Data(pending[range.upperBound...])
-        return head.split(separator: "\r\n").first?.split(separator: " ").dropFirst().first == "200"
+        status = head.split(separator: "\r\n").first?.split(separator: " ").dropFirst().first.flatMap { Int($0) } ?? 0
+        return status == 200
     }
 
     /// Exactly `count` bytes, or nil when the stream ends, stalls or is cancelled.
@@ -257,7 +272,8 @@ final class PBSSource: FrameSource {
         }
     }
 
-    enum LoadResult: Equatable { case started(String), notInLibrary, unreachable }
+    /// `refused` carries Payload Manager's own answer, for a library it lists but a load it turns down.
+    enum LoadResult: Equatable { case started(String), notInLibrary, unreachable, refused(String) }
 
     /// The newest PS5 build in a Payload Manager library listing, by version-aware name order.
     static func libraryPayload(_ paths: [String]) -> String? {
@@ -267,19 +283,21 @@ final class PBSSource: FrameSource {
         }.max { ($0 as NSString).lastPathComponent.localizedStandardCompare(($1 as NSString).lastPathComponent) == .orderedAscending }
     }
 
-    /// Starts the copy of PBS the user added to Payload Manager's library; the app does not carry one.
-    /// The readers connect by themselves once it is up. `done` runs on the main queue.
     func loadPayload(done: @escaping (LoadResult) -> Void) {
-        let host = currentHost(), manager = managerPort
+        Self.loadPayload(host: currentHost(), managerPort: managerPort, done: done)
+    }
+
+    /// Starts the copy of PBS the user added to Payload Manager's library; the app does not carry one. Needs no running
+    /// source: a PBS source connects by itself once PBS is up. `done` runs on the main queue.
+    static func loadPayload(host: String, managerPort manager: Int = 8084, done: @escaping (LoadResult) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
             let result: LoadResult
             if let listing = PBSConnection.perform(host: host, port: manager, path: "/list_payloads")?.readToEnd(limit: 1024 * 1024),
                let object = (try? JSONSerialization.jsonObject(with: listing)) as? [String: Any],
                let paths = object["payloads"] as? [String] {
-                if let path = Self.libraryPayload(paths) {
+                if let path = libraryPayload(paths) {
                     let quoted = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? path
-                    let started = PBSConnection.perform(host: host, port: manager, path: "/loadpayload:" + quoted) != nil
-                    result = started ? .started((path as NSString).lastPathComponent) : .unreachable
+                    result = launch(host: host, port: manager, path: "/loadpayload:" + quoted, name: (path as NSString).lastPathComponent)
                 } else {
                     result = .notInLibrary
                 }
@@ -288,6 +306,19 @@ final class PBSSource: FrameSource {
             }
             DispatchQueue.main.async { done(result) }
         }
+    }
+
+    /// Payload Manager 0.6.3 takes a load as POST with its request marker; older versions take GET.
+    private static func launch(host: String, port: Int, path: String, name: String) -> LoadResult {
+        var reply = PBSConnection.exchange(host: host, port: port, method: "POST", path: path,
+                                           headers: ["X-PLDMGR-Request": "1"])
+        if reply?.status == 405 { reply = PBSConnection.exchange(host: host, port: port, path: path) }
+        guard let reply else { return .unreachable }
+        guard reply.status == 200 else {
+            let text = String(decoding: reply.body.prefix(200), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            return .refused("Payload Manager refused to start \(name) (HTTP \(reply.status)\(text.isEmpty ? "" : ": " + text)).")
+        }
+        return .started(name)
     }
 
     // MARK: readers

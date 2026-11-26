@@ -342,7 +342,7 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
         let streaming = pbs?.status.videoReady == true
         if streaming, !pbsWasStreaming { pbsMessage = nil }  // only video arriving answers "Started…"; refusals stay
         pbsWasStreaming = streaming
-        loadPBS.isEnabled = pbs != nil && !streaming && !pbsBusy
+        loadPBS.isEnabled = !streaming && !pbsBusy  // also when PBS is not the source, to see what loading it says
         reconnectPBS.isEnabled = pbs != nil
         stopPBS.isEnabled = streaming && !pbsBusy
         pbsNote.stringValue = pbsMessage ?? pbs.map { $0.status.summary } ?? "PBS is not the active capture source."
@@ -364,17 +364,20 @@ final class SettingsWindow: NSObject, NSTextFieldDelegate {
     }
 
     @objc private func loadPBSPayload() {
-        guard let pbs = hub.source as? PBSSource else { return }
         pbsBusy = true
         pbsMessage = "Loading PBS…"
         refreshPBSStatus()
-        pbs.loadPayload { [weak self] result in
+        PBSSource.loadPayload(host: hub.host) { [weak self] result in
             guard let self else { return }
             self.pbsBusy = false
             switch result {
-            case .started(let name): self.pbsMessage = "Started \(name). Waiting for video…"
+            case .started(let name):
+                // Only an active PBS source clears this when video arrives.
+                self.pbsMessage = self.hub.source is PBSSource ? "Started \(name). Waiting for video…"
+                    : "Started \(name). Use PBS as the source to watch it."
             case .notInLibrary: self.offerPBSDownload()
-            case .unreachable: self.pbsMessage = "Payload Manager did not answer on the console."
+            case .unreachable: self.pbsMessage = "Payload Manager did not answer on \(self.hub.host):8084."
+            case .refused(let reason): self.pbsMessage = reason
             }
             self.refreshPBSStatus()
         }
